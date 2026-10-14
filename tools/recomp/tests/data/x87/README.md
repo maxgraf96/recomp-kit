@@ -16,6 +16,17 @@ integer limits and ties - over six control words (0x027f, 0x007f, 0x037f,
 3 vectors of every operation x control word x class, 8 of the special, tie,
 range and limit classes and 2 of the transcendental ones, from 187,182.
 
+## Edge vectors
+
+- `insn-edge.jsonl`, `insn-edge-model.jsonl`: 1,044 vectors for what the
+  recorded classes miss - products that a double rounds up to DBL_MIN from
+  below, PC=24 sums whose double result lies exactly on a 24-bit midpoint,
+  quotients beside DBL_MIN - and for four forms the recording does not use
+  (`fsubr_m64`, `fcom_m64`, `fild_m16`, `fild_m32`). Their results come from
+  the SDM reference model (exact rational arithmetic rounded per the control
+  word) that equals the hardware on every recorded vector, 1.15 million of
+  them. A hardware recording of the same vectors would replace it.
+
 ## Format
 
 JSON Lines. A vector:

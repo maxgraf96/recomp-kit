@@ -1,0 +1,1044 @@
+{"id": "ed-000008", "kind": "x87", "op": "fmul_m64", "cw": "0e7f", "a": "x80:3fffe83d3c17847ec000", "m": "f64:0008d188d4633c8d", "tag": "edge/dblmin-mul"}
+{"id": "ed-000056", "kind": "x87", "op": "fmul_m64", "cw": "0e7f", "a": "x80:3fffb23616f46f282000", "m": "f64:000b7df23280b874", "tag": "edge/dblmin-mul"}
+{"id": "ed-000057", "kind": "x87", "op": "fmul", "cw": "027f", "a": "x80:3fffed7679c60c002000", "b": "x80:3c0089fdfd11dfd8c000", "tag": "edge/dblmin-mul"}
+{"id": "ed-000068", "kind": "x87", "op": "fmul_m64", "cw": "0a7f", "a": "x80:3fff8b6649db18c14000", "m": "f64:000eb10b74b8d133", "tag": "edge/dblmin-mul"}
+{"id": "ed-000077", "kind": "x87", "op": "fmul", "cw": "067f", "a": "x80:3fffbf36ecbdf22ba800", "b": "x80:3c00ab5e2266f3e29000", "tag": "edge/dblmin-mul"}
+{"id": "ed-000114", "kind": "x87", "op": "fmul_m64", "cw": "027f", "a": "x80:3ffff79dced262cb1000", "m": "f64:00084556d8c3fefd", "tag": "edge/dblmin-mul"}
+{"id": "ed-000128", "kind": "x87", "op": "fmul_m64", "cw": "0e7f", "a": "x80:3fff95bc5a145b046800", "m": "f64:000dad6bf366e574", "tag": "edge/dblmin-mul"}
+{"id": "ed-000148", "kind": "x87", "op": "fmul_m64", "cw": "0a7f", "a": "x80:3ffffa2507d6614dc000", "m": "f64:00082ff074d14276", "tag": "edge/dblmin-mul"}
+{"id": "ed-000160", "kind": "x87", "op": "fmul_m64", "cw": "0e7f", "a": "x80:3fffa7127132fe9f4800", "m": "f64:000c42186c538c02", "tag": "edge/dblmin-mul"}
+{"id": "ed-000174", "kind": "x87", "op": "fmul_m64", "cw": "067f", "a": "x80:3fff987ea40bdbb95000", "m": "f64:000d6e12e4514a26", "tag": "edge/dblmin-mul"}
+{"id": "ed-000228", "kind": "x87", "op": "fmul_m64", "cw": "0a7f", "a": "x80:3fff8b71a33560d56000", "m": "f64:000eafd95a4cf598", "tag": "edge/dblmin-mul"}
+{"id": "ed-000252", "kind": "x87", "op": "fmul_m64", "cw": "0a7f", "a": "x80:3fffce921cd0713df800", "m": "f64:0009ea0e2a8faf71", "tag": "edge/dblmin-mul"}
+{"id": "ed-000253", "kind": "x87", "op": "fmul", "cw": "067f", "a": "x80:3fffce921cd0713df800", "b": "x80:3c009ea0e2a8faf71000", "tag": "edge/dblmin-mul"}
+{"id": "ed-000282", "kind": "x87", "op": "fmul_m64", "cw": "027f", "a": "x80:3fffb57e5f7b952c7000", "m": "f64:000b48bd82863b9c", "tag": "edge/dblmin-mul"}
+{"id": "ed-000330", "kind": "x87", "op": "fmul_m64", "cw": "027f", "a": "x80:3fffa514813031dbb000", "m": "f64:000c67f618e762cf", "tag": "edge/dblmin-mul"}
+{"id": "ed-000362", "kind": "x87", "op": "fmul_m64", "cw": "027f", "a": "x80:3fffa4d3497816fbd000", "m": "f64:000c6cdec0d35bcf", "tag": "edge/dblmin-mul"}
+{"id": "ed-000417", "kind": "x87", "op": "fmul", "cw": "027f", "a": "x80:3fffabc8efd49401a000", "b": "x80:3c00bec00ae049cfa000", "tag": "edge/dblmin-mul"}
+{"id": "ed-000428", "kind": "x87", "op": "fmul_m64", "cw": "0a7f", "a": "x80:3fffdf0f77e0a8e64000", "m": "f64:00092e6e2ef4eaf9", "tag": "edge/dblmin-mul"}
+{"id": "ed-000462", "kind": "x87", "op": "fmul_m64", "cw": "067f", "a": "x80:3fff9a48a38e84d30800", "m": "f64:000d4634d18afb19", "tag": "edge/dblmin-mul"}
+{"id": "ed-000477", "kind": "x87", "op": "fmul", "cw": "067f", "a": "x80:3fffd26c431f225c5000", "b": "x80:3c009bb97897f28f4000", "tag": "edge/dblmin-mul"}
+{"id": "ed-000497", "kind": "x87", "op": "fmul", "cw": "027f", "a": "x80:3fffaf590f6d64b93000", "b": "x80:3c00badfccb3bc469000", "tag": "edge/dblmin-mul"}
+{"id": "ed-000525", "kind": "x87", "op": "fmul", "cw": "067f", "a": "x80:3fff93a1d7ed07d63000", "b": "x80:3c00ddf4fdc18fc28000", "tag": "edge/dblmin-mul"}
+{"id": "ed-000528", "kind": "x87", "op": "fmul_m64", "cw": "0e7f", "a": "x80:3fff93a1d7ed07d63000", "m": "f64:000ddf4fdc18fc28", "tag": "edge/dblmin-mul"}
+{"id": "ed-000592", "kind": "x87", "op": "fmul_m64", "cw": "0e7f", "a": "x80:3ffff4a28e7579739000", "m": "f64:00085f24dc6349c9", "tag": "edge/dblmin-mul"}
+{"id": "ed-000593", "kind": "x87", "op": "fmul", "cw": "027f", "a": "x80:3fffe43f22bff2e84000", "b": "x80:3c008f9062c8d5e79000", "tag": "edge/dblmin-mul"}
+{"id": "ed-000631", "kind": "x87", "op": "fmul", "cw": "0e7f", "a": "x80:3fff8bdaef8117b1f000", "b": "x80:3c00ea4ca88d5a299000", "tag": "edge/dblmin-mul"}
+{"id": "ed-000762", "kind": "x87", "op": "fmul_m64", "cw": "027f", "a": "x80:3fff89334249f8559000", "m": "f64:000eed55ae956fe4", "tag": "edge/dblmin-mul"}
+{"id": "ed-000769", "kind": "x87", "op": "fmul", "cw": "027f", "a": "x80:3fffc209eb89e9f05000", "b": "x80:3c00a8df9cb7beee7000", "tag": "edge/dblmin-mul"}
+{"id": "ed-000790", "kind": "x87", "op": "fmul_m64", "cw": "067f", "a": "x80:3fff893f3ab2b9f2d000", "m": "f64:000eec0864faf0b0", "tag": "edge/dblmin-mul"}
+{"id": "ed-000795", "kind": "x87", "op": "fmul", "cw": "0a7f", "a": "x80:3fffe0932cd7b26f0800", "b": "x80:3c0091e946466a23f000", "tag": "edge/dblmin-mul"}
+{"id": "ed-000818", "kind": "x87", "op": "fmul_m64", "cw": "027f", "a": "x80:3fffd1de8c3ef113f000", "m": "f64:0009c229fc55beff", "tag": "edge/dblmin-mul"}
+{"id": "ed-000821", "kind": "x87", "op": "fmul", "cw": "067f", "a": "x80:3fffd1de8c3ef113f000", "b": "x80:3c009c229fc55beff000", "tag": "edge/dblmin-mul"}
+{"id": "ed-000843", "kind": "x87", "op": "fmul", "cw": "0a7f", "a": "x80:3fff8619eac85f427800", "b": "x80:3c00f45a4aa9e0dab000", "tag": "edge/dblmin-mul"}
+{"id": "ed-000848", "kind": "x87", "op": "fmul_m64", "cw": "0e7f", "a": "x80:3fff8619eac85f427800", "m": "f64:000f45a4aa9e0dab", "tag": "edge/dblmin-mul"}
+{"id": "ed-000856", "kind": "x87", "op": "fmul_m64", "cw": "0e7f", "a": "x80:3fffeff4ecbd3bf31800", "m": "f64:000888ed5c5c2f3a", "tag": "edge/dblmin-mul"}
+{"id": "ed-000895", "kind": "x87", "op": "fmul", "cw": "0e7f", "a": "x80:3fffffb6d4518a0ed800", "b": "x80:3c008024a04f3170d000", "tag": "edge/dblmin-mul"}
+{"id": "ed-000927", "kind": "x87", "op": "fmul", "cw": "0e7f", "a": "x80:3fffd35a5b5f7cbe4000", "b": "x80:3c009b0a0b1444bf0000", "tag": "edge/dblmin-mul"}
+{"id": "ed-000950", "kind": "x87", "op": "fmul_m64", "cw": "067f", "a": "x80:3fffe8b17e8cc351b000", "m": "f64:0008cd20e8378fb5", "tag": "edge/dblmin-mul"}
+{"id": "ed-000958", "kind": "x87", "op": "fmul_m64", "cw": "067f", "a": "x80:3fffcca46e2c5d17d000", "m": "f64:000a01f90261418a", "tag": "edge/dblmin-mul"}
+{"id": "ed-001006", "kind": "x87", "op": "fmul_m64", "cw": "067f", "a": "x80:3fffdc48209392c19000", "m": "f64:00094c144527907d", "tag": "edge/dblmin-mul"}
+{"id": "ed-001023", "kind": "x87", "op": "fmul", "cw": "0e7f", "a": "x80:3fffdf63ce9f522b4000", "b": "x80:3c0092af6cca979e3000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001026", "kind": "x87", "op": "fmul_m64", "cw": "027f", "a": "x80:3fffa219b4e7c4ddf000", "m": "f64:000ca25742341d0b", "tag": "edge/dblmin-mul"}
+{"id": "ed-001047", "kind": "x87", "op": "fmul", "cw": "0e7f", "a": "x80:3fffd6b4be8d83e12000", "b": "x80:3c00989e33a29640b000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001076", "kind": "x87", "op": "fmul_m64", "cw": "0a7f", "a": "x80:3fffd55f29b8e9e52000", "m": "f64:000999286203f9c4", "tag": "edge/dblmin-mul"}
+{"id": "ed-001129", "kind": "x87", "op": "fmul", "cw": "027f", "a": "x80:3fffb11cdf7eaa095800", "b": "x80:3c00b90315e6829cb000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001139", "kind": "x87", "op": "fmul", "cw": "0a7f", "a": "x80:3fffe15c6d4d3a912800", "b": "x80:3c009166f91317b91000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001141", "kind": "x87", "op": "fmul", "cw": "067f", "a": "x80:3fffe15c6d4d3a912800", "b": "x80:3c009166f91317b91000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001145", "kind": "x87", "op": "fmul", "cw": "027f", "a": "x80:3fff8efdac862fd45800", "b": "x80:3c00e529526f24a66000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001172", "kind": "x87", "op": "fmul_m64", "cw": "0a7f", "a": "x80:3fff97f1843d65010000", "m": "f64:000d7a8c2811c967", "tag": "edge/dblmin-mul"}
+{"id": "ed-001174", "kind": "x87", "op": "fmul_m64", "cw": "067f", "a": "x80:3fff97f1843d65010000", "m": "f64:000d7a8c2811c967", "tag": "edge/dblmin-mul"}
+{"id": "ed-001207", "kind": "x87", "op": "fmul", "cw": "0e7f", "a": "x80:3fffb05830abf8969000", "b": "x80:3c00b9d16f8818af0000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001211", "kind": "x87", "op": "fmul", "cw": "0a7f", "a": "x80:3ffff7bf9412484f4000", "b": "x80:3c00844363b9b828c000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001236", "kind": "x87", "op": "fmul_m64", "cw": "0a7f", "a": "x80:3fff8fa62c20c0f89000", "m": "f64:000e41c84cf4b9f1", "tag": "edge/dblmin-mul"}
+{"id": "ed-001238", "kind": "x87", "op": "fmul_m64", "cw": "067f", "a": "x80:3fff8fa62c20c0f89000", "m": "f64:000e41c84cf4b9f1", "tag": "edge/dblmin-mul"}
+{"id": "ed-001250", "kind": "x87", "op": "fmul_m64", "cw": "027f", "a": "x80:3fffb6110589b7eef000", "m": "f64:000b3fa6b927cf7f", "tag": "edge/dblmin-mul"}
+{"id": "ed-001255", "kind": "x87", "op": "fmul", "cw": "0e7f", "a": "x80:3fffb6110589b7eef000", "b": "x80:3c00b3fa6b927cf7f000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001261", "kind": "x87", "op": "fmul", "cw": "067f", "a": "x80:3fff908c9f1b79d35800", "b": "x80:3c00e2b0d996d181e000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001301", "kind": "x87", "op": "fmul", "cw": "067f", "a": "x80:3fff9196c5388f8f1000", "b": "x80:3c00e11270a4561ea000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001331", "kind": "x87", "op": "fmul", "cw": "0a7f", "a": "x80:3ffff2ed0088c0f13000", "b": "x80:3c0086e390f84fee4000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001337", "kind": "x87", "op": "fmul", "cw": "027f", "a": "x80:3fffd8fda098010fa800", "b": "x80:3c009702d4b490f36000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001352", "kind": "x87", "op": "fmul_m64", "cw": "0e7f", "a": "x80:3fffd5dc1d24be34e000", "m": "f64:0009938cc03e79b1", "tag": "edge/dblmin-mul"}
+{"id": "ed-001366", "kind": "x87", "op": "fmul_m64", "cw": "067f", "a": "x80:3ffff0ca83d8683ad000", "m": "f64:0008815b40a72094", "tag": "edge/dblmin-mul"}
+{"id": "ed-001369", "kind": "x87", "op": "fmul", "cw": "027f", "a": "x80:3fffc6dda9aabf241000", "b": "x80:3c00a4c63d9dc8f8a000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001404", "kind": "x87", "op": "fmul_m64", "cw": "0a7f", "a": "x80:3fffbce4fbc91421b000", "m": "f64:000ad78f759a8dce", "tag": "edge/dblmin-mul"}
+{"id": "ed-001419", "kind": "x87", "op": "fmul", "cw": "0a7f", "a": "x80:3fffece7a86050f29800", "b": "x80:3c008a512d5122929000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001430", "kind": "x87", "op": "fmul_m64", "cw": "067f", "a": "x80:3fffe3f1dc0d2eec2000", "m": "f64:0008fc10e4f307ea", "tag": "edge/dblmin-mul"}
+{"id": "ed-001440", "kind": "x87", "op": "fmul_m64", "cw": "0e7f", "a": "x80:3fffeccc6503ba2d9000", "m": "f64:0008a611a0e01ef2", "tag": "edge/dblmin-mul"}
+{"id": "ed-001489", "kind": "x87", "op": "fmul", "cw": "027f", "a": "x80:3fff89099289900f7000", "b": "x80:3c00ef1e02009b809000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001511", "kind": "x87", "op": "fmul", "cw": "0e7f", "a": "x80:3fff819fb7f9bc6fc000", "b": "x80:3c00fccafa903730a000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001565", "kind": "x87", "op": "fmul", "cw": "067f", "a": "x80:3fffe92e16560e79d000", "b": "x80:3c008c86d038dea80000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001578", "kind": "x87", "op": "fmul_m64", "cw": "027f", "a": "x80:3fffb2e978788316c000", "m": "f64:000b726c8a55e292", "tag": "edge/dblmin-mul"}
+{"id": "ed-001598", "kind": "x87", "op": "fmul_m64", "cw": "067f", "a": "x80:3fff823a157791aca000", "m": "f64:000fb9f544978812", "tag": "edge/dblmin-mul"}
+{"id": "ed-001695", "kind": "x87", "op": "fmul", "cw": "0e7f", "a": "x80:3ffff302f8abbeb39000", "b": "x80:3c0086d75f2b5ac44000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001715", "kind": "x87", "op": "fmul", "cw": "0a7f", "a": "x80:3fff9c907f23bd77a000", "b": "x80:3c00d14b44760a94f000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001743", "kind": "x87", "op": "fmul", "cw": "0e7f", "a": "x80:3fffdbbdf41144604000", "b": "x80:3c00951ecdd6a3098000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001757", "kind": "x87", "op": "fmul", "cw": "067f", "a": "x80:3fffdf066c6fef504000", "b": "x80:3c0092ecd810f622b000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001771", "kind": "x87", "op": "fmul", "cw": "0a7f", "a": "x80:3fffa81ad440c0544800", "b": "x80:3c00c2ed0fb5015e9000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001843", "kind": "x87", "op": "fmul", "cw": "0a7f", "a": "x80:3fff884e2c20fea74000", "b": "x80:3c00f066c25a9c3f1000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001940", "kind": "x87", "op": "fmul_m64", "cw": "0a7f", "a": "x80:3fffbda6a13eb152d800", "m": "f64:000acc7d6cedb03c", "tag": "edge/dblmin-mul"}
+{"id": "ed-001963", "kind": "x87", "op": "fmul", "cw": "0a7f", "a": "x80:3fff8404330256329000", "b": "x80:3c00f8362a13f3053000", "tag": "edge/dblmin-mul"}
+{"id": "ed-001989", "kind": "x87", "op": "fmul", "cw": "067f", "a": "x80:3fffc8216f74c2f81800", "b": "x80:3c00a3bbaae8db0ff000", "tag": "edge/dblmin-mul"}
+{"id": "ed-002034", "kind": "x87", "op": "fmul_m64", "cw": "027f", "a": "x80:3fff8d06e4b055a42800", "m": "f64:000e85a50772940a", "tag": "edge/dblmin-mul"}
+{"id": "ed-002040", "kind": "x87", "op": "fmul_m64", "cw": "0e7f", "a": "x80:3fff8d06e4b055a42800", "m": "f64:000e85a50772940a", "tag": "edge/dblmin-mul"}
+{"id": "ed-002095", "kind": "x87", "op": "fmul", "cw": "0e7f", "a": "x80:3fffde532b2dc5546000", "b": "x80:3c0093634e5971e6f000", "tag": "edge/dblmin-mul"}
+{"id": "ed-002106", "kind": "x87", "op": "fmul_m64", "cw": "027f", "a": "x80:3fffc24be00ba80bd000", "m": "f64:000a8a6497b1b6dc", "tag": "edge/dblmin-mul"}
+{"id": "ed-002136", "kind": "x87", "op": "fmul_m64", "cw": "0e7f", "a": "x80:3ffffd837deadc2d6000", "m": "f64:000814160189c643", "tag": "edge/dblmin-mul"}
+{"id": "ed-002188", "kind": "x87", "op": "fmul_m64", "cw": "0a7f", "a": "x80:3fff908fa4d9598c5800", "m": "f64:000e2ac1c42ad47e", "tag": "edge/dblmin-mul"}
+{"id": "ed-002209", "kind": "x87", "op": "fmul", "cw": "027f", "a": "x80:3fff86031d10b5ebb000", "b": "x80:3c00f483deefbd029000", "tag": "edge/dblmin-mul"}
+{"id": "ed-002223", "kind": "x87", "op": "fmul", "cw": "0e7f", "a": "x80:3fffe4a98e3f93a08000", "b": "x80:3c008f4d922610ed5000", "tag": "edge/dblmin-mul"}
+{"id": "ed-002225", "kind": "x87", "op": "fmul", "cw": "027f", "a": "x80:3fffe5b68a7c0ee0c000", "b": "x80:3c008ea5c4bb6a56f000", "tag": "edge/dblmin-mul"}
+{"id": "ed-002269", "kind": "x87", "op": "fmul", "cw": "067f", "a": "x80:3fffb073c1869cdd0000", "b": "x80:3c00b9b4681b04970000", "tag": "edge/dblmin-mul"}
+{"id": "ed-002274", "kind": "x87", "op": "fmul_m64", "cw": "027f", "a": "x80:3fffb25f66e46e7df000", "m": "f64:000b7b48d2da94b3", "tag": "edge/dblmin-mul"}
+{"id": "ed-002342", "kind": "x87", "op": "fmul_m64", "cw": "067f", "a": "x80:3fffa46df261a296a000", "m": "f64:000c74872afe3660", "tag": "edge/dblmin-mul"}
+{"id": "ed-002363", "kind": "x87", "op": "fmul", "cw": "0a7f", "a": "x80:3fffa811876684d98000", "b": "x80:3c00c2f7d905ce145000", "tag": "edge/dblmin-mul"}
+{"id": "ed-002371", "kind": "x87", "op": "fmul", "cw": "0a7f", "a": "x80:3fffcaa06592103d6000", "b": "x80:3c00a1b75a497567d000", "tag": "edge/dblmin-mul"}
+{"id": "ed-002388", "kind": "x87", "op": "fmul_m64", "cw": "0a7f", "a": "x80:3fffbebbed2f4f810000", "m": "f64:000abcca4d6c022d", "tag": "edge/dblmin-mul"}
+{"id": "ed-002434", "kind": "x87", "op": "fdiv", "cw": "0e7f", "a": "x80:3c01e2e84764dfa6a800", "b": "x80:3fffe2e84764dfa6a000", "tag": "edge/dblmin-div"}
+{"id": "ed-002464", "kind": "x87", "op": "fdiv", "cw": "0a7f", "a": "x80:3c01d62eb2c83f959000", "b": "x80:3fffd62eb2c83f959000", "tag": "edge/dblmin-div"}
+{"id": "ed-002492", "kind": "x87", "op": "fdiv_m64", "cw": "067f", "a": "x80:3c01f921bfc589abe000", "m": "f64:3fff2437f8b1357e", "tag": "edge/dblmin-div"}
+{"id": "ed-002501", "kind": "x87", "op": "fdiv_m64", "cw": "0a7f", "a": "x80:3c01f2c92dafe8ab5000", "m": "f64:3ffe5925b5fd156a", "tag": "edge/dblmin-div"}
+{"id": "ed-002519", "kind": "x87", "op": "fdiv_m64", "cw": "0e7f", "a": "x80:3c01df5be0b761eae000", "m": "f64:3ffbeb7c16ec3d5c", "tag": "edge/dblmin-div"}
+{"id": "ed-002538", "kind": "x87", "op": "fdivr", "cw": "0a7f", "a": "x80:3fffce8211ce5b89a000", "b": "x80:3c01ce8211ce5b89b000", "tag": "edge/dblmin-div"}
+{"id": "ed-002555", "kind": "x87", "op": "fdiv_m64", "cw": "0e7f", "a": "x80:3c01ba9f3b3c1004e000", "m": "f64:3ff753e76782009e", "tag": "edge/dblmin-div"}
+{"id": "ed-002561", "kind": "x87", "op": "fdiv_m64", "cw": "0a7f", "a": "x80:3c01aa359c1bd7f5b800", "m": "f64:3ff546b3837afeb5", "tag": "edge/dblmin-div"}
+{"id": "ed-002566", "kind": "x87", "op": "fdiv", "cw": "0e7f", "a": "x80:3c01aa359c1bd7f5b800", "b": "x80:3fffaa359c1bd7f5a800", "tag": "edge/dblmin-div"}
+{"id": "ed-002599", "kind": "x87", "op": "fdiv", "cw": "067f", "a": "x80:3c01a77c37dddb78b000", "b": "x80:3fffa77c37dddb78a000", "tag": "edge/dblmin-div"}
+{"id": "ed-002635", "kind": "x87", "op": "fdiv", "cw": "067f", "a": "x80:3c01ab943e6035c9d800", "b": "x80:3fffab943e6035c9e000", "tag": "edge/dblmin-div"}
+{"id": "ed-002665", "kind": "x87", "op": "fdiv", "cw": "027f", "a": "x80:3c01b3e3f0f097efb800", "b": "x80:3fffb3e3f0f097efa000", "tag": "edge/dblmin-div"}
+{"id": "ed-002725", "kind": "x87", "op": "fdiv", "cw": "027f", "a": "x80:3c01c78d86aecc16e800", "b": "x80:3fffc78d86aecc16d800", "tag": "edge/dblmin-div"}
+{"id": "ed-002787", "kind": "x87", "op": "fdivr", "cw": "027f", "a": "x80:3fffeaf7de096c953800", "b": "x80:3c01eaf7de096c952000", "tag": "edge/dblmin-div"}
+{"id": "ed-002852", "kind": "x87", "op": "fdiv_m64", "cw": "067f", "a": "x80:3c01fae6cd5c7508d800", "m": "f64:3fff5cd9ab8ea118", "tag": "edge/dblmin-div"}
+{"id": "ed-002853", "kind": "x87", "op": "fdivr", "cw": "067f", "a": "x80:3ffffae6cd5c7508c000", "b": "x80:3c01fae6cd5c7508d800", "tag": "edge/dblmin-div"}
+{"id": "ed-002875", "kind": "x87", "op": "fdiv", "cw": "067f", "a": "x80:3c01ea20fbdef808b000", "b": "x80:3fffea20fbdef808d000", "tag": "edge/dblmin-div"}
+{"id": "ed-002887", "kind": "x87", "op": "fdiv", "cw": "067f", "a": "x80:3c01d5541f2d686af000", "b": "x80:3fffd5541f2d686ad000", "tag": "edge/dblmin-div"}
+{"id": "ed-002908", "kind": "x87", "op": "fdiv", "cw": "0a7f", "a": "x80:3c0182340f4f39d95000", "b": "x80:3fff82340f4f39d95000", "tag": "edge/dblmin-div"}
+{"id": "ed-002927", "kind": "x87", "op": "fdiv_m64", "cw": "0e7f", "a": "x80:3c01c77fcc1b69143000", "m": "f64:3ff8eff9836d2288", "tag": "edge/dblmin-div"}
+{"id": "ed-002944", "kind": "x87", "op": "fdiv", "cw": "0a7f", "a": "x80:3c01e6b7a716de3df800", "b": "x80:3fffe6b7a716de3df800", "tag": "edge/dblmin-div"}
+{"id": "ed-002993", "kind": "x87", "op": "fdiv_m64", "cw": "0a7f", "a": "x80:3c01c739f40cc5a42800", "m": "f64:3ff8e73e8198b484", "tag": "edge/dblmin-div"}
+{"id": "ed-003000", "kind": "x87", "op": "fdivr", "cw": "0e7f", "a": "x80:3fffc739f40cc5a42000", "b": "x80:3c01c739f40cc5a42800", "tag": "edge/dblmin-div"}
+{"id": "ed-003028", "kind": "x87", "op": "fdiv", "cw": "0a7f", "a": "x80:3c01e1fc90bcb35c8800", "b": "x80:3fffe1fc90bcb35c8800", "tag": "edge/dblmin-div"}
+{"id": "ed-003044", "kind": "x87", "op": "fdiv_m64", "cw": "067f", "a": "x80:3c01ad2cbf3ca2009800", "m": "f64:3ff5a597e7944014", "tag": "edge/dblmin-div"}
+{"id": "ed-003046", "kind": "x87", "op": "fdiv", "cw": "0e7f", "a": "x80:3c01ad2cbf3ca2009800", "b": "x80:3fffad2cbf3ca200a000", "tag": "edge/dblmin-div"}
+{"id": "ed-003047", "kind": "x87", "op": "fdiv_m64", "cw": "0e7f", "a": "x80:3c01ad2cbf3ca2009800", "m": "f64:3ff5a597e7944014", "tag": "edge/dblmin-div"}
+{"id": "ed-003048", "kind": "x87", "op": "fdivr", "cw": "0e7f", "a": "x80:3fffad2cbf3ca200a000", "b": "x80:3c01ad2cbf3ca2009800", "tag": "edge/dblmin-div"}
+{"id": "ed-003071", "kind": "x87", "op": "fdiv_m64", "cw": "0e7f", "a": "x80:3c01aa21a21d9db8d000", "m": "f64:3ff5443443b3b717", "tag": "edge/dblmin-div"}
+{"id": "ed-003099", "kind": "x87", "op": "fdivr", "cw": "027f", "a": "x80:3fffa1ac709b8735f000", "b": "x80:3c01a1ac709b8735d000", "tag": "edge/dblmin-div"}
+{"id": "ed-003103", "kind": "x87", "op": "fdiv", "cw": "067f", "a": "x80:3c01a1ac709b8735d000", "b": "x80:3fffa1ac709b8735f000", "tag": "edge/dblmin-div"}
+{"id": "ed-003111", "kind": "x87", "op": "fdivr", "cw": "027f", "a": "x80:3fffea45adef4ffbd000", "b": "x80:3c01ea45adef4ffbd800", "tag": "edge/dblmin-div"}
+{"id": "ed-003114", "kind": "x87", "op": "fdivr", "cw": "0a7f", "a": "x80:3fffea45adef4ffbd000", "b": "x80:3c01ea45adef4ffbd800", "tag": "edge/dblmin-div"}
+{"id": "ed-003124", "kind": "x87", "op": "fdiv", "cw": "0a7f", "a": "x80:3c01b95311cd718fc800", "b": "x80:3fffb95311cd718fe800", "tag": "edge/dblmin-div"}
+{"id": "ed-003141", "kind": "x87", "op": "fdivr", "cw": "067f", "a": "x80:3ffff6a5fcd6209a2000", "b": "x80:3c01f6a5fcd6209a2800", "tag": "edge/dblmin-div"}
+{"id": "ed-003200", "kind": "x87", "op": "fdiv_m64", "cw": "067f", "a": "x80:3c01fe4989d2df954800", "m": "f64:3fffc9313a5bf2ac", "tag": "edge/dblmin-div"}
+{"id": "ed-003276", "kind": "x87", "op": "fdivr", "cw": "0e7f", "a": "x80:3fff9078a11baed98000", "b": "x80:3c019078a11baed98000", "tag": "edge/dblmin-div"}
+{"id": "ed-003293", "kind": "x87", "op": "fdiv_m64", "cw": "0a7f", "a": "x80:3c0185802b9ce7633000", "m": "f64:3ff0b005739cec62", "tag": "edge/dblmin-div"}
+{"id": "ed-003323", "kind": "x87", "op": "fdiv_m64", "cw": "0e7f", "a": "x80:3c01d33de3b184664000", "m": "f64:3ffa67bc76308cc8", "tag": "edge/dblmin-div"}
+{"id": "ed-003338", "kind": "x87", "op": "fdiv_m64", "cw": "027f", "a": "x80:3c01b560ecfcf5e1b800", "m": "f64:3ff6ac1d9f9ebc36", "tag": "edge/dblmin-div"}
+{"id": "ed-003374", "kind": "x87", "op": "fdiv_m64", "cw": "027f", "a": "x80:3c01d314751196fbf800", "m": "f64:3ffa628ea232df7c", "tag": "edge/dblmin-div"}
+{"id": "ed-003420", "kind": "x87", "op": "fdivr", "cw": "0e7f", "a": "x80:3fffc2625158464ae800", "b": "x80:3c01c2625158464b0000", "tag": "edge/dblmin-div"}
+{"id": "ed-003422", "kind": "x87", "op": "fdiv_m64", "cw": "027f", "a": "x80:3c01a3d9c2f061f28800", "m": "f64:3ff47b385e0c3e4d", "tag": "edge/dblmin-div"}
+{"id": "ed-003443", "kind": "x87", "op": "fdiv_m64", "cw": "0e7f", "a": "x80:3c019947ff3533727000", "m": "f64:3ff328ffe6a66e50", "tag": "edge/dblmin-div"}
+{"id": "ed-003483", "kind": "x87", "op": "fdivr", "cw": "027f", "a": "x80:3ffff2ea0aea62e08800", "b": "x80:3c01f2ea0aea62e09800", "tag": "edge/dblmin-div"}
+{"id": "ed-003508", "kind": "x87", "op": "fdiv", "cw": "0a7f", "a": "x80:3c01d34cc366cafb6800", "b": "x80:3fffd34cc366cafb5000", "tag": "edge/dblmin-div"}
+{"id": "ed-003516", "kind": "x87", "op": "fdivr", "cw": "0e7f", "a": "x80:3fffd34cc366cafb5000", "b": "x80:3c01d34cc366cafb6800", "tag": "edge/dblmin-div"}
+{"id": "ed-003522", "kind": "x87", "op": "fdivr", "cw": "0a7f", "a": "x80:3fff868dc3fb56d76000", "b": "x80:3c01868dc3fb56d74000", "tag": "edge/dblmin-div"}
+{"id": "ed-003541", "kind": "x87", "op": "fdiv", "cw": "027f", "a": "x80:3c01af4341f1a0d01000", "b": "x80:3fffaf4341f1a0cff800", "tag": "edge/dblmin-div"}
+{"id": "ed-003545", "kind": "x87", "op": "fdiv_m64", "cw": "0a7f", "a": "x80:3c01af4341f1a0d01000", "m": "f64:3ff5e8683e3419ff", "tag": "edge/dblmin-div"}
+{"id": "ed-003547", "kind": "x87", "op": "fdiv", "cw": "067f", "a": "x80:3c01af4341f1a0d01000", "b": "x80:3fffaf4341f1a0cff800", "tag": "edge/dblmin-div"}
+{"id": "ed-003567", "kind": "x87", "op": "fdivr", "cw": "027f", "a": "x80:3fffbe6b835ed9f52000", "b": "x80:3c01be6b835ed9f50800", "tag": "edge/dblmin-div"}
+{"id": "ed-003573", "kind": "x87", "op": "fdivr", "cw": "067f", "a": "x80:3fffbe6b835ed9f52000", "b": "x80:3c01be6b835ed9f50800", "tag": "edge/dblmin-div"}
+{"id": "ed-003581", "kind": "x87", "op": "fdiv_m64", "cw": "0a7f", "a": "x80:3c01b817a3c9e6443000", "m": "f64:3ff702f4793cc88a", "tag": "edge/dblmin-div"}
+{"id": "ed-003602", "kind": "x87", "op": "fdiv_m64", "cw": "027f", "a": "x80:3c0194a432f3fb451800", "m": "f64:3ff294865e7f68a4", "tag": "edge/dblmin-div"}
+{"id": "ed-003608", "kind": "x87", "op": "fdiv_m64", "cw": "067f", "a": "x80:3c0194a432f3fb451800", "m": "f64:3ff294865e7f68a4", "tag": "edge/dblmin-div"}
+{"id": "ed-003624", "kind": "x87", "op": "fdivr", "cw": "0e7f", "a": "x80:3fffaded5ddfedf6d000", "b": "x80:3c01aded5ddfedf6c800", "tag": "edge/dblmin-div"}
+{"id": "ed-003632", "kind": "x87", "op": "fdiv_m64", "cw": "067f", "a": "x80:3c01ad9e88277116b800", "m": "f64:3ff5b3d104ee22d7", "tag": "edge/dblmin-div"}
+{"id": "ed-003682", "kind": "x87", "op": "fdiv", "cw": "0e7f", "a": "x80:3c01c54116ced6568000", "b": "x80:3fffc54116ced656a000", "tag": "edge/dblmin-div"}
+{"id": "ed-003691", "kind": "x87", "op": "fdiv", "cw": "067f", "a": "x80:3c01f05a3d5b0b186000", "b": "x80:3ffff05a3d5b0b184000", "tag": "edge/dblmin-div"}
+{"id": "ed-003744", "kind": "x87", "op": "fdivr", "cw": "0e7f", "a": "x80:3fffa5c1d40ffa2d3000", "b": "x80:3c01a5c1d40ffa2d4000", "tag": "edge/dblmin-div"}
+{"id": "ed-003750", "kind": "x87", "op": "fdivr", "cw": "0a7f", "a": "x80:3fffcc5cc5b09b7b2000", "b": "x80:3c01cc5cc5b09b7b2800", "tag": "edge/dblmin-div"}
+{"id": "ed-003764", "kind": "x87", "op": "fdiv_m64", "cw": "067f", "a": "x80:3c01ced20662c79d6000", "m": "f64:3ff9da40cc58f3ae", "tag": "edge/dblmin-div"}
+{"id": "ed-003769", "kind": "x87", "op": "fdiv", "cw": "027f", "a": "x80:3c01f1e260ec254a7000", "b": "x80:3ffff1e260ec254a5800", "tag": "edge/dblmin-div"}
+{"id": "ed-003893", "kind": "x87", "op": "fdiv_m64", "cw": "0a7f", "a": "x80:3c01f51954b408f32800", "m": "f64:3ffea32a96811e67", "tag": "edge/dblmin-div"}
+{"id": "ed-003897", "kind": "x87", "op": "fdivr", "cw": "067f", "a": "x80:3ffff51954b408f33800", "b": "x80:3c01f51954b408f32800", "tag": "edge/dblmin-div"}
+{"id": "ed-003919", "kind": "x87", "op": "fdiv", "cw": "067f", "a": "x80:3c0198986b1737b89800", "b": "x80:3fff98986b1737b8a000", "tag": "edge/dblmin-div"}
+{"id": "ed-003946", "kind": "x87", "op": "fdiv", "cw": "0e7f", "a": "x80:3c0194228f77f6e46800", "b": "x80:3fff94228f77f6e46000", "tag": "edge/dblmin-div"}
+{"id": "ed-003951", "kind": "x87", "op": "fdivr", "cw": "027f", "a": "x80:3fffac4d02f6cc7d3000", "b": "x80:3c01ac4d02f6cc7d3000", "tag": "edge/dblmin-div"}
+{"id": "ed-003978", "kind": "x87", "op": "fdivr", "cw": "0a7f", "a": "x80:3fff90d16ae30a125800", "b": "x80:3c0190d16ae30a125000", "tag": "edge/dblmin-div"}
+{"id": "ed-004004", "kind": "x87", "op": "fdiv_m64", "cw": "067f", "a": "x80:3c01cfed21f265d44000", "m": "f64:3ff9fda43e4cba86", "tag": "edge/dblmin-div"}
+{"id": "ed-004059", "kind": "x87", "op": "fdivr", "cw": "027f", "a": "x80:3ffff22d531775f3f000", "b": "x80:3c01f22d531775f3d800", "tag": "edge/dblmin-div"}
+{"id": "ed-004066", "kind": "x87", "op": "fdiv", "cw": "0e7f", "a": "x80:3c01f22d531775f3d800", "b": "x80:3ffff22d531775f3f000", "tag": "edge/dblmin-div"}
+{"id": "ed-004108", "kind": "x87", "op": "fdiv", "cw": "0a7f", "a": "x80:3c01be2225757f6c1000", "b": "x80:3fffbe2225757f6bf000", "tag": "edge/dblmin-div"}
+{"id": "ed-004119", "kind": "x87", "op": "fdivr", "cw": "027f", "a": "x80:3ffffa864ed632115000", "b": "x80:3c01fa864ed632115800", "tag": "edge/dblmin-div"}
+{"id": "ed-004166", "kind": "x87", "op": "fdiv_m64", "cw": "027f", "a": "x80:3c01d704d17a92445000", "m": "f64:3ffae09a2f524886", "tag": "edge/dblmin-div"}
+{"id": "ed-004188", "kind": "x87", "op": "fdivr", "cw": "0e7f", "a": "x80:3fffd3fdf84c8ad3f800", "b": "x80:3c01d3fdf84c8ad40000", "tag": "edge/dblmin-div"}
+{"id": "ed-004217", "kind": "x87", "op": "fdiv_m64", "cw": "0a7f", "a": "x80:3c0192a589b7455de800", "m": "f64:3ff254b136e8abbc", "tag": "edge/dblmin-div"}
+{"id": "ed-004226", "kind": "x87", "op": "fdiv_m64", "cw": "027f", "a": "x80:3c01e55641686d8f6000", "m": "f64:3ffcaac82d0db1e8", "tag": "edge/dblmin-div"}
+{"id": "ed-004228", "kind": "x87", "op": "fdiv", "cw": "0a7f", "a": "x80:3c01e55641686d8f6000", "b": "x80:3fffe55641686d8f4000", "tag": "edge/dblmin-div"}
+{"id": "ed-004242", "kind": "x87", "op": "fdivr", "cw": "0a7f", "a": "x80:3fff98bec3b4da331000", "b": "x80:3c0198bec3b4da332000", "tag": "edge/dblmin-div"}
+{"id": "ed-004295", "kind": "x87", "op": "fdiv_m64", "cw": "0e7f", "a": "x80:3c01e91cb16d04f50000", "m": "f64:3ffd23962da09e9f", "tag": "edge/dblmin-div"}
+{"id": "ed-004309", "kind": "x87", "op": "fdiv", "cw": "027f", "a": "x80:3c01df3a5033b1f1e800", "b": "x80:3fffdf3a5033b1f1e000", "tag": "edge/dblmin-div"}
+{"id": "ed-004339", "kind": "x87", "op": "fdiv", "cw": "067f", "a": "x80:3c01a4d22ae91952d800", "b": "x80:3fffa4d22ae91952c800", "tag": "edge/dblmin-div"}
+{"id": "ed-004394", "kind": "x87", "op": "fdiv_m64", "cw": "027f", "a": "x80:3c01fc6bed620d5b1000", "m": "f64:3fff8d7dac41ab5e", "tag": "edge/dblmin-div"}
+{"id": "ed-004400", "kind": "x87", "op": "fdiv_m64", "cw": "067f", "a": "x80:3c01fc6bed620d5b1000", "m": "f64:3fff8d7dac41ab5e", "tag": "edge/dblmin-div"}
+{"id": "ed-004429", "kind": "x87", "op": "fdiv", "cw": "027f", "a": "x80:3c01ac28bc7b4ebec800", "b": "x80:3fffac28bc7b4ebeb000", "tag": "edge/dblmin-div"}
+{"id": "ed-004487", "kind": "x87", "op": "fdiv_m64", "cw": "0e7f", "a": "x80:3c01f13540a4c8978800", "m": "f64:3ffe26a8149912f2", "tag": "edge/dblmin-div"}
+{"id": "ed-004516", "kind": "x87", "op": "fdiv", "cw": "0a7f", "a": "x80:3c0188083ca4f5807800", "b": "x80:3fff88083ca4f5807000", "tag": "edge/dblmin-div"}
+{"id": "ed-004537", "kind": "x87", "op": "fdiv", "cw": "027f", "a": "x80:3c01e324bc2282fa3800", "b": "x80:3fffe324bc2282fa5800", "tag": "edge/dblmin-div"}
+{"id": "ed-004542", "kind": "x87", "op": "fdivr", "cw": "0a7f", "a": "x80:3fffe324bc2282fa5800", "b": "x80:3c01e324bc2282fa3800", "tag": "edge/dblmin-div"}
+{"id": "ed-004550", "kind": "x87", "op": "fdiv_m64", "cw": "027f", "a": "x80:3c01993b01a8309a7000", "m": "f64:3ff327603506134c", "tag": "edge/dblmin-div"}
+{"id": "ed-004577", "kind": "x87", "op": "fdiv_m64", "cw": "0a7f", "a": "x80:3c018dcb6757b59ad000", "m": "f64:3ff1b96ceaf6b35e", "tag": "edge/dblmin-div"}
+{"id": "ed-004593", "kind": "x87", "op": "fdivr", "cw": "067f", "a": "x80:3ffff3c41e1569e32000", "b": "x80:3c01f3c41e1569e30000", "tag": "edge/dblmin-div"}
+{"id": "ed-004609", "kind": "x87", "op": "fdiv", "cw": "027f", "a": "x80:3c018491d1ddc1366800", "b": "x80:3fff8491d1ddc1367000", "tag": "edge/dblmin-div"}
+{"id": "ed-004668", "kind": "x87", "op": "fdivr", "cw": "0e7f", "a": "x80:3fff945c40896b5ef000", "b": "x80:3c01945c40896b5ef800", "tag": "edge/dblmin-div"}
+{"id": "ed-004681", "kind": "x87", "op": "fdiv", "cw": "027f", "a": "x80:3c01c0df777885fa9000", "b": "x80:3fffc0df777885fa9000", "tag": "edge/dblmin-div"}
+{"id": "ed-004735", "kind": "x87", "op": "fdiv", "cw": "067f", "a": "x80:3c01a066733012581800", "b": "x80:3fffa066733012583000", "tag": "edge/dblmin-div"}
+{"id": "ed-004798", "kind": "x87", "op": "fdiv", "cw": "0e7f", "a": "x80:3c019644ad26184fc800", "b": "x80:3fff9644ad26184fc000", "tag": "edge/dblmin-div"}
+{"id": "ed-004850", "kind": "x87", "op": "fdiv_m64", "cw": "027f", "a": "x80:3c01c7f89fe9dd9e7000", "m": "f64:3ff8ff13fd3bb3ce", "tag": "edge/dblmin-div"}
+{"id": "ed-004858", "kind": "x87", "op": "fdiv", "cw": "0e7f", "a": "x80:3c01c7f89fe9dd9e7000", "b": "x80:3fffc7f89fe9dd9e7000", "tag": "edge/dblmin-div"}
+{"id": "ed-004881", "kind": "x87", "op": "fdivr", "cw": "067f", "a": "x80:3fff91498f45a6c7f000", "b": "x80:3c0191498f45a6c80800", "tag": "edge/dblmin-div"}
+{"id": "ed-004939", "kind": "x87", "op": "fdiv", "cw": "067f", "a": "x80:3c01891046675b3d1000", "b": "x80:3fff891046675b3d1000", "tag": "edge/dblmin-div"}
+{"id": "ed-004946", "kind": "x87", "op": "fdiv_m64", "cw": "027f", "a": "x80:3c01fe83bbcb2211f800", "m": "f64:3fffd0777964423c", "tag": "edge/dblmin-div"}
+{"id": "ed-004950", "kind": "x87", "op": "fdivr", "cw": "0a7f", "a": "x80:3ffffe83bbcb2211e000", "b": "x80:3c01fe83bbcb2211f800", "tag": "edge/dblmin-div"}
+{"id": "ed-004955", "kind": "x87", "op": "fdiv_m64", "cw": "0e7f", "a": "x80:3c01fe83bbcb2211f800", "m": "f64:3fffd0777964423c", "tag": "edge/dblmin-div"}
+{"id": "ed-004962", "kind": "x87", "op": "fdivr", "cw": "0a7f", "a": "x80:3fff8921abded6029000", "b": "x80:3c018921abded602b000", "tag": "edge/dblmin-div"}
+{"id": "ed-004994", "kind": "x87", "op": "fdiv_m64", "cw": "027f", "a": "x80:3c01fe9183669b05e800", "m": "f64:3fffd2306cd360c0", "tag": "edge/dblmin-div"}
+{"id": "ed-005024", "kind": "x87", "op": "fdiv_m64", "cw": "067f", "a": "x80:3c0186d8c5c94975b800", "m": "f64:3ff0db18b9292eb8", "tag": "edge/dblmin-div"}
+{"id": "ed-005044", "kind": "x87", "op": "fdiv", "cw": "0a7f", "a": "x80:3c01d5de1445f01dc000", "b": "x80:3fffd5de1445f01dc000", "tag": "edge/dblmin-div"}
+{"id": "ed-005069", "kind": "x87", "op": "fdiv_m64", "cw": "0a7f", "a": "x80:3c01997e2f1c05c2b800", "m": "f64:3ff32fc5e380b856", "tag": "edge/dblmin-div"}
+{"id": "ed-005073", "kind": "x87", "op": "fdivr", "cw": "067f", "a": "x80:3fff997e2f1c05c2b000", "b": "x80:3c01997e2f1c05c2b800", "tag": "edge/dblmin-div"}
+{"id": "ed-005077", "kind": "x87", "op": "fdiv", "cw": "027f", "a": "x80:3c01f2e7455e665e6800", "b": "x80:3ffff2e7455e665e8000", "tag": "edge/dblmin-div"}
+{"id": "ed-005100", "kind": "x87", "op": "fdivr", "cw": "0e7f", "a": "x80:3fffb4cb83dd2625f000", "b": "x80:3c01b4cb83dd2625d000", "tag": "edge/dblmin-div"}
+{"id": "ed-005141", "kind": "x87", "op": "fdiv_m64", "cw": "0a7f", "a": "x80:3c01e34444ec1ab27000", "m": "f64:3ffc68889d835650", "tag": "edge/dblmin-div"}
+{"id": "ed-005145", "kind": "x87", "op": "fdivr", "cw": "067f", "a": "x80:3fffe34444ec1ab28000", "b": "x80:3c01e34444ec1ab27000", "tag": "edge/dblmin-div"}
+{"id": "ed-005182", "kind": "x87", "op": "fdiv", "cw": "0e7f", "a": "x80:3c01aaa937a51613f800", "b": "x80:3fffaaa937a51613e000", "tag": "edge/dblmin-div"}
+{"id": "ed-005247", "kind": "x87", "op": "fdivr", "cw": "027f", "a": "x80:3fffbefcb9c233d99000", "b": "x80:3c01befcb9c233d98000", "tag": "edge/dblmin-div"}
+{"id": "ed-005253", "kind": "x87", "op": "fdivr", "cw": "067f", "a": "x80:3fffbefcb9c233d99000", "b": "x80:3c01befcb9c233d98000", "tag": "edge/dblmin-div"}
+{"id": "ed-005272", "kind": "x87", "op": "fdiv", "cw": "0a7f", "a": "x80:3c01cd01c7e7ae45e800", "b": "x80:3fffcd01c7e7ae45f000", "tag": "edge/dblmin-div"}
+{"id": "ed-005306", "kind": "x87", "op": "fdiv_m64", "cw": "027f", "a": "x80:3c01b86edc8a3267e000", "m": "f64:3ff70ddb91464cfc", "tag": "edge/dblmin-div"}
+{"id": "ed-005324", "kind": "x87", "op": "fdiv_m64", "cw": "067f", "a": "x80:3c01fcaa096533380000", "m": "f64:3fff95412ca66702", "tag": "edge/dblmin-div"}
+{"id": "ed-005326", "kind": "x87", "op": "fdiv", "cw": "0e7f", "a": "x80:3c01fcaa096533380000", "b": "x80:3ffffcaa096533381000", "tag": "edge/dblmin-div"}
+{"id": "ed-005364", "kind": "x87", "op": "fdivr", "cw": "0e7f", "a": "x80:3ffff2573c60487c0000", "b": "x80:3c01f2573c60487c2000", "tag": "edge/dblmin-div"}
+{"id": "ed-005383", "kind": "x87", "op": "fdiv", "cw": "067f", "a": "x80:3c01d4462c4eeb845800", "b": "x80:3fffd4462c4eeb846000", "tag": "edge/dblmin-div"}
+{"id": "ed-005416", "kind": "x87", "op": "fdiv", "cw": "0a7f", "a": "x80:3c01b827a4ed68a71000", "b": "x80:3fffb827a4ed68a72000", "tag": "edge/dblmin-div"}
+{"id": "ed-005439", "kind": "x87", "op": "fdivr", "cw": "027f", "a": "x80:3fffab579625a244f800", "b": "x80:3c01ab579625a2451000", "tag": "edge/dblmin-div"}
+{"id": "ed-005478", "kind": "x87", "op": "fdivr", "cw": "0a7f", "a": "x80:3fffdc3218e53f70b800", "b": "x80:3c01dc3218e53f709800", "tag": "edge/dblmin-div"}
+{"id": "ed-005505", "kind": "x87", "op": "fdivr", "cw": "067f", "a": "x80:3fff9cdfd27a64a49800", "b": "x80:3c019cdfd27a64a4a000", "tag": "edge/dblmin-div"}
+{"id": "ed-005566", "kind": "x87", "op": "fdiv", "cw": "0e7f", "a": "x80:3c01d9416f1efff29000", "b": "x80:3fffd9416f1efff2a000", "tag": "edge/dblmin-div"}
+{"id": "ed-005625", "kind": "x87", "op": "fdivr", "cw": "067f", "a": "x80:3fffe24d771765b79000", "b": "x80:3c01e24d771765b79000", "tag": "edge/dblmin-div"}
+{"id": "ed-005650", "kind": "x87", "op": "fdiv", "cw": "0e7f", "a": "x80:3c0189bf2f7acd2f8000", "b": "x80:3fff89bf2f7acd2f8000", "tag": "edge/dblmin-div"}
+{"id": "ed-005675", "kind": "x87", "op": "fdiv_m64", "cw": "0e7f", "a": "x80:3c01ebce05b5ff414000", "m": "f64:3ffd79c0b6bfe82a", "tag": "edge/dblmin-div"}
+{"id": "ed-005685", "kind": "x87", "op": "fdivr", "cw": "067f", "a": "x80:3fffa6c6617094077000", "b": "x80:3c01a6c6617094077800", "tag": "edge/dblmin-div"}
+{"id": "ed-005737", "kind": "x87", "op": "fdiv", "cw": "027f", "a": "x80:3c01bbfc48f84072c000", "b": "x80:3fffbbfc48f84072c000", "tag": "edge/dblmin-div"}
+{"id": "ed-005742", "kind": "x87", "op": "fdivr", "cw": "0a7f", "a": "x80:3fffbbfc48f84072c000", "b": "x80:3c01bbfc48f84072c000", "tag": "edge/dblmin-div"}
+{"id": "ed-005780", "kind": "x87", "op": "fdiv_m64", "cw": "067f", "a": "x80:3c018837a304e2822800", "m": "f64:3ff106f4609c5049", "tag": "edge/dblmin-div"}
+{"id": "ed-005811", "kind": "x87", "op": "fdivr", "cw": "027f", "a": "x80:3fff848e7540df900800", "b": "x80:3c01848e7540df901800", "tag": "edge/dblmin-div"}
+{"id": "ed-005825", "kind": "x87", "op": "fdiv_m64", "cw": "0a7f", "a": "x80:3c01c6a93c32c67f9000", "m": "f64:3ff8d5278658cff4", "tag": "edge/dblmin-div"}
+{"id": "ed-005831", "kind": "x87", "op": "fdiv_m64", "cw": "0e7f", "a": "x80:3c01c6a93c32c67f9000", "m": "f64:3ff8d5278658cff4", "tag": "edge/dblmin-div"}
+{"id": "ed-005844", "kind": "x87", "op": "fdivr", "cw": "0e7f", "a": "x80:3fffc8f0e5b4b086f800", "b": "x80:3c01c8f0e5b4b0871800", "tag": "edge/dblmin-div"}
+{"id": "ed-005862", "kind": "x87", "op": "fdivr", "cw": "0a7f", "a": "x80:3fffd161657656bd0000", "b": "x80:3c01d161657656bd0800", "tag": "edge/dblmin-div"}
+{"id": "ed-005941", "kind": "x87", "op": "fdiv", "cw": "027f", "a": "x80:3c01db946364659b4800", "b": "x80:3fffdb946364659b6800", "tag": "edge/dblmin-div"}
+{"id": "ed-005967", "kind": "x87", "op": "fdivr", "cw": "027f", "a": "x80:3fffaf4f4a973e3b6000", "b": "x80:3c01af4f4a973e3b7800", "tag": "edge/dblmin-div"}
+{"id": "ed-006031", "kind": "x87", "op": "fsubr", "cw": "007f", "a": "x80:401d98c6358000000000", "b": "x80:00000000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-006058", "kind": "x87", "op": "fsub", "cw": "007f", "a": "x80:3fe1dc88e28000000000", "b": "x80:bfa58000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-006214", "kind": "x87", "op": "fsub", "cw": "007f", "a": "x80:40198cc05f8000000000", "b": "x80:40018000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-006217", "kind": "x87", "op": "fadd", "cw": "007f", "a": "x80:3ff8dbeb338000000000", "b": "x80:3fbf8000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-006336", "kind": "x87", "op": "fadd_m64", "cw": "007f", "a": "x80:3fe4a7c34d8000000000", "m": "f64:3a50000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-006436", "kind": "x87", "op": "fadd_m64", "cw": "007f", "a": "x80:400bcb6c328000000000", "m": "f64:bd20000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-006488", "kind": "x87", "op": "fadd_m64", "cw": "007f", "a": "x80:3fe4ae46768000000000", "m": "f64:ba60000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-006617", "kind": "x87", "op": "fadd", "cw": "007f", "a": "x80:4008ae63638000000000", "b": "x80:00000000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-006627", "kind": "x87", "op": "fsubr", "cw": "007f", "a": "x80:bfa48000000000000000", "b": "x80:3fe28d32168000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-006643", "kind": "x87", "op": "fsubr", "cw": "007f", "a": "x80:bfb78000000000000000", "b": "x80:3ffbb54e228000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-006665", "kind": "x87", "op": "fadd", "cw": "007f", "a": "x80:400fae70b18000000000", "b": "x80:bfd58000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-006776", "kind": "x87", "op": "fadd_m64", "cw": "007f", "a": "x80:4009d698e48000000000", "m": "f64:bc30000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-006814", "kind": "x87", "op": "fsub", "cw": "007f", "a": "x80:4008949d628000000000", "b": "x80:bfc38000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-006937", "kind": "x87", "op": "fadd", "cw": "007f", "a": "x80:4012e2999a8000000000", "b": "x80:bfda8000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007032", "kind": "x87", "op": "fadd_m64", "cw": "007f", "a": "x80:4005b099428000000000", "m": "f64:3c90000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007115", "kind": "x87", "op": "fsubr", "cw": "007f", "a": "x80:3fdc8000000000000000", "b": "x80:4017b10aeb8000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007137", "kind": "x87", "op": "fadd", "cw": "007f", "a": "x80:3febf3cdea8000000000", "b": "x80:3fd38000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007154", "kind": "x87", "op": "fsub", "cw": "007f", "a": "x80:3ffba3bf0c8000000000", "b": "x80:3fbf8000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007194", "kind": "x87", "op": "fsub", "cw": "007f", "a": "x80:400da088638000000000", "b": "x80:bfc78000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007251", "kind": "x87", "op": "fsubr", "cw": "007f", "a": "x80:4003d090c18000000000", "b": "x80:3feb8000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007270", "kind": "x87", "op": "fsub", "cw": "007f", "a": "x80:400b9e08a78000000000", "b": "x80:bfd48000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007274", "kind": "x87", "op": "fsub", "cw": "007f", "a": "x80:400bb67cb78000000000", "b": "x80:bfcc8000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007291", "kind": "x87", "op": "fsubr", "cw": "007f", "a": "x80:3fd58000000000000000", "b": "x80:401bab41d68000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007366", "kind": "x87", "op": "fsub", "cw": "007f", "a": "x80:4014dde98f8000000000", "b": "x80:bfd68000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007367", "kind": "x87", "op": "fsubr", "cw": "007f", "a": "x80:bfd68000000000000000", "b": "x80:4014dde98f8000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007435", "kind": "x87", "op": "fsubr", "cw": "007f", "a": "x80:bfc08000000000000000", "b": "x80:3ffbd69fc18000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007460", "kind": "x87", "op": "fadd_m64", "cw": "007f", "a": "x80:400eb313518000000000", "m": "f64:bd70000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007494", "kind": "x87", "op": "fsub", "cw": "007f", "a": "x80:4002d9e7738000000000", "b": "x80:bfcb8000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007520", "kind": "x87", "op": "fadd_m64", "cw": "007f", "a": "x80:3ff3ad88ff8000000000", "m": "f64:0000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007560", "kind": "x87", "op": "fadd_m64", "cw": "007f", "a": "x80:3fe1ba94f28000000000", "m": "f64:3a30000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007725", "kind": "x87", "op": "fadd", "cw": "007f", "a": "x80:401c9c6b1a8000000000", "b": "x80:3fdd8000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007746", "kind": "x87", "op": "fsub", "cw": "007f", "a": "x80:400da990278000000000", "b": "x80:3fca8000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007768", "kind": "x87", "op": "fadd_m64", "cw": "007f", "a": "x80:400c930f018000000000", "m": "f64:3ca0000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007835", "kind": "x87", "op": "fsubr", "cw": "007f", "a": "x80:3fcc8000000000000000", "b": "x80:400ef6b0e28000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007862", "kind": "x87", "op": "fsub", "cw": "007f", "a": "x80:3ffdc581e48000000000", "b": "x80:bfb88000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007885", "kind": "x87", "op": "fadd", "cw": "007f", "a": "x80:3fe29cbd458000000000", "b": "x80:3fca8000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007937", "kind": "x87", "op": "fadd", "cw": "007f", "a": "x80:3ffea4fe048000000000", "b": "x80:3fc18000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-007961", "kind": "x87", "op": "fadd", "cw": "007f", "a": "x80:401c981d048000000000", "b": "x80:40048000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-008029", "kind": "x87", "op": "fadd", "cw": "007f", "a": "x80:3fec893cb38000000000", "b": "x80:bfac8000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-008056", "kind": "x87", "op": "fadd_m64", "cw": "007f", "a": "x80:3ffcf426e68000000000", "m": "f64:bc20000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-008098", "kind": "x87", "op": "fsub", "cw": "007f", "a": "x80:40099ddc308000000000", "b": "x80:3fcb8000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-008136", "kind": "x87", "op": "fadd_m64", "cw": "007f", "a": "x80:401d9cd1be8000000000", "m": "f64:be20000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-008227", "kind": "x87", "op": "fsubr", "cw": "007f", "a": "x80:3ff5e498e98000000000", "b": "x80:3fdd8000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-008245", "kind": "x87", "op": "fadd", "cw": "007f", "a": "x80:3ff68b661b8000000000", "b": "x80:00000000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-008256", "kind": "x87", "op": "fadd_m64", "cw": "007f", "a": "x80:4013ba91b28000000000", "m": "f64:bd90000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-008271", "kind": "x87", "op": "fsubr", "cw": "007f", "a": "x80:4001e0d7c78000000000", "b": "x80:3fe98000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-008301", "kind": "x87", "op": "fadd", "cw": "007f", "a": "x80:4011c563b48000000000", "b": "x80:3fd08000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-008395", "kind": "x87", "op": "fsubr", "cw": "007f", "a": "x80:3ffb9900c68000000000", "b": "x80:00000000000000000000", "tag": "edge/pc24-mid"}
+{"id": "ed-008405", "kind": "x87", "op": "fdiv", "cw": "007f", "a": "x80:3ff98a03282000000000", "b": "x80:3ffae834000000000000", "tag": "edge/pc24-div"}
+{"id": "ed-008407", "kind": "x87", "op": "fmul", "cw": "007f", "a": "x80:4001ed98000000000000", "b": "x80:4006f67c000000000000", "tag": "edge/pc24-mul"}
+{"id": "ed-008421", "kind": "x87", "op": "fsqrt", "cw": "007f", "a": "x80:400f8b6e948000000000", "tag": "edge/pc24-sqrt"}
+{"id": "ed-008429", "kind": "x87", "op": "fdiv", "cw": "007f", "a": "x80:400b896d68a000000000", "b": "x80:400798bc000000000000", "tag": "edge/pc24-div"}
+{"id": "ed-008457", "kind": "x87", "op": "fsqrt", "cw": "007f", "a": "x80:40049cc99e4000000000", "tag": "edge/pc24-sqrt"}
+{"id": "ed-008509", "kind": "x87", "op": "fmul", "cw": "007f", "a": "x80:4005fab8000000000000", "b": "x80:4009d524000000000000", "tag": "edge/pc24-mul"}
+{"id": "ed-008539", "kind": "x87", "op": "fmul", "cw": "007f", "a": "x80:3ffbe668000000000000", "b": "x80:4005e4e4000000000000", "tag": "edge/pc24-mul"}
+{"id": "ed-008567", "kind": "x87", "op": "fdiv", "cw": "007f", "a": "x80:4004aa4ae56000000000", "b": "x80:4001c7e4000000000000", "tag": "edge/pc24-div"}
+{"id": "ed-008573", "kind": "x87", "op": "fdiv", "cw": "007f", "a": "x80:4010a8f2bec000000000", "b": "x80:4004a32c000000000000", "tag": "edge/pc24-div"}
+{"id": "ed-008589", "kind": "x87", "op": "fsqrt", "cw": "007f", "a": "x80:3ffd96331c8000000000", "tag": "edge/pc24-sqrt"}
+{"id": "ed-008737", "kind": "x87", "op": "fmul", "cw": "007f", "a": "x80:4003b448000000000000", "b": "x80:4007a544000000000000", "tag": "edge/pc24-mul"}
+{"id": "ed-008738", "kind": "x87", "op": "fdiv", "cw": "007f", "a": "x80:400be8c4964000000000", "b": "x80:4007a544000000000000", "tag": "edge/pc24-div"}
+{"id": "ed-008816", "kind": "x87", "op": "fdiv", "cw": "007f", "a": "x80:3ff4a97afc6000000000", "b": "x80:3ffbed0c000000000000", "tag": "edge/pc24-div"}
+{"id": "ed-008847", "kind": "x87", "op": "fsqrt", "cw": "007f", "a": "x80:401086bb744000000000", "tag": "edge/pc24-sqrt"}
+{"id": "ed-008864", "kind": "x87", "op": "fdiv", "cw": "007f", "a": "x80:4005e00db8e000000000", "b": "x80:4004f8ac000000000000", "tag": "edge/pc24-div"}
+{"id": "ed-008876", "kind": "x87", "op": "fdiv", "cw": "007f", "a": "x80:401083f054a000000000", "b": "x80:400997f4000000000000", "tag": "edge/pc24-div"}
+{"id": "ed-008907", "kind": "x87", "op": "fsqrt", "cw": "007f", "a": "x80:4009bcfbf08000000000", "tag": "edge/pc24-sqrt"}
+{"id": "ed-009004", "kind": "x87", "op": "fmul", "cw": "007f", "a": "x80:4002faa8000000000000", "b": "x80:40078b44000000000000", "tag": "edge/pc24-mul"}
+{"id": "ed-009015", "kind": "x87", "op": "fsqrt", "cw": "007f", "a": "x80:4001fdeaa88000000000", "tag": "edge/pc24-sqrt"}
+{"id": "ed-009028", "kind": "x87", "op": "fmul", "cw": "007f", "a": "x80:4003c318000000000000", "b": "x80:4007960c000000000000", "tag": "edge/pc24-mul"}
+{"id": "ed-009031", "kind": "x87", "op": "fmul", "cw": "007f", "a": "x80:4002bbf8000000000000", "b": "x80:3ffa8eb4000000000000", "tag": "edge/pc24-mul"}
+{"id": "ed-009134", "kind": "x87", "op": "fdiv", "cw": "007f", "a": "x80:400e9a36582000000000", "b": "x80:4002fd04000000000000", "tag": "edge/pc24-div"}
+{"id": "ed-009163", "kind": "x87", "op": "fmul", "cw": "007f", "a": "x80:40069b48000000000000", "b": "x80:3ffabc4c000000000000", "tag": "edge/pc24-mul"}
+{"id": "ed-009168", "kind": "x87", "op": "fsqrt", "cw": "007f", "a": "x80:40078fc53c8000000000", "tag": "edge/pc24-sqrt"}
+{"id": "ed-009179", "kind": "x87", "op": "fdiv", "cw": "007f", "a": "x80:3ff7a048116000000000", "b": "x80:3ff9fb4c000000000000", "tag": "edge/pc24-div"}
+{"id": "ed-009330", "kind": "x87", "op": "fsqrt", "cw": "007f", "a": "x80:4009cc51e88000000000", "tag": "edge/pc24-sqrt"}
+{"id": "ed-009364", "kind": "x87", "op": "fmul", "cw": "007f", "a": "x80:400b9f88000000000000", "b": "x80:3ffbb654000000000000", "tag": "edge/pc24-mul"}
+{"id": "ed-009430", "kind": "x87", "op": "fmul", "cw": "007f", "a": "x80:40029fb8000000000000", "b": "x80:400ab624000000000000", "tag": "edge/pc24-mul"}
+{"id": "ed-009432", "kind": "x87", "op": "fsqrt", "cw": "007f", "a": "x80:4005c74c288000000000", "tag": "edge/pc24-sqrt"}
+{"id": "ed-009443", "kind": "x87", "op": "fdiv", "cw": "007f", "a": "x80:40198322752000000000", "b": "x80:400c871c000000000000", "tag": "edge/pc24-div"}
+{"id": "ed-009454", "kind": "x87", "op": "fmul", "cw": "007f", "a": "x80:3ff9c3a8000000000000", "b": "x80:3ffaa22c000000000000", "tag": "edge/pc24-mul"}
+{"id": "ed-009504", "kind": "x87", "op": "fsqrt", "cw": "007f", "a": "x80:3fffdd91548000000000", "tag": "edge/pc24-sqrt"}
+{"id": "ed-009515", "kind": "x87", "op": "fdiv", "cw": "007f", "a": "x80:4008be65126000000000", "b": "x80:4004ea4c000000000000", "tag": "edge/pc24-div"}
+{"id": "ed-009552", "kind": "x87", "op": "fsqrt", "cw": "007f", "a": "x80:3ff09310204000000000", "tag": "edge/pc24-sqrt"}
+{"id": "ed-009555", "kind": "x87", "op": "fsqrt", "cw": "007f", "a": "x80:4017fd63848000000000", "tag": "edge/pc24-sqrt"}
+{"id": "ed-009586", "kind": "x87", "op": "fmul", "cw": "007f", "a": "x80:4009b0b8000000000000", "b": "x80:4002a49c000000000000", "tag": "edge/pc24-mul"}
+{"id": "mx-000023", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:3fe09cae5bf4ba18b800", "m": "f64:bf8031dde857b030", "tag": "arith/mem-rand53"}
+{"id": "mx-000037", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:c001fa632e6842719800", "m": "f64:3f625f0a1909fe97", "tag": "arith/mem-rand53"}
+{"id": "mx-000057", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:40308ce57bd2af9a0000", "m": "f64:40876474d56e8602", "tag": "arith/mem-rand53"}
+{"id": "mx-000063", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:4027d30caf4c6f766800", "m": "f64:bf065004e87c4a63", "tag": "arith/mem-rand53"}
+{"id": "mx-000080", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:3ff79291bb2f02c8f000", "m": "f64:418005eb03aaab0b", "tag": "compare/rand53"}
+{"id": "mx-000084", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:402fbad281304262c800", "m": "f64:bf788d82de2144e2", "tag": "compare/rand53"}
+{"id": "mx-000114", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:3fc3a17ce4b0c4383800", "m": "f64:bf7991fa97b7f86d", "tag": "compare/rand53"}
+{"id": "mx-000121", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:3fdfeb3e62bf95cdc000", "m": "f64:bf68e28788c62316", "tag": "arith/mem-rand53"}
+{"id": "mx-000124", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:bfe0e948b3a0812a9800", "m": "f64:4196d89c05c951f5", "tag": "compare/rand53"}
+{"id": "mx-000127", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:3fcca49b65ff687da800", "m": "f64:40777517c4289608", "tag": "arith/mem-rand53"}
+{"id": "mx-000135", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:4036bf47fb5ce652e000", "m": "f64:c1923d8c21100f05", "tag": "arith/mem-rand53"}
+{"id": "mx-000144", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:c025b2a3d86997f6d000", "m": "f64:4074f5bc584444f0", "tag": "compare/rand53"}
+{"id": "mx-000150", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:bfc7ac74414fa0924800", "m": "f64:c17107f8bc3b63fe", "tag": "compare/rand53"}
+{"id": "mx-000152", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:c003a3c940a048580800", "m": "f64:c14ce1b18fdb9577", "tag": "compare/rand53"}
+{"id": "mx-000153", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:401c92fed8d065777800", "m": "f64:3f6203421b87095c", "tag": "arith/mem-rand53"}
+{"id": "mx-000194", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:4014bc4176648e1d1000", "m": "f64:c07ecf9360bd103f", "tag": "compare/rand53"}
+{"id": "mx-000209", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:bfe78400d05cbdceb000", "m": "f64:3f819b1a10f6d469", "tag": "arith/mem-rand53"}
+{"id": "mx-000216", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:bfdecfc782b9b481f800", "m": "f64:417b6ab0be814a60", "tag": "compare/rand53"}
+{"id": "mx-000241", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:400de406aca940279000", "m": "f64:c0800319f533419c", "tag": "arith/mem-rand53"}
+{"id": "mx-000259", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:c02c938c3a4452a9a000", "m": "f64:c167640c56ce3320", "tag": "arith/mem-rand53"}
+{"id": "mx-000266", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:4010e8dc5e4be9480800", "m": "f64:c15e55d8043e2f96", "tag": "compare/rand53"}
+{"id": "mx-000275", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:3ff2a06cc3ccd845c800", "m": "f64:416171a800f2b726", "tag": "arith/mem-rand53"}
+{"id": "mx-000280", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:3fd7c11ed348207e2000", "m": "f64:c08106a26e822cc2", "tag": "compare/rand53"}
+{"id": "mx-000300", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:c035a05eb6a907153000", "m": "f64:41739d4dbd8b7dec", "tag": "compare/rand53"}
+{"id": "mx-000331", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:c0058c96c70000000000", "m": "f64:bf31ddf6edfbeb32", "tag": "arith/mem-game"}
+{"id": "mx-000339", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:3ffd9c5e040000000000", "m": "f64:c1906c94c3186958", "tag": "arith/mem-game"}
+{"id": "mx-000347", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:400597d65a0000000000", "m": "f64:c1937d9c870640a6", "tag": "arith/mem-game"}
+{"id": "mx-000365", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:4009d7ef1c0000000000", "m": "f64:3f6f3a1c74360ea5", "tag": "arith/mem-game"}
+{"id": "mx-000374", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:3ff0957e020000000000", "m": "f64:4070cc3d0c659600", "tag": "compare/game"}
+{"id": "mx-000385", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:c0059406350000000000", "m": "f64:c08eebfbd2d1f2c3", "tag": "arith/mem-game"}
+{"id": "mx-000391", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:400990a8670000000000", "m": "f64:c07cb03bdf67a096", "tag": "arith/mem-game"}
+{"id": "mx-000399", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:4008cbc1570000000000", "m": "f64:408abf8233cc33c2", "tag": "arith/mem-game"}
+{"id": "mx-000402", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:4006f5b7b70000000000", "m": "f64:c17450fe5194c137", "tag": "compare/game"}
+{"id": "mx-000416", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:3fef99a3870000000000", "m": "f64:3f38e54f26e2ef35", "tag": "compare/game"}
+{"id": "mx-000424", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:4009a773c00000000000", "m": "f64:40822daed02b2dec", "tag": "compare/game"}
+{"id": "mx-000431", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:c006d2e11b0000000000", "m": "f64:407274e1e2d64958", "tag": "arith/mem-game"}
+{"id": "mx-000432", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:c006d2e11b0000000000", "m": "f64:407274e1e2d64958", "tag": "compare/game"}
+{"id": "mx-000449", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:4001975b270000000000", "m": "f64:40707d3303973b5c", "tag": "arith/mem-game"}
+{"id": "mx-000462", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:bfffcb08e80000000000", "m": "f64:c07c0ecc0ca6bd4c", "tag": "compare/game"}
+{"id": "mx-000490", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:4006bf36bf0000000000", "m": "f64:40884b76e16f8118", "tag": "compare/game"}
+{"id": "mx-000524", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:c006bb5c760000000000", "m": "f64:3f5ffbfeb4a39821", "tag": "compare/game"}
+{"id": "mx-000532", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:3ffcc1c2de0000000000", "m": "f64:c07ad297206ab858", "tag": "compare/game"}
+{"id": "mx-000536", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:3ffbde39920000000000", "m": "f64:bf8351863b5d6d55", "tag": "compare/game"}
+{"id": "mx-000537", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:4009c5c8310000000000", "m": "f64:4055c9c4e40a9840", "tag": "arith/mem-game"}
+{"id": "mx-000540", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:3ffaf8ca680000000000", "m": "f64:4182c0d8aa706fc8", "tag": "compare/game"}
+{"id": "mx-000578", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:3ffcffe56d0000000000", "m": "f64:c07a713051c433b6", "tag": "compare/game"}
+{"id": "mx-000583", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:4006aad91f0000000000", "m": "f64:418b4f1703c20abc", "tag": "arith/mem-game"}
+{"id": "mx-000591", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:bffed6b7d20000000000", "m": "f64:3f67f442042e4a19", "tag": "arith/mem-game"}
+{"id": "mx-000609", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:3fc7b6307db5c868bf2c", "m": "f64:4156c9a38c0df261", "tag": "arith/mem-rand64"}
+{"id": "mx-000621", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:401efe515e036c6d14b1", "m": "f64:c063b5e3d17d0de4", "tag": "arith/mem-rand64"}
+{"id": "mx-000644", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:c0328034a1ff2c454871", "m": "f64:c1956b2b95df25b5", "tag": "compare/rand64"}
+{"id": "mx-000651", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:c038bd92fd90f2c1f4d9", "m": "f64:c17b930cdfe63000", "tag": "arith/mem-rand64"}
+{"id": "mx-000666", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:3fd7e326578abc3414f1", "m": "f64:c08e6139d33c4447", "tag": "compare/rand64"}
+{"id": "mx-000676", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:4029a02ce2e82876a2e1", "m": "f64:418a4a9bfae920ac", "tag": "compare/rand64"}
+{"id": "mx-000685", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:3ffab2bc67ecceaa0bff", "m": "f64:c161e9e93bd1481c", "tag": "arith/mem-rand64"}
+{"id": "mx-000687", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:bff9e5c4736e5a50bc19", "m": "f64:407e24a5e96230b0", "tag": "arith/mem-rand64"}
+{"id": "mx-000706", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:4001a7f3013cd3f2962e", "m": "f64:c06476efd8af3a00", "tag": "compare/rand64"}
+{"id": "mx-000730", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:402fafb187a0ec64ba71", "m": "f64:bf8293c419dc292d", "tag": "compare/rand64"}
+{"id": "mx-000738", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:bff6d3796b0aa97a5338", "m": "f64:bf78f6e64ffd7c12", "tag": "compare/rand64"}
+{"id": "mx-000757", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:bfeec2b7326155a01477", "m": "f64:bf830dd135e40c33", "tag": "arith/mem-rand64"}
+{"id": "mx-000768", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:401781b0dc7864d36234", "m": "f64:c07c2acfea07a5b2", "tag": "compare/rand64"}
+{"id": "mx-000769", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:c03596ca564a457ea0f2", "m": "f64:4043a2cc89189c20", "tag": "arith/mem-rand64"}
+{"id": "mx-000779", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:bfd9a178aa3076a9ace5", "m": "f64:bf31fdeddaac7c31", "tag": "arith/mem-rand64"}
+{"id": "mx-000783", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:3fcbea572e7566665d06", "m": "f64:3f69aad7aaa0f272", "tag": "arith/mem-rand64"}
+{"id": "mx-000789", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:3ffa9a575a24613ab824", "m": "f64:bf772594f54e7f98", "tag": "arith/mem-rand64"}
+{"id": "mx-000793", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:4017c336199d53e21a45", "m": "f64:c17482042d64a8f6", "tag": "arith/mem-rand64"}
+{"id": "mx-000806", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:c035f907e7c1e932a6a2", "m": "f64:c12aaac9ccd3540c", "tag": "compare/rand64"}
+{"id": "mx-000828", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:40158848222ecd24c4e6", "m": "f64:c0121ccb7b58dd00", "tag": "compare/rand64"}
+{"id": "mx-000834", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:bfc8e4f10444f761e475", "m": "f64:bf72d745db1a48b3", "tag": "compare/rand64"}
+{"id": "mx-000885", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:c00080f9a27657d3f128", "m": "f64:c089fc481ddef350", "tag": "arith/mem-rand64"}
+{"id": "mx-000888", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:400c9d1cc5cfab9b4cb6", "m": "f64:3f6c75d7508e2d73", "tag": "compare/rand64"}
+{"id": "mx-000898", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:bff0f43245e6c2368f7f", "m": "f64:41876c00b971c77d", "tag": "compare/rand64"}
+{"id": "mx-000910", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:00000000000000000000", "m": "f64:7ff0000000000000", "tag": "compare/special"}
+{"id": "mx-000917", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:80000000000000000000", "m": "f64:0000000000000001", "tag": "arith/special"}
+{"id": "mx-000918", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:80000000000000000000", "m": "f64:0000000000000001", "tag": "compare/special"}
+{"id": "mx-000937", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:bfff8000000000000000", "m": "f64:7ff4000000000000", "tag": "arith/special"}
+{"id": "mx-000960", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:3ffe8000000000000000", "m": "f64:3ff0000000000000", "tag": "compare/special"}
+{"id": "mx-000965", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:3fffc000000000000000", "m": "f64:0000000000000001", "tag": "arith/special"}
+{"id": "mx-000979", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:4000a000000000000000", "m": "f64:8000000000000000", "tag": "arith/special"}
+{"id": "mx-000993", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:7fff8000000000000000", "m": "f64:7ff0000000000000", "tag": "arith/special"}
+{"id": "mx-001001", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:ffff8000000000000000", "m": "f64:0000000000000001", "tag": "arith/special"}
+{"id": "mx-001022", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:ffffc000000000000000", "m": "f64:7ff4000000000000", "tag": "compare/special"}
+{"id": "mx-001023", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:ffffc000000000000000", "m": "f64:fff8000000000000", "tag": "arith/special"}
+{"id": "mx-001026", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:ffffc000000000000000", "m": "f64:0000000000000001", "tag": "compare/special"}
+{"id": "mx-001039", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:7fffa000000000000000", "m": "f64:8000000000000000", "tag": "arith/special"}
+{"id": "mx-001050", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:7fffc000000000001234", "m": "f64:0000000000000001", "tag": "compare/special"}
+{"id": "mx-001073", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:00018000000000000000", "m": "f64:0000000000000001", "tag": "arith/special"}
+{"id": "mx-001074", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:00018000000000000000", "m": "f64:0000000000000001", "tag": "compare/special"}
+{"id": "mx-001085", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:43fefffffffffffff800", "m": "f64:0000000000000001", "tag": "arith/special"}
+{"id": "mx-001103", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:43ffc000000000000000", "m": "f64:3ff0000000000000", "tag": "arith/special"}
+{"id": "mx-001104", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:43ffc000000000000000", "m": "f64:3ff0000000000000", "tag": "compare/special"}
+{"id": "mx-001149", "kind": "x87", "op": "fsubr_m64", "cw": "027f", "a": "x80:3f6a8000000000000000", "m": "f64:7ff0000000000000", "tag": "arith/special"}
+{"id": "mx-001160", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:40348000000000000400", "m": "f64:8000000000000000", "tag": "compare/special"}
+{"id": "mx-001164", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:40348000000000000400", "m": "f64:3ff0000000000000", "tag": "compare/special"}
+{"id": "mx-001172", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:403effffffffffffffff", "m": "f64:8000000000000000", "tag": "compare/special"}
+{"id": "mx-001174", "kind": "x87", "op": "fcom_m64", "cw": "027f", "a": "x80:403effffffffffffffff", "m": "f64:7ff0000000000000", "tag": "compare/special"}
+{"id": "mx-001178", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:c01080c92faf165ba800", "m": "f64:c089bdd2e1b33af9", "tag": "compare/rand53"}
+{"id": "mx-001183", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:3fede77fd311bee9c800", "m": "f64:c160faaa6ff8322d", "tag": "arith/mem-rand53"}
+{"id": "mx-001201", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:3fd2d5dc8ac18c860000", "m": "f64:407f1ab5798ac8b4", "tag": "arith/mem-rand53"}
+{"id": "mx-001212", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:c037c783b81f39a9d000", "m": "f64:4182aa4969350388", "tag": "compare/rand53"}
+{"id": "mx-001220", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:c018ef9ee2529bffd000", "m": "f64:bf81dae155d27531", "tag": "compare/rand53"}
+{"id": "mx-001223", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:3fcf8af2c12d4fc10000", "m": "f64:c08c7bf92bb07ff4", "tag": "arith/mem-rand53"}
+{"id": "mx-001230", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:4001c0b4b8beb20de800", "m": "f64:4181840322c3d809", "tag": "compare/rand53"}
+{"id": "mx-001259", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:bfc984ef21cf5e911800", "m": "f64:3f80e65f4fb669af", "tag": "arith/mem-rand53"}
+{"id": "mx-001282", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:bfcd98af7a5b8a3f6000", "m": "f64:bf5bd761679732cb", "tag": "compare/rand53"}
+{"id": "mx-001338", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:3fd38f6029cf81f4a800", "m": "f64:418060cc9de7eda3", "tag": "compare/rand53"}
+{"id": "mx-001350", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:c038fa270797f1a12800", "m": "f64:41952be73d67acd3", "tag": "compare/rand53"}
+{"id": "mx-001352", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:3ff7e4cdb44f70213800", "m": "f64:c0762e674953dc42", "tag": "compare/rand53"}
+{"id": "mx-001361", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:c00be12836a96b8d6000", "m": "f64:bf79c86ed4b6c1c9", "tag": "arith/mem-rand53"}
+{"id": "mx-001363", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:bfd0b7642a40c3591000", "m": "f64:bf8001f5d165c339", "tag": "arith/mem-rand53"}
+{"id": "mx-001372", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:c008c9f3843d9076c000", "m": "f64:bf8349c013ba74ba", "tag": "compare/rand53"}
+{"id": "mx-001374", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:c0209b144440889b1800", "m": "f64:c08ae24f74e0a675", "tag": "compare/rand53"}
+{"id": "mx-001379", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:3feaccc2dbe2fa973000", "m": "f64:4187bbc6fe5622df", "tag": "arith/mem-rand53"}
+{"id": "mx-001393", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:c02082536f978e77c000", "m": "f64:419236932d35a482", "tag": "arith/mem-rand53"}
+{"id": "mx-001427", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:c02dcf85e5ba0e656800", "m": "f64:4175a538b8308c24", "tag": "arith/mem-rand53"}
+{"id": "mx-001453", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:4001d2858f580be68000", "m": "f64:408ef96e406591f8", "tag": "arith/mem-rand53"}
+{"id": "mx-001454", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:4001d2858f580be68000", "m": "f64:408ef96e406591f8", "tag": "compare/rand53"}
+{"id": "mx-001469", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:bfdcb77d28bb749ab000", "m": "f64:4181d6b88d04df58", "tag": "arith/mem-rand53"}
+{"id": "mx-001470", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:bfdcb77d28bb749ab000", "m": "f64:4181d6b88d04df58", "tag": "compare/rand53"}
+{"id": "mx-001475", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:bff0b8a5975aa98fb800", "m": "f64:bf6e5067b58a44d3", "tag": "arith/mem-rand53"}
+{"id": "mx-001479", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:c006b4ee2e0000000000", "m": "f64:c0807267299fd186", "tag": "arith/mem-game"}
+{"id": "mx-001483", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:4001c775200000000000", "m": "f64:4078de4931bcf280", "tag": "arith/mem-game"}
+{"id": "mx-001498", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:bffe98ebc00000000000", "m": "f64:406ca583dde7aec8", "tag": "compare/game"}
+{"id": "mx-001499", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:3ffeb7ecfd0000000000", "m": "f64:4167dfbe9d5b88be", "tag": "arith/mem-game"}
+{"id": "mx-001520", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:4001a640f40000000000", "m": "f64:408a7969b289f85e", "tag": "compare/game"}
+{"id": "mx-001546", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:3fffcd50300000000000", "m": "f64:c0867ef8ad907ef4", "tag": "compare/game"}
+{"id": "mx-001565", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:c00181c5410000000000", "m": "f64:bf5dbeb52565779b", "tag": "arith/mem-game"}
+{"id": "mx-001566", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:c00181c5410000000000", "m": "f64:bf5dbeb52565779b", "tag": "compare/game"}
+{"id": "mx-001585", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:c001bdd9a00000000000", "m": "f64:3f805b71df400dd1", "tag": "arith/mem-game"}
+{"id": "mx-001590", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:bffd998e6a0000000000", "m": "f64:bf6a91eec3c32af6", "tag": "compare/game"}
+{"id": "mx-001594", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:4006a074050000000000", "m": "f64:c0854357f62af9d7", "tag": "compare/game"}
+{"id": "mx-001612", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:bffe8370550000000000", "m": "f64:bf36168498b2ec57", "tag": "compare/game"}
+{"id": "mx-001613", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:3ffeee1daf0000000000", "m": "f64:bf52b3bf4b5ae671", "tag": "arith/mem-game"}
+{"id": "mx-001622", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:4000dc007c0000000000", "m": "f64:40402c866048ff40", "tag": "compare/game"}
+{"id": "mx-001666", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:3fffc268e80000000000", "m": "f64:c1723e1c99e6cd61", "tag": "compare/game"}
+{"id": "mx-001668", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:bff6f4f1dc0000000000", "m": "f64:bf6c610bf0f5e657", "tag": "compare/game"}
+{"id": "mx-001675", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:c00587dab30000000000", "m": "f64:c17193f740947075", "tag": "arith/mem-game"}
+{"id": "mx-001679", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:c00186a9a70000000000", "m": "f64:4084eaf08599a68c", "tag": "arith/mem-game"}
+{"id": "mx-001707", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:4004962fab0000000000", "m": "f64:3f7bd1d03eb7ee32", "tag": "arith/mem-game"}
+{"id": "mx-001710", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:c00589abe70000000000", "m": "f64:3f82b9fb32c19ab8", "tag": "compare/game"}
+{"id": "mx-001715", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:3ffa8a28f10000000000", "m": "f64:c08bde7793b3bcde", "tag": "arith/mem-game"}
+{"id": "mx-001719", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:3ffcc238120000000000", "m": "f64:bf82290d21ade594", "tag": "arith/mem-game"}
+{"id": "mx-001738", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:3fffb4c1140000000000", "m": "f64:c07e749ad978b724", "tag": "compare/game"}
+{"id": "mx-001751", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:3ff0c9b3800000000000", "m": "f64:416ab7fbe22aba65", "tag": "arith/mem-game"}
+{"id": "mx-001778", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:c033878c7d69bd7afad1", "m": "f64:c069047ca91c4db8", "tag": "compare/rand64"}
+{"id": "mx-001798", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:bfcacd67faa344ccd54b", "m": "f64:c18183207f08143a", "tag": "compare/rand64"}
+{"id": "mx-001806", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:3fcfdac2cfd8795a69dd", "m": "f64:c180c66ab5fe8597", "tag": "compare/rand64"}
+{"id": "mx-001842", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:c0218d4dfe5ac4ea9489", "m": "f64:41745ec087d3e629", "tag": "compare/rand64"}
+{"id": "mx-001847", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:400cf79ff32455359ff2", "m": "f64:406df85b640f91c0", "tag": "arith/mem-rand64"}
+{"id": "mx-001851", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:3fd5ebd978a7651b7186", "m": "f64:c1704b9ab62b2dad", "tag": "arith/mem-rand64"}
+{"id": "mx-001884", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:3fdee2189758bbb23bc9", "m": "f64:40697b1f20473b90", "tag": "compare/rand64"}
+{"id": "mx-001885", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:400e9af767349d90f02e", "m": "f64:c042bb36644e1d50", "tag": "arith/mem-rand64"}
+{"id": "mx-001892", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:4014c80da43465385096", "m": "f64:4195caab2f64937e", "tag": "compare/rand64"}
+{"id": "mx-001894", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:3fe5a36d20295c65fbb2", "m": "f64:c076bd5dca1be12c", "tag": "compare/rand64"}
+{"id": "mx-001905", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:401bb554cc22ba7bd2f5", "m": "f64:41632824863740cf", "tag": "arith/mem-rand64"}
+{"id": "mx-001922", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:3fd3f63de37c00e6c906", "m": "f64:c1610a356e4f32b0", "tag": "compare/rand64"}
+{"id": "mx-001931", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:bfc58174398ea00d9f01", "m": "f64:408467bbb524cee0", "tag": "arith/mem-rand64"}
+{"id": "mx-001936", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:c02fb4b1c4f8386edb0e", "m": "f64:40842ce532971bc0", "tag": "compare/rand64"}
+{"id": "mx-001954", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:bfc8c66f8672914c47be", "m": "f64:418015a57047d608", "tag": "compare/rand64"}
+{"id": "mx-001972", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:bffc810e5b3a80dd039a", "m": "f64:c073783e4b6181a0", "tag": "compare/rand64"}
+{"id": "mx-002021", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:bfd6fc0f99f53de14e5c", "m": "f64:c0850562fada1a29", "tag": "arith/mem-rand64"}
+{"id": "mx-002023", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:bfdffee7acbf7a33ec7d", "m": "f64:41905060a2585e41", "tag": "arith/mem-rand64"}
+{"id": "mx-002043", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:401999f9d04af50b99e3", "m": "f64:c07eb80a85b993f7", "tag": "arith/mem-rand64"}
+{"id": "mx-002051", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:401dc56327a1e16cdecb", "m": "f64:4043eb8a639d6360", "tag": "arith/mem-rand64"}
+{"id": "mx-002055", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:bfe6b864467cab1341eb", "m": "f64:c16976d457f57f15", "tag": "arith/mem-rand64"}
+{"id": "mx-002058", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:4018ab22d50f2386492d", "m": "f64:c1946d456528e6ce", "tag": "compare/rand64"}
+{"id": "mx-002069", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:3ff5a53030db2476be4b", "m": "f64:c18e01621bc61b43", "tag": "arith/mem-rand64"}
+{"id": "mx-002075", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:3fd9bc35886b139551b4", "m": "f64:4086ce52ce472108", "tag": "arith/mem-rand64"}
+{"id": "mx-002081", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:00000000000000000000", "m": "f64:0000000000000001", "tag": "arith/special"}
+{"id": "mx-002083", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:00000000000000000000", "m": "f64:8000000000000000", "tag": "arith/special"}
+{"id": "mx-002088", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:00000000000000000000", "m": "f64:3ff0000000000000", "tag": "compare/special"}
+{"id": "mx-002098", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:80000000000000000000", "m": "f64:7ff0000000000000", "tag": "compare/special"}
+{"id": "mx-002117", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:bfff8000000000000000", "m": "f64:0000000000000001", "tag": "arith/special"}
+{"id": "mx-002122", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:bfff8000000000000000", "m": "f64:7ff0000000000000", "tag": "compare/special"}
+{"id": "mx-002129", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:3ffe8000000000000000", "m": "f64:0000000000000001", "tag": "arith/special"}
+{"id": "mx-002132", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:3ffe8000000000000000", "m": "f64:8000000000000000", "tag": "compare/special"}
+{"id": "mx-002187", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:7fffc000000000000000", "m": "f64:fff8000000000000", "tag": "arith/special"}
+{"id": "mx-002194", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:7fffc000000000000000", "m": "f64:7ff0000000000000", "tag": "compare/special"}
+{"id": "mx-002195", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:7fffc000000000000000", "m": "f64:3ff0000000000000", "tag": "arith/special"}
+{"id": "mx-002202", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:ffffc000000000000000", "m": "f64:0000000000000001", "tag": "compare/special"}
+{"id": "mx-002205", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:ffffc000000000000000", "m": "f64:7ff0000000000000", "tag": "arith/special"}
+{"id": "mx-002225", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:7fffc000000000001234", "m": "f64:0000000000000001", "tag": "arith/special"}
+{"id": "mx-002236", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:00000000000000000001", "m": "f64:fff8000000000000", "tag": "compare/special"}
+{"id": "mx-002239", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:00000000000000000001", "m": "f64:8000000000000000", "tag": "arith/special"}
+{"id": "mx-002249", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:00018000000000000000", "m": "f64:0000000000000001", "tag": "arith/special"}
+{"id": "mx-002264", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:43fefffffffffffff800", "m": "f64:8000000000000000", "tag": "compare/special"}
+{"id": "mx-002284", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:3c018000000000000000", "m": "f64:fff8000000000000", "tag": "compare/special"}
+{"id": "mx-002291", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:3c018000000000000000", "m": "f64:3ff0000000000000", "tag": "arith/special"}
+{"id": "mx-002292", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:3c018000000000000000", "m": "f64:3ff0000000000000", "tag": "compare/special"}
+{"id": "mx-002294", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:3bf98000000000000000", "m": "f64:7ff4000000000000", "tag": "compare/special"}
+{"id": "mx-002325", "kind": "x87", "op": "fsubr_m64", "cw": "007f", "a": "x80:3f6a8000000000000000", "m": "f64:7ff0000000000000", "tag": "arith/special"}
+{"id": "mx-002348", "kind": "x87", "op": "fcom_m64", "cw": "007f", "a": "x80:403effffffffffffffff", "m": "f64:8000000000000000", "tag": "compare/special"}
+{"id": "mx-002359", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:3fe69494453572ff7800", "m": "f64:bf69a4dc05c0ea8f", "tag": "arith/mem-rand53"}
+{"id": "mx-002363", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:c02ce51f2cc5a757b000", "m": "f64:4086d35048a294be", "tag": "arith/mem-rand53"}
+{"id": "mx-002390", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:bfffb8021664cdeee000", "m": "f64:41658d404f052da0", "tag": "compare/rand53"}
+{"id": "mx-002418", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:3fc3cd8234293e709000", "m": "f64:4080cfc107819b44", "tag": "compare/rand53"}
+{"id": "mx-002431", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:c01cea52e1e2199c9000", "m": "f64:406ea3e546201f40", "tag": "arith/mem-rand53"}
+{"id": "mx-002433", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:c013816f873e1d526800", "m": "f64:bf841fd79a1f8568", "tag": "arith/mem-rand53"}
+{"id": "mx-002452", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:c015c65ac09a3e256000", "m": "f64:c18e39358c3a1ada", "tag": "compare/rand53"}
+{"id": "mx-002459", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:c019bf4ca4de89b9d800", "m": "f64:bf308fb83492475b", "tag": "arith/mem-rand53"}
+{"id": "mx-002460", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:c019bf4ca4de89b9d800", "m": "f64:bf308fb83492475b", "tag": "compare/rand53"}
+{"id": "mx-002468", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:c036e4d5fbf18cfa2800", "m": "f64:bf82ea37269bbcfa", "tag": "compare/rand53"}
+{"id": "mx-002475", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:c003beeb28efaa5a7800", "m": "f64:c0884961738a3940", "tag": "arith/mem-rand53"}
+{"id": "mx-002484", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:3fd4cbe8a2a8ed44e000", "m": "f64:417138c70c4f29be", "tag": "compare/rand53"}
+{"id": "mx-002507", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:4000f2623957e662a000", "m": "f64:bf8427b819d3217f", "tag": "arith/mem-rand53"}
+{"id": "mx-002521", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:bff5b109f8b42c0e9000", "m": "f64:c19321195ff5ee0e", "tag": "arith/mem-rand53"}
+{"id": "mx-002542", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:4038ead8342483643800", "m": "f64:c193a3e5f39cbbeb", "tag": "compare/rand53"}
+{"id": "mx-002554", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:4037afbacc87df1f8000", "m": "f64:41941855ece1d176", "tag": "compare/rand53"}
+{"id": "mx-002562", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:3fc5df1fe2c6f2088800", "m": "f64:c1847b5581075f8b", "tag": "compare/rand53"}
+{"id": "mx-002574", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:4001dba260e541828000", "m": "f64:3f75253405ead8ac", "tag": "compare/rand53"}
+{"id": "mx-002611", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:3fc5a227f8c09fe64800", "m": "f64:3f843e8794e7fdce", "tag": "arith/mem-rand53"}
+{"id": "mx-002618", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:3fef98d71833e5fd5800", "m": "f64:c18cc31107752894", "tag": "compare/rand53"}
+{"id": "mx-002622", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:40208965c0b322fc1000", "m": "f64:c0811cdde7369175", "tag": "compare/rand53"}
+{"id": "mx-002631", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:400980fe6633498c9000", "m": "f64:3f7600ea92ec802d", "tag": "arith/mem-rand53"}
+{"id": "mx-002641", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:4003bb497dc22974f800", "m": "f64:c08578cea3e83108", "tag": "arith/mem-rand53"}
+{"id": "mx-002647", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:3fdacf2bc51cce132000", "m": "f64:c0469d42987f0ca0", "tag": "arith/mem-rand53"}
+{"id": "mx-002666", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:c006c03e3c0000000000", "m": "f64:41908e962f5e0180", "tag": "compare/game"}
+{"id": "mx-002693", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:bfffe17f9b0000000000", "m": "f64:3f7af4f9885a0107", "tag": "arith/mem-game"}
+{"id": "mx-002696", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:3feae00d700000000000", "m": "f64:c078f5116ba483e8", "tag": "compare/game"}
+{"id": "mx-002702", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:bffffeb81f0000000000", "m": "f64:c07a5c02a82b8c64", "tag": "compare/game"}
+{"id": "mx-002710", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:4007de95910000000000", "m": "f64:bf82087ff4174259", "tag": "compare/game"}
+{"id": "mx-002734", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:4007b0ce550000000000", "m": "f64:c193b19bd97a06e1", "tag": "compare/game"}
+{"id": "mx-002739", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:4006fe72e30000000000", "m": "f64:4077162c4aa6f8e4", "tag": "arith/mem-game"}
+{"id": "mx-002743", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:40078b87100000000000", "m": "f64:3f83726bb2d30ed6", "tag": "arith/mem-game"}
+{"id": "mx-002757", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:3ff0de66a20000000000", "m": "f64:c18adb11f0dd375b", "tag": "arith/mem-game"}
+{"id": "mx-002763", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:bffdfcd88d0000000000", "m": "f64:3f7895e86ab41e46", "tag": "arith/mem-game"}
+{"id": "mx-002768", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:c005f59ae90000000000", "m": "f64:4054596747216d60", "tag": "compare/game"}
+{"id": "mx-002774", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:4004a34b8b0000000000", "m": "f64:c1896f2f4990f5c1", "tag": "compare/game"}
+{"id": "mx-002777", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:c0069f3d100000000000", "m": "f64:408aa69d1c493010", "tag": "arith/mem-game"}
+{"id": "mx-002793", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:c0078c0c7f0000000000", "m": "f64:bf7ba7fba41ffe29", "tag": "arith/mem-game"}
+{"id": "mx-002799", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:4006b88b370000000000", "m": "f64:bf6aff3674c7444e", "tag": "arith/mem-game"}
+{"id": "mx-002820", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:c000855b160000000000", "m": "f64:c18e5a79485f39d5", "tag": "compare/game"}
+{"id": "mx-002825", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:c00790047f0000000000", "m": "f64:3f7452fd1eb93c75", "tag": "arith/mem-game"}
+{"id": "mx-002836", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:4009e5f13a0000000000", "m": "f64:40889192180356b6", "tag": "compare/game"}
+{"id": "mx-002874", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:40078424c50000000000", "m": "f64:417c534e2510bcef", "tag": "compare/game"}
+{"id": "mx-002893", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:bffed999760000000000", "m": "f64:bf692cc4b6c5395e", "tag": "arith/mem-game"}
+{"id": "mx-002894", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:bffed999760000000000", "m": "f64:bf692cc4b6c5395e", "tag": "compare/game"}
+{"id": "mx-002899", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:3ff8b8d47f0000000000", "m": "f64:c075350349ac96b0", "tag": "arith/mem-game"}
+{"id": "mx-002915", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:c000af31900000000000", "m": "f64:c186b1309958374e", "tag": "arith/mem-game"}
+{"id": "mx-002940", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:3ffd9969780000000000", "m": "f64:417e7151043c48bc", "tag": "compare/game"}
+{"id": "mx-002956", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:3febccf8e33df02ac08d", "m": "f64:3f6a18db07aab031", "tag": "compare/rand64"}
+{"id": "mx-002960", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:4013dd2d23d214b86c4f", "m": "f64:c17a051c937c1932", "tag": "compare/rand64"}
+{"id": "mx-002980", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:c03b9eaa422fc872790c", "m": "f64:4080cb1209cd5174", "tag": "compare/rand64"}
+{"id": "mx-002985", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:3fd0f189b9a278ff91bb", "m": "f64:bf76ec80415fca48", "tag": "arith/mem-rand64"}
+{"id": "mx-002986", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:3fd0f189b9a278ff91bb", "m": "f64:bf76ec80415fca48", "tag": "compare/rand64"}
+{"id": "mx-003018", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:c012aa2f3ffebc3d699e", "m": "f64:407a780b904d2b70", "tag": "compare/rand64"}
+{"id": "mx-003032", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:3fcfbfe01e5d4d42aada", "m": "f64:c1837673a263b454", "tag": "compare/rand64"}
+{"id": "mx-003033", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:bfc39a188dd807e2886a", "m": "f64:4062fcd9364d7828", "tag": "arith/mem-rand64"}
+{"id": "mx-003040", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:c026d3cf04f892195362", "m": "f64:c08b3394ee864689", "tag": "compare/rand64"}
+{"id": "mx-003044", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:3ff6c0e4187ce5ec2618", "m": "f64:408924f3f5188578", "tag": "compare/rand64"}
+{"id": "mx-003045", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:bfd3c517e9b4c9721d8e", "m": "f64:c08963041c512c9b", "tag": "arith/mem-rand64"}
+{"id": "mx-003075", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:bfffc1292d41dde30125", "m": "f64:c075c623c51f1d4e", "tag": "arith/mem-rand64"}
+{"id": "mx-003083", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:3fe888cecdaf449f8460", "m": "f64:c19620907096a936", "tag": "arith/mem-rand64"}
+{"id": "mx-003088", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:3fd08fcbe17b95e3275a", "m": "f64:3f4083c99c234856", "tag": "compare/rand64"}
+{"id": "mx-003097", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:bfe0fd59cb8f20814a94", "m": "f64:c0723586b5012486", "tag": "arith/mem-rand64"}
+{"id": "mx-003105", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:bfeac8b3cd2ddbc058e5", "m": "f64:c086f4b8473e40bb", "tag": "arith/mem-rand64"}
+{"id": "mx-003130", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:bff1d7ca51624b2faed9", "m": "f64:bf7727cb8d827631", "tag": "compare/rand64"}
+{"id": "mx-003144", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:3fddd9778c4bac3d628a", "m": "f64:bf80de57191c109c", "tag": "compare/rand64"}
+{"id": "mx-003145", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:bfc4a98806235df4870e", "m": "f64:bf67721be0e68bc2", "tag": "arith/mem-rand64"}
+{"id": "mx-003155", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:40298b6bdead2a211db1", "m": "f64:416692b058159ed8", "tag": "arith/mem-rand64"}
+{"id": "mx-003169", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:bfccf613f7f86cc9f08f", "m": "f64:bf7339f20a255729", "tag": "arith/mem-rand64"}
+{"id": "mx-003191", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:c00c94a843601e2857c9", "m": "f64:4188c6822290cb81", "tag": "arith/mem-rand64"}
+{"id": "mx-003247", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:bfd9c7e5a4dad9ba7120", "m": "f64:4188730adb3314c9", "tag": "arith/mem-rand64"}
+{"id": "mx-003248", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:bfd9c7e5a4dad9ba7120", "m": "f64:4188730adb3314c9", "tag": "compare/rand64"}
+{"id": "mx-003272", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:80000000000000000000", "m": "f64:8000000000000000", "tag": "compare/special"}
+{"id": "mx-003281", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:3fff8000000000000000", "m": "f64:0000000000000001", "tag": "arith/special"}
+{"id": "mx-003285", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:3fff8000000000000000", "m": "f64:7ff0000000000000", "tag": "arith/special"}
+{"id": "mx-003294", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:bfff8000000000000000", "m": "f64:0000000000000001", "tag": "compare/special"}
+{"id": "mx-003303", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:3ffe8000000000000000", "m": "f64:fff8000000000000", "tag": "arith/special"}
+{"id": "mx-003306", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:3ffe8000000000000000", "m": "f64:0000000000000001", "tag": "compare/special"}
+{"id": "mx-003307", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:3ffe8000000000000000", "m": "f64:8000000000000000", "tag": "arith/special"}
+{"id": "mx-003331", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:4000a000000000000000", "m": "f64:8000000000000000", "tag": "arith/special"}
+{"id": "mx-003341", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:7fff8000000000000000", "m": "f64:0000000000000001", "tag": "arith/special"}
+{"id": "mx-003343", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:7fff8000000000000000", "m": "f64:8000000000000000", "tag": "arith/special"}
+{"id": "mx-003369", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:7fffc000000000000000", "m": "f64:7ff0000000000000", "tag": "arith/special"}
+{"id": "mx-003370", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:7fffc000000000000000", "m": "f64:7ff0000000000000", "tag": "compare/special"}
+{"id": "mx-003388", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:7fffa000000000000000", "m": "f64:fff8000000000000", "tag": "compare/special"}
+{"id": "mx-003394", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:7fffa000000000000000", "m": "f64:7ff0000000000000", "tag": "compare/special"}
+{"id": "mx-003412", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:00000000000000000001", "m": "f64:fff8000000000000", "tag": "compare/special"}
+{"id": "mx-003416", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:00000000000000000001", "m": "f64:8000000000000000", "tag": "compare/special"}
+{"id": "mx-003443", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:43fefffffffffffff800", "m": "f64:3ff0000000000000", "tag": "arith/special"}
+{"id": "mx-003446", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:43ffc000000000000000", "m": "f64:7ff4000000000000", "tag": "compare/special"}
+{"id": "mx-003461", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:3c018000000000000000", "m": "f64:0000000000000001", "tag": "arith/special"}
+{"id": "mx-003475", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:3bf98000000000000000", "m": "f64:8000000000000000", "tag": "arith/special"}
+{"id": "mx-003482", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:407effffff0000000000", "m": "f64:7ff4000000000000", "tag": "compare/special"}
+{"id": "mx-003484", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:407effffff0000000000", "m": "f64:fff8000000000000", "tag": "compare/special"}
+{"id": "mx-003519", "kind": "x87", "op": "fsubr_m64", "cw": "037f", "a": "x80:403effffffffffffffff", "m": "f64:fff8000000000000", "tag": "arith/special"}
+{"id": "mx-003520", "kind": "x87", "op": "fcom_m64", "cw": "037f", "a": "x80:403effffffffffffffff", "m": "f64:fff8000000000000", "tag": "compare/special"}
+{"id": "mx-003532", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:bfc9fffaa46934c51000", "m": "f64:c175f6ddc54178b5", "tag": "compare/rand53"}
+{"id": "mx-003542", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3fe9a66da29c00295800", "m": "f64:c072bb4bbf030f08", "tag": "compare/rand53"}
+{"id": "mx-003561", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:4023bd0d8278db1bc000", "m": "f64:407ad4339d0dcc3c", "tag": "arith/mem-rand53"}
+{"id": "mx-003596", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:c020c0167c51f286a000", "m": "f64:c08cd74246796fba", "tag": "compare/rand53"}
+{"id": "mx-003608", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3ff0c6f7b963d14a9000", "m": "f64:c0336a44ff392e80", "tag": "compare/rand53"}
+{"id": "mx-003616", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:4015863ae9b803e48000", "m": "f64:4075d239dd7f4d88", "tag": "compare/rand53"}
+{"id": "mx-003626", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3fd7825ff0558ca52800", "m": "f64:c18b0f1e6a02d849", "tag": "compare/rand53"}
+{"id": "mx-003631", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:4037c9fb0fd56d892000", "m": "f64:418726099f006505", "tag": "arith/mem-rand53"}
+{"id": "mx-003634", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:bff0ed97d06c18e3c800", "m": "f64:418ffca9d98912d6", "tag": "compare/rand53"}
+{"id": "mx-003645", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:bfe0b9071a09f934f000", "m": "f64:4190ec07316d6810", "tag": "arith/mem-rand53"}
+{"id": "mx-003651", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:bfc8d940172e3c836000", "m": "f64:bf64593fb539896c", "tag": "arith/mem-rand53"}
+{"id": "mx-003652", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:bfc8d940172e3c836000", "m": "f64:bf64593fb539896c", "tag": "compare/rand53"}
+{"id": "mx-003654", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3fc3b8ca13adc4a20800", "m": "f64:4072af3d7151e048", "tag": "compare/rand53"}
+{"id": "mx-003671", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:bfc3e9fe60f8c698b000", "m": "f64:bf6beef8b7e5c1ce", "tag": "arith/mem-rand53"}
+{"id": "mx-003673", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:bfd1d1d6433ee67b4000", "m": "f64:c18899d8e7c9d22b", "tag": "arith/mem-rand53"}
+{"id": "mx-003695", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:3feecaf1fa4722d5c000", "m": "f64:4162e9205560bd86", "tag": "arith/mem-rand53"}
+{"id": "mx-003707", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:40129c7593f46de46000", "m": "f64:4163d2f96c320bcf", "tag": "arith/mem-rand53"}
+{"id": "mx-003710", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:bfe4d26e80f1fed47800", "m": "f64:418847fc003de713", "tag": "compare/rand53"}
+{"id": "mx-003723", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:bff7b395e42e35e2a800", "m": "f64:c088af56dfb4b990", "tag": "arith/mem-rand53"}
+{"id": "mx-003750", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3fcfc999b85b62cab800", "m": "f64:c086a8a2220870b8", "tag": "compare/rand53"}
+{"id": "mx-003765", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:c015a3745f81cdf1b800", "m": "f64:bf7d78bd7cdf64e4", "tag": "arith/mem-rand53"}
+{"id": "mx-003771", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:4035ece9287665045000", "m": "f64:c082d5babf6a061d", "tag": "arith/mem-rand53"}
+{"id": "mx-003783", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:401eb21cc57dc7238800", "m": "f64:c181634d0840b79a", "tag": "arith/mem-rand53"}
+{"id": "mx-003802", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3fd289c9687b2c4ec800", "m": "f64:c1888df066481816", "tag": "compare/rand53"}
+{"id": "mx-003854", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:4003c770480000000000", "m": "f64:4065fc068a14a1b8", "tag": "compare/game"}
+{"id": "mx-003873", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:bffec45c7b0000000000", "m": "f64:c08c862478773066", "tag": "arith/mem-game"}
+{"id": "mx-003881", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:3ffaed09580000000000", "m": "f64:40590d8ac3c1e8a0", "tag": "arith/mem-game"}
+{"id": "mx-003906", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:c005dc760b0000000000", "m": "f64:416100073b0fb051", "tag": "compare/game"}
+{"id": "mx-003917", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:c005e33b560000000000", "m": "f64:418f043070eabdd4", "tag": "arith/mem-game"}
+{"id": "mx-003940", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3ff0dd06cf0000000000", "m": "f64:bf7fa09d61e9f30b", "tag": "compare/game"}
+{"id": "mx-003941", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:3ffeeceaeb0000000000", "m": "f64:bf837b8bea3e1fa7", "tag": "arith/mem-game"}
+{"id": "mx-003956", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3ff0d386e40000000000", "m": "f64:c192dfac995eceeb", "tag": "compare/game"}
+{"id": "mx-003974", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3ffdd92d5a0000000000", "m": "f64:bf5134dc765095cb", "tag": "compare/game"}
+{"id": "mx-003994", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:4003fa6cc90000000000", "m": "f64:419753bc36325cd9", "tag": "compare/game"}
+{"id": "mx-004002", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:c006e33bb80000000000", "m": "f64:4069989857242a98", "tag": "compare/game"}
+{"id": "mx-004019", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:3ffec3b6ed0000000000", "m": "f64:417e16e5f8f79efc", "tag": "arith/mem-game"}
+{"id": "mx-004027", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:3ffbe330a20000000000", "m": "f64:bf5a4793cbbc86d8", "tag": "arith/mem-game"}
+{"id": "mx-004035", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:4003eb42120000000000", "m": "f64:c18c86593b24c324", "tag": "arith/mem-game"}
+{"id": "mx-004037", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:4008e1316d0000000000", "m": "f64:40781caba72ae554", "tag": "arith/mem-game"}
+{"id": "mx-004058", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3fefdcbfc50000000000", "m": "f64:bf67f607989041fa", "tag": "compare/game"}
+{"id": "mx-004078", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3fee9ae7090000000000", "m": "f64:408ad47776113ae0", "tag": "compare/game"}
+{"id": "mx-004088", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:4003c406610000000000", "m": "f64:4164f37b26e9b5db", "tag": "compare/game"}
+{"id": "mx-004089", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:4008b46e9a0000000000", "m": "f64:c08392777f05db76", "tag": "arith/mem-game"}
+{"id": "mx-004094", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3ffa9dd10c0000000000", "m": "f64:3f6de73443e56704", "tag": "compare/game"}
+{"id": "mx-004105", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:4003c6d2ee0000000000", "m": "f64:c18f346dc42e079a", "tag": "arith/mem-game"}
+{"id": "mx-004111", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:c006b476cd0000000000", "m": "f64:c082087b619459d2", "tag": "arith/mem-game"}
+{"id": "mx-004120", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3ffff3c6a50000000000", "m": "f64:415d268c79d8def7", "tag": "compare/game"}
+{"id": "mx-004121", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:4009fc143d0000000000", "m": "f64:bf725733144b9e55", "tag": "arith/mem-game"}
+{"id": "mx-004143", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:401e8d4dabd9a5ce493d", "m": "f64:c0882ac30688dcce", "tag": "arith/mem-rand64"}
+{"id": "mx-004172", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:c0079fba038217b3e747", "m": "f64:4075d016b304b7a8", "tag": "compare/rand64"}
+{"id": "mx-004174", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:bfc38190f08a522294af", "m": "f64:bf75b6928bc0e7d7", "tag": "compare/rand64"}
+{"id": "mx-004187", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:402de354fb4a77aa1c98", "m": "f64:c192e95333c30a4b", "tag": "arith/mem-rand64"}
+{"id": "mx-004189", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:4036c27322098e07814b", "m": "f64:4069f7fa01a54f48", "tag": "arith/mem-rand64"}
+{"id": "mx-004206", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:c016f993c13cd572a600", "m": "f64:c0830a9219727fe2", "tag": "compare/rand64"}
+{"id": "mx-004219", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:c015d84f5cea74b09f84", "m": "f64:4196305e30ab1691", "tag": "arith/mem-rand64"}
+{"id": "mx-004229", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:4019ca105600f961c50d", "m": "f64:3f704864d4256306", "tag": "arith/mem-rand64"}
+{"id": "mx-004244", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:4016e890dca3b0751580", "m": "f64:3f82153ab447c21e", "tag": "compare/rand64"}
+{"id": "mx-004248", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3fc8efdc9b9408f2772b", "m": "f64:41522419d96d2ee9", "tag": "compare/rand64"}
+{"id": "mx-004252", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3feaa79c95506abef775", "m": "f64:bf83a45bdc0e92f7", "tag": "compare/rand64"}
+{"id": "mx-004258", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3fc3d673b9b17aa523dc", "m": "f64:3f8092e927f326f0", "tag": "compare/rand64"}
+{"id": "mx-004284", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:c015defbf3192376c02c", "m": "f64:3f7c4f0a7f3890b2", "tag": "compare/rand64"}
+{"id": "mx-004299", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:3fecfd751e516354127c", "m": "f64:4187ced3b88484b1", "tag": "arith/mem-rand64"}
+{"id": "mx-004300", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3fecfd751e516354127c", "m": "f64:4187ced3b88484b1", "tag": "compare/rand64"}
+{"id": "mx-004307", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:c01cecae77168856b061", "m": "f64:407a67dd5e973f1c", "tag": "arith/mem-rand64"}
+{"id": "mx-004321", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:bff4c61e631157426127", "m": "f64:3f830887cbea4c1f", "tag": "arith/mem-rand64"}
+{"id": "mx-004325", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:4033fe8dfb39109d930f", "m": "f64:4087ff16476de6e2", "tag": "arith/mem-rand64"}
+{"id": "mx-004332", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3ff3f0dd2e598a396c8d", "m": "f64:418c149053ec6232", "tag": "compare/rand64"}
+{"id": "mx-004341", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:403484ce69b87c8397f0", "m": "f64:c147a5ed52c76287", "tag": "arith/mem-rand64"}
+{"id": "mx-004344", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:400386914907952359f5", "m": "f64:c06617112ce09aec", "tag": "compare/rand64"}
+{"id": "mx-004371", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:40239c0ac14366e9e9b1", "m": "f64:c19153af52ca0460", "tag": "arith/mem-rand64"}
+{"id": "mx-004377", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:bfe5d13db50460964fc5", "m": "f64:c0419832c4cd7d60", "tag": "arith/mem-rand64"}
+{"id": "mx-004426", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:c01bc021ca70bad0ee57", "m": "f64:416a0844b9df11c7", "tag": "compare/rand64"}
+{"id": "mx-004448", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:80000000000000000000", "m": "f64:8000000000000000", "tag": "compare/special"}
+{"id": "mx-004453", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:3fff8000000000000000", "m": "f64:7ff4000000000000", "tag": "arith/special"}
+{"id": "mx-004460", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3fff8000000000000000", "m": "f64:8000000000000000", "tag": "compare/special"}
+{"id": "mx-004475", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:bfff8000000000000000", "m": "f64:3ff0000000000000", "tag": "arith/special"}
+{"id": "mx-004477", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:3ffe8000000000000000", "m": "f64:7ff4000000000000", "tag": "arith/special"}
+{"id": "mx-004482", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3ffe8000000000000000", "m": "f64:0000000000000001", "tag": "compare/special"}
+{"id": "mx-004489", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:3fffc000000000000000", "m": "f64:7ff4000000000000", "tag": "arith/special"}
+{"id": "mx-004503", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:4000a000000000000000", "m": "f64:fff8000000000000", "tag": "arith/special"}
+{"id": "mx-004504", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:4000a000000000000000", "m": "f64:fff8000000000000", "tag": "compare/special"}
+{"id": "mx-004531", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:ffff8000000000000000", "m": "f64:8000000000000000", "tag": "arith/special"}
+{"id": "mx-004537", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:7fffc000000000000000", "m": "f64:7ff4000000000000", "tag": "arith/special"}
+{"id": "mx-004553", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:ffffc000000000000000", "m": "f64:0000000000000001", "tag": "arith/special"}
+{"id": "mx-004573", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:7fffc000000000001234", "m": "f64:7ff4000000000000", "tag": "arith/special"}
+{"id": "mx-004574", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:7fffc000000000001234", "m": "f64:7ff4000000000000", "tag": "compare/special"}
+{"id": "mx-004577", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:7fffc000000000001234", "m": "f64:0000000000000001", "tag": "arith/special"}
+{"id": "mx-004594", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:00000000000000000001", "m": "f64:7ff0000000000000", "tag": "compare/special"}
+{"id": "mx-004601", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:00018000000000000000", "m": "f64:0000000000000001", "tag": "arith/special"}
+{"id": "mx-004616", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:43fefffffffffffff800", "m": "f64:8000000000000000", "tag": "compare/special"}
+{"id": "mx-004657", "kind": "x87", "op": "fsubr_m64", "cw": "0e7f", "a": "x80:407effffff0000000000", "m": "f64:7ff4000000000000", "tag": "arith/special"}
+{"id": "mx-004672", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:3f6a8000000000000000", "m": "f64:fff8000000000000", "tag": "compare/special"}
+{"id": "mx-004694", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:403effffffffffffffff", "m": "f64:7ff4000000000000", "tag": "compare/special"}
+{"id": "mx-004700", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:403effffffffffffffff", "m": "f64:8000000000000000", "tag": "compare/special"}
+{"id": "mx-004702", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:403effffffffffffffff", "m": "f64:7ff0000000000000", "tag": "compare/special"}
+{"id": "mx-004704", "kind": "x87", "op": "fcom_m64", "cw": "0e7f", "a": "x80:403effffffffffffffff", "m": "f64:3ff0000000000000", "tag": "compare/special"}
+{"id": "mx-004712", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:bfc7da5c4d6435f1d000", "m": "f64:3f61e74581bcfaf7", "tag": "compare/rand53"}
+{"id": "mx-004714", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:4022ad9fbcada880b800", "m": "f64:4089a8a0a127609c", "tag": "compare/rand53"}
+{"id": "mx-004715", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:bfc3895a1ecf87bb6000", "m": "f64:bf7e93b8978b1fc3", "tag": "arith/mem-rand53"}
+{"id": "mx-004729", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:c008b5b3b89c06945000", "m": "f64:41850a8945b6655d", "tag": "arith/mem-rand53"}
+{"id": "mx-004746", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:bfdcab9229929db71000", "m": "f64:c0512a6777e3cc88", "tag": "compare/rand53"}
+{"id": "mx-004749", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:3fd1c685baa1a7122000", "m": "f64:c0796c8a1383a330", "tag": "arith/mem-rand53"}
+{"id": "mx-004755", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:400cb5d48e285d66c000", "m": "f64:c07ee4e6996a4b2d", "tag": "arith/mem-rand53"}
+{"id": "mx-004807", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:3fd8a50c9bd4d6718800", "m": "f64:c06700b50f37afd8", "tag": "arith/mem-rand53"}
+{"id": "mx-004813", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:3fc6ebd80910e32ab000", "m": "f64:c189e2f2bc925aa2", "tag": "arith/mem-rand53"}
+{"id": "mx-004817", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:bfcef8c26d2aca862000", "m": "f64:4089b34d60a1f668", "tag": "arith/mem-rand53"}
+{"id": "mx-004822", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:bff7889441c760754800", "m": "f64:c08d18aa469a49df", "tag": "compare/rand53"}
+{"id": "mx-004824", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:3fced84cc93dfcb87800", "m": "f64:3f81f96e3546abe0", "tag": "compare/rand53"}
+{"id": "mx-004826", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:c02ff638dca154cbc800", "m": "f64:c169e46cd45c8ca5", "tag": "compare/rand53"}
+{"id": "mx-004836", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:3fd995ee0831a3497000", "m": "f64:c1927340f158291a", "tag": "compare/rand53"}
+{"id": "mx-004879", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:4031f3962bf82ed21000", "m": "f64:c0807cea9ad17026", "tag": "arith/mem-rand53"}
+{"id": "mx-004891", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:c038ad73cced0ff14800", "m": "f64:41791ac3fa499700", "tag": "arith/mem-rand53"}
+{"id": "mx-004903", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:bfebcbb25706bc6af000", "m": "f64:bf83ef15cb0181dc", "tag": "arith/mem-rand53"}
+{"id": "mx-004911", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:c001e8136a76592a0800", "m": "f64:bf685c3396d0ba35", "tag": "arith/mem-rand53"}
+{"id": "mx-004924", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:3fc8bf262ca305129000", "m": "f64:417bba45b7358a0d", "tag": "compare/rand53"}
+{"id": "mx-004938", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:400e918c8c88bb3a7000", "m": "f64:408a7383bf2e911a", "tag": "compare/rand53"}
+{"id": "mx-004960", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:c02fad33c4135839a800", "m": "f64:41802d7e0d5bbc8f", "tag": "compare/rand53"}
+{"id": "mx-004979", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:3fffcc1d2f83b446d800", "m": "f64:415e561d0f74b2fb", "tag": "arith/mem-rand53"}
+{"id": "mx-004980", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:3fffcc1d2f83b446d800", "m": "f64:415e561d0f74b2fb", "tag": "compare/rand53"}
+{"id": "mx-005000", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:3fc8b25db0fc8f056800", "m": "f64:418549a5d3b674c3", "tag": "compare/rand53"}
+{"id": "mx-005014", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:400884b8650000000000", "m": "f64:419750ebd7f5248b", "tag": "compare/game"}
+{"id": "mx-005017", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:4001bfefe20000000000", "m": "f64:c16b7551badceed0", "tag": "arith/mem-game"}
+{"id": "mx-005018", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:4001bfefe20000000000", "m": "f64:c16b7551badceed0", "tag": "compare/game"}
+{"id": "mx-005026", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:3ff9acac2c0000000000", "m": "f64:c193b9888bbc2bb7", "tag": "compare/game"}
+{"id": "mx-005043", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:bff8d7060b0000000000", "m": "f64:403227ec3aa594a0", "tag": "arith/mem-game"}
+{"id": "mx-005045", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:4006b6d8e70000000000", "m": "f64:bf81f7c228e72752", "tag": "arith/mem-game"}
+{"id": "mx-005050", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:3ffb8180180000000000", "m": "f64:4052bdcff37b5f90", "tag": "compare/game"}
+{"id": "mx-005061", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:4001c84ac30000000000", "m": "f64:408b5fe981f2ead0", "tag": "arith/mem-game"}
+{"id": "mx-005062", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:4001c84ac30000000000", "m": "f64:408b5fe981f2ead0", "tag": "compare/game"}
+{"id": "mx-005063", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:4009e03a1e0000000000", "m": "f64:bf783662b63f13f3", "tag": "arith/mem-game"}
+{"id": "mx-005085", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:c001bd286c0000000000", "m": "f64:408eefd715155460", "tag": "arith/mem-game"}
+{"id": "mx-005097", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:400794e4f50000000000", "m": "f64:bf7d62e2ff9e5157", "tag": "arith/mem-game"}
+{"id": "mx-005118", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:bff9a1081b0000000000", "m": "f64:c0749d858b198504", "tag": "compare/game"}
+{"id": "mx-005145", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:4005d7ffa90000000000", "m": "f64:3f7b299f2efd8ed2", "tag": "arith/mem-game"}
+{"id": "mx-005160", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:3ffaa615330000000000", "m": "f64:4161d4585cd05746", "tag": "compare/game"}
+{"id": "mx-005162", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:4005b7538e0000000000", "m": "f64:bf7cc8f817fba555", "tag": "compare/game"}
+{"id": "mx-005175", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:c000e7912a0000000000", "m": "f64:bf8037ffb5071d67", "tag": "arith/mem-game"}
+{"id": "mx-005176", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:c000e7912a0000000000", "m": "f64:bf8037ffb5071d67", "tag": "compare/game"}
+{"id": "mx-005203", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:3ff88a7eac0000000000", "m": "f64:bf7df4a2bd8ba4d9", "tag": "arith/mem-game"}
+{"id": "mx-005208", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:c006964b1a0000000000", "m": "f64:bf5eedf8f4c09e8f", "tag": "compare/game"}
+{"id": "mx-005231", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:40048405bf0000000000", "m": "f64:c08e4f4fb7a21d27", "tag": "arith/mem-game"}
+{"id": "mx-005241", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:3ffc8b0f0b0000000000", "m": "f64:406d21e0c672adb0", "tag": "arith/mem-game"}
+{"id": "mx-005282", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:40048f97990000000000", "m": "f64:4074f20997fb33b0", "tag": "compare/game"}
+{"id": "mx-005298", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:40078249c10000000000", "m": "f64:c18deb3e034fd73b", "tag": "compare/game"}
+{"id": "mx-005307", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:40308a43a2271d1620f4", "m": "f64:419334caff64543a", "tag": "arith/mem-rand64"}
+{"id": "mx-005309", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:c008e4087e3087edee39", "m": "f64:4057702e6b68d460", "tag": "arith/mem-rand64"}
+{"id": "mx-005364", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:40369e9749b9c49a3fbd", "m": "f64:41950473dab8e217", "tag": "compare/rand64"}
+{"id": "mx-005373", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:4039b3daf04d14d99616", "m": "f64:c1754eb17fdca0db", "tag": "arith/mem-rand64"}
+{"id": "mx-005374", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:4039b3daf04d14d99616", "m": "f64:c1754eb17fdca0db", "tag": "compare/rand64"}
+{"id": "mx-005381", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:3fe7f9327932a56889af", "m": "f64:c1955942ce08da80", "tag": "arith/mem-rand64"}
+{"id": "mx-005382", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:3fe7f9327932a56889af", "m": "f64:c1955942ce08da80", "tag": "compare/rand64"}
+{"id": "mx-005383", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:bfc8e2416258f4c75656", "m": "f64:4193682c2b3b5b15", "tag": "arith/mem-rand64"}
+{"id": "mx-005392", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:401b836df5f4aae03ba5", "m": "f64:c05d82a50e067870", "tag": "compare/rand64"}
+{"id": "mx-005409", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:c022864a85bd345611b5", "m": "f64:bf566841439eddad", "tag": "arith/mem-rand64"}
+{"id": "mx-005411", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:402d9d880a3167f7906d", "m": "f64:40806cdc2594c35a", "tag": "arith/mem-rand64"}
+{"id": "mx-005450", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:403afe94e5ae8f22c477", "m": "f64:3f8399f909933ff1", "tag": "compare/rand64"}
+{"id": "mx-005454", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:3fc3f32a94c2451a9aa7", "m": "f64:bf7bfc4f3bfc6e05", "tag": "compare/rand64"}
+{"id": "mx-005474", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:c02bb1561c789814807e", "m": "f64:c058a2a1eec46840", "tag": "compare/rand64"}
+{"id": "mx-005477", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:bfc9f8c4aba3514934ce", "m": "f64:4086aa258b0ffddc", "tag": "arith/mem-rand64"}
+{"id": "mx-005482", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:c014ffc11b7f7e8e848b", "m": "f64:c077a7a6c2f46412", "tag": "compare/rand64"}
+{"id": "mx-005500", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:3ff4f4f0cdf62e8c7b49", "m": "f64:c082fa8cd53c374a", "tag": "compare/rand64"}
+{"id": "mx-005508", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:3fc7e6c33f9b804dc376", "m": "f64:3f71d2be544a8962", "tag": "compare/rand64"}
+{"id": "mx-005514", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:c005c0709f156c11bc43", "m": "f64:c18ab2d3a8956599", "tag": "compare/rand64"}
+{"id": "mx-005553", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:4025ce528897c4452741", "m": "f64:c19625c30a370856", "tag": "arith/mem-rand64"}
+{"id": "mx-005563", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:40388e8ae9442e42c763", "m": "f64:c17255526a682d28", "tag": "arith/mem-rand64"}
+{"id": "mx-005565", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:4038e99aa2045dce4a41", "m": "f64:3f6bcfb741cdb949", "tag": "arith/mem-rand64"}
+{"id": "mx-005574", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:400faf144e3dae317ee6", "m": "f64:c166bf30563df2d0", "tag": "compare/rand64"}
+{"id": "mx-005577", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:4012ce07911295eee1d9", "m": "f64:c08a89b14230e5ad", "tag": "arith/mem-rand64"}
+{"id": "mx-005605", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:00000000000000000000", "m": "f64:7ff4000000000000", "tag": "arith/special"}
+{"id": "mx-005609", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:00000000000000000000", "m": "f64:0000000000000001", "tag": "arith/special"}
+{"id": "mx-005634", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:3fff8000000000000000", "m": "f64:0000000000000001", "tag": "compare/special"}
+{"id": "mx-005636", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:3fff8000000000000000", "m": "f64:8000000000000000", "tag": "compare/special"}
+{"id": "mx-005655", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:3ffe8000000000000000", "m": "f64:fff8000000000000", "tag": "arith/special"}
+{"id": "mx-005659", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:3ffe8000000000000000", "m": "f64:8000000000000000", "tag": "arith/special"}
+{"id": "mx-005679", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:4000a000000000000000", "m": "f64:fff8000000000000", "tag": "arith/special"}
+{"id": "mx-005687", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:4000a000000000000000", "m": "f64:3ff0000000000000", "tag": "arith/special"}
+{"id": "mx-005713", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:7fffc000000000000000", "m": "f64:7ff4000000000000", "tag": "arith/special"}
+{"id": "mx-005723", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:7fffc000000000000000", "m": "f64:3ff0000000000000", "tag": "arith/special"}
+{"id": "mx-005744", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:7fffa000000000000000", "m": "f64:8000000000000000", "tag": "compare/special"}
+{"id": "mx-005747", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:7fffa000000000000000", "m": "f64:3ff0000000000000", "tag": "arith/special"}
+{"id": "mx-005748", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:7fffa000000000000000", "m": "f64:3ff0000000000000", "tag": "compare/special"}
+{"id": "mx-005756", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:7fffc000000000001234", "m": "f64:8000000000000000", "tag": "compare/special"}
+{"id": "mx-005764", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:00000000000000000001", "m": "f64:fff8000000000000", "tag": "compare/special"}
+{"id": "mx-005767", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:00000000000000000001", "m": "f64:8000000000000000", "tag": "arith/special"}
+{"id": "mx-005798", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:43ffc000000000000000", "m": "f64:7ff4000000000000", "tag": "compare/special"}
+{"id": "mx-005801", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:43ffc000000000000000", "m": "f64:0000000000000001", "tag": "arith/special"}
+{"id": "mx-005822", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:3bf98000000000000000", "m": "f64:7ff4000000000000", "tag": "compare/special"}
+{"id": "mx-005830", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:3bf98000000000000000", "m": "f64:7ff0000000000000", "tag": "compare/special"}
+{"id": "mx-005831", "kind": "x87", "op": "fsubr_m64", "cw": "067f", "a": "x80:3bf98000000000000000", "m": "f64:3ff0000000000000", "tag": "arith/special"}
+{"id": "mx-005836", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:407effffff0000000000", "m": "f64:fff8000000000000", "tag": "compare/special"}
+{"id": "mx-005856", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:3f6a8000000000000000", "m": "f64:3ff0000000000000", "tag": "compare/special"}
+{"id": "mx-005858", "kind": "x87", "op": "fcom_m64", "cw": "067f", "a": "x80:40348000000000000400", "m": "f64:7ff4000000000000", "tag": "compare/special"}
+{"id": "mx-005882", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:bfefd178aad186e80000", "m": "f64:bf6435feba2eb211", "tag": "compare/rand53"}
+{"id": "mx-005895", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:4002db170ad8bcc89800", "m": "f64:3f76a3516fba0025", "tag": "arith/mem-rand53"}
+{"id": "mx-005896", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:4002db170ad8bcc89800", "m": "f64:3f76a3516fba0025", "tag": "compare/rand53"}
+{"id": "mx-005932", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:3fe7dacb4104307b0800", "m": "f64:bf7500fdd303b7d5", "tag": "compare/rand53"}
+{"id": "mx-005940", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:bfdef4a3a5be167d9800", "m": "f64:c072e4172f36994e", "tag": "compare/rand53"}
+{"id": "mx-005948", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:3fd5b7d31141c2c13800", "m": "f64:40710b79ce9e9820", "tag": "compare/rand53"}
+{"id": "mx-005953", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:bfc59f03ac464a73d000", "m": "f64:c08e9d00cf3c76a8", "tag": "arith/mem-rand53"}
+{"id": "mx-005963", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:4012e22b919c07774800", "m": "f64:c0662f93470fbc98", "tag": "arith/mem-rand53"}
+{"id": "mx-005981", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:402ab42a709c95553000", "m": "f64:c064b5a4ffeecaf8", "tag": "arith/mem-rand53"}
+{"id": "mx-006014", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:bfcceee54160694d5800", "m": "f64:3f7a5a7ce11fe65a", "tag": "compare/rand53"}
+{"id": "mx-006053", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:bfffe7e21c9d1bb0a800", "m": "f64:3f54b071f2a7d034", "tag": "arith/mem-rand53"}
+{"id": "mx-006056", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:4027bbb3c41b60952800", "m": "f64:c07f4792c0452499", "tag": "compare/rand53"}
+{"id": "mx-006063", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:4036ad9bb92642c61000", "m": "f64:4186252b24ee10f6", "tag": "arith/mem-rand53"}
+{"id": "mx-006065", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:bfe7e05d5bc99aa47800", "m": "f64:3f57fced0f57b9b7", "tag": "arith/mem-rand53"}
+{"id": "mx-006083", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:4036a268e16d24320800", "m": "f64:c1945d99ed0da5b3", "tag": "arith/mem-rand53"}
+{"id": "mx-006090", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:40318a1253dd5c87b800", "m": "f64:3f5b8fbe50467f24", "tag": "compare/rand53"}
+{"id": "mx-006108", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:c02aa57b30fe9529c800", "m": "f64:c07b69868d2b078c", "tag": "compare/rand53"}
+{"id": "mx-006148", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:402cb9f9eaa531ba5800", "m": "f64:41914e23212beefa", "tag": "compare/rand53"}
+{"id": "mx-006154", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:4039f9e88c045eb48000", "m": "f64:3f7a44d829dad9b4", "tag": "compare/rand53"}
+{"id": "mx-006156", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:3fd6aa88073058a73800", "m": "f64:bf6828df0565127c", "tag": "compare/rand53"}
+{"id": "mx-006157", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:403ad0fc019e765a8000", "m": "f64:c1847dfee8108896", "tag": "arith/mem-rand53"}
+{"id": "mx-006159", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:40258c85a2d220c93000", "m": "f64:bf6fe7644363978b", "tag": "arith/mem-rand53"}
+{"id": "mx-006163", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:3fcefc60b9827e2a4000", "m": "f64:418984400c5bd263", "tag": "arith/mem-rand53"}
+{"id": "mx-006177", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:bfdfb3c8cdabf5dfb800", "m": "f64:bf53976f3e323dc5", "tag": "arith/mem-rand53"}
+{"id": "mx-006182", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:3ff0b27ee70000000000", "m": "f64:4171b7d011ea118f", "tag": "compare/game"}
+{"id": "mx-006188", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:bffdd253120000000000", "m": "f64:c06ab4c02e003488", "tag": "compare/game"}
+{"id": "mx-006189", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:4004c344700000000000", "m": "f64:c18736ad1741e702", "tag": "arith/mem-game"}
+{"id": "mx-006197", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:4008af52620000000000", "m": "f64:418184c4a3eadf2f", "tag": "arith/mem-game"}
+{"id": "mx-006226", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:4009ed3d2c0000000000", "m": "f64:40758da28383b9fc", "tag": "compare/game"}
+{"id": "mx-006227", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:bffe8754290000000000", "m": "f64:c169005c4b81af2d", "tag": "arith/mem-game"}
+{"id": "mx-006272", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:c006b6e6680000000000", "m": "f64:c18a326d9f3b3c44", "tag": "compare/game"}
+{"id": "mx-006284", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:400685eba60000000000", "m": "f64:418d3e7c00d556cb", "tag": "compare/game"}
+{"id": "mx-006289", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:3ff0c3ecd50000000000", "m": "f64:3f28d0ca4ee195d5", "tag": "arith/mem-game"}
+{"id": "mx-006292", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:4009ad4e6e0000000000", "m": "f64:3f70431d97d2f51b", "tag": "compare/game"}
+{"id": "mx-006307", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:40078253060000000000", "m": "f64:bf7926987750ede7", "tag": "arith/mem-game"}
+{"id": "mx-006322", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:400996ce800000000000", "m": "f64:40587777aadd7de0", "tag": "compare/game"}
+{"id": "mx-006324", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:4006f125590000000000", "m": "f64:c15974b55728e4cd", "tag": "compare/game"}
+{"id": "mx-006349", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:bffcf881c00000000000", "m": "f64:c06fba2c52b096d0", "tag": "arith/mem-game"}
+{"id": "mx-006353", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:c00183bda80000000000", "m": "f64:bf752a91969580f7", "tag": "arith/mem-game"}
+{"id": "mx-006390", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:c0018f22820000000000", "m": "f64:bf26b7acdece71df", "tag": "compare/game"}
+{"id": "mx-006406", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:4006d430240000000000", "m": "f64:c0846ee98c5818e2", "tag": "compare/game"}
+{"id": "mx-006416", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:4002f4a79a0000000000", "m": "f64:c085df700f441cb4", "tag": "compare/game"}
+{"id": "mx-006417", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:4003d37b230000000000", "m": "f64:41627dfd5ed2200a", "tag": "arith/mem-game"}
+{"id": "mx-006421", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:3ff09806030000000000", "m": "f64:c0007c43231bbf00", "tag": "arith/mem-game"}
+{"id": "mx-006423", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:bffee8ce2b0000000000", "m": "f64:bf57b96e7b732355", "tag": "arith/mem-game"}
+{"id": "mx-006439", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:4002c42dd40000000000", "m": "f64:c0589a2bf072b9c0", "tag": "arith/mem-game"}
+{"id": "mx-006477", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:c006f9ab690000000000", "m": "f64:4183bfd5dbdeacbd", "tag": "arith/mem-game"}
+{"id": "mx-006478", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:c006f9ab690000000000", "m": "f64:4183bfd5dbdeacbd", "tag": "compare/game"}
+{"id": "mx-006481", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:403183f490a7f6209682", "m": "f64:c175488ffd58a74a", "tag": "arith/mem-rand64"}
+{"id": "mx-006499", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:bfc4c7e2badede35d8bc", "m": "f64:bf80d80880515720", "tag": "arith/mem-rand64"}
+{"id": "mx-006500", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:bfc4c7e2badede35d8bc", "m": "f64:bf80d80880515720", "tag": "compare/rand64"}
+{"id": "mx-006511", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:c0069d40fb69dc394ec1", "m": "f64:c196d4fd9831719e", "tag": "arith/mem-rand64"}
+{"id": "mx-006546", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:3fc3916c92a9363a7944", "m": "f64:419708a04108945f", "tag": "compare/rand64"}
+{"id": "mx-006552", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:c001f641740165178b98", "m": "f64:bf661922a6713bbe", "tag": "compare/rand64"}
+{"id": "mx-006554", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:3fefb6c00b638ae57536", "m": "f64:c0719e28a6099f8a", "tag": "compare/rand64"}
+{"id": "mx-006559", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:3fcbe4fe58030a501690", "m": "f64:3f6b1b7faf9827b1", "tag": "arith/mem-rand64"}
+{"id": "mx-006575", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:3fc9a9f33440d7044cc2", "m": "f64:415e9126617a1a24", "tag": "arith/mem-rand64"}
+{"id": "mx-006582", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:c0299ef7240f18a384e9", "m": "f64:4088df79deb861fe", "tag": "compare/rand64"}
+{"id": "mx-006597", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:3fc5aa0af931eef2474c", "m": "f64:c17581e945e06854", "tag": "arith/mem-rand64"}
+{"id": "mx-006604", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:bfe7a22a26d891ebcef5", "m": "f64:407abcf5319ca120", "tag": "compare/rand64"}
+{"id": "mx-006607", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:4001dcd7b3150fb87b50", "m": "f64:c15ea4129df57495", "tag": "arith/mem-rand64"}
+{"id": "mx-006617", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:c009d05aa3d16529e5fe", "m": "f64:419146d4fcad1105", "tag": "arith/mem-rand64"}
+{"id": "mx-006620", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:bff6d268315bc9d4bcab", "m": "f64:4180c96cb11cd257", "tag": "compare/rand64"}
+{"id": "mx-006628", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:c012b61ad340ffb00d6e", "m": "f64:41596f578dfdb1cf", "tag": "compare/rand64"}
+{"id": "mx-006632", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:c03be77d590290fa568d", "m": "f64:4077763f2ba23ff0", "tag": "compare/rand64"}
+{"id": "mx-006637", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:bfe79c8b77fa0795a741", "m": "f64:4169a87948c957d7", "tag": "arith/mem-rand64"}
+{"id": "mx-006642", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:3ff485ed64b159b024a4", "m": "f64:419189314ce20c0b", "tag": "compare/rand64"}
+{"id": "mx-006662", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:401acf433f9124ce480a", "m": "f64:4070f503328334f8", "tag": "compare/rand64"}
+{"id": "mx-006677", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:3fec9e2a3636c11e1318", "m": "f64:408bbb88580f6dd8", "tag": "arith/mem-rand64"}
+{"id": "mx-006685", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:c02a87ba6950a7b3167a", "m": "f64:3f128f8114bc2a46", "tag": "arith/mem-rand64"}
+{"id": "mx-006741", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:3fddde6102a64cdcfdb2", "m": "f64:4196ab473d441769", "tag": "arith/mem-rand64"}
+{"id": "mx-006748", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:3ffcf0b496f6b712f3d1", "m": "f64:3f8372c704297ac1", "tag": "compare/rand64"}
+{"id": "mx-006783", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:00000000000000000000", "m": "f64:fff8000000000000", "tag": "arith/special"}
+{"id": "mx-006795", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:80000000000000000000", "m": "f64:fff8000000000000", "tag": "arith/special"}
+{"id": "mx-006796", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:80000000000000000000", "m": "f64:fff8000000000000", "tag": "compare/special"}
+{"id": "mx-006812", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:3fff8000000000000000", "m": "f64:8000000000000000", "tag": "compare/special"}
+{"id": "mx-006825", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:bfff8000000000000000", "m": "f64:7ff0000000000000", "tag": "arith/special"}
+{"id": "mx-006832", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:3ffe8000000000000000", "m": "f64:fff8000000000000", "tag": "compare/special"}
+{"id": "mx-006845", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:3fffc000000000000000", "m": "f64:0000000000000001", "tag": "arith/special"}
+{"id": "mx-006862", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:4000a000000000000000", "m": "f64:7ff0000000000000", "tag": "compare/special"}
+{"id": "mx-006874", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:7fff8000000000000000", "m": "f64:7ff0000000000000", "tag": "compare/special"}
+{"id": "mx-006925", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:7fffc000000000001234", "m": "f64:7ff4000000000000", "tag": "arith/special"}
+{"id": "mx-006928", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:7fffc000000000001234", "m": "f64:fff8000000000000", "tag": "compare/special"}
+{"id": "mx-006937", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:00000000000000000001", "m": "f64:7ff4000000000000", "tag": "arith/special"}
+{"id": "mx-006963", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:43fefffffffffffff800", "m": "f64:fff8000000000000", "tag": "arith/special"}
+{"id": "mx-006966", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:43fefffffffffffff800", "m": "f64:0000000000000001", "tag": "compare/special"}
+{"id": "mx-006967", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:43fefffffffffffff800", "m": "f64:8000000000000000", "tag": "arith/special"}
+{"id": "mx-006980", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:43ffc000000000000000", "m": "f64:8000000000000000", "tag": "compare/special"}
+{"id": "mx-006987", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:3c018000000000000000", "m": "f64:fff8000000000000", "tag": "arith/special"}
+{"id": "mx-006996", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:3c018000000000000000", "m": "f64:3ff0000000000000", "tag": "compare/special"}
+{"id": "mx-007004", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:3bf98000000000000000", "m": "f64:8000000000000000", "tag": "compare/special"}
+{"id": "mx-007011", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:407effffff0000000000", "m": "f64:fff8000000000000", "tag": "arith/special"}
+{"id": "mx-007022", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:3f6a8000000000000000", "m": "f64:7ff4000000000000", "tag": "compare/special"}
+{"id": "mx-007025", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:3f6a8000000000000000", "m": "f64:0000000000000001", "tag": "arith/special"}
+{"id": "mx-007047", "kind": "x87", "op": "fsubr_m64", "cw": "0a7f", "a": "x80:403effffffffffffffff", "m": "f64:fff8000000000000", "tag": "arith/special"}
+{"id": "mx-007050", "kind": "x87", "op": "fcom_m64", "cw": "0a7f", "a": "x80:403effffffffffffffff", "m": "f64:0000000000000001", "tag": "compare/special"}
+{"id": "mx-007063", "kind": "x87", "op": "fild_m16", "cw": "0e7f", "m": "i16:a12e", "tag": "conv/i16"}
+{"id": "mx-007073", "kind": "x87", "op": "fild_m16", "cw": "0e7f", "m": "i16:419c", "tag": "conv/i16"}
+{"id": "mx-007079", "kind": "x87", "op": "fild_m16", "cw": "027f", "m": "i16:3e14", "tag": "conv/i16"}
+{"id": "mx-007100", "kind": "x87", "op": "fild_m32", "cw": "007f", "m": "i32:984214ae", "tag": "conv/i32"}
+{"id": "mx-007113", "kind": "x87", "op": "fild_m16", "cw": "037f", "m": "i16:8da7", "tag": "conv/i16"}
+{"id": "mx-007123", "kind": "x87", "op": "fild_m16", "cw": "007f", "m": "i16:44bd", "tag": "conv/i16"}
+{"id": "mx-007127", "kind": "x87", "op": "fild_m16", "cw": "067f", "m": "i16:8fb5", "tag": "conv/i16"}
+{"id": "mx-007128", "kind": "x87", "op": "fild_m32", "cw": "067f", "m": "i32:6160a514", "tag": "conv/i32"}
+{"id": "mx-007129", "kind": "x87", "op": "fild_m16", "cw": "0a7f", "m": "i16:eca9", "tag": "conv/i16"}
+{"id": "mx-007136", "kind": "x87", "op": "fild_m32", "cw": "0a7f", "m": "i32:13f7c8e1", "tag": "conv/i32"}
+{"id": "mx-007145", "kind": "x87", "op": "fild_m16", "cw": "067f", "m": "i16:5ef9", "tag": "conv/i16"}
+{"id": "mx-007149", "kind": "x87", "op": "fild_m16", "cw": "0e7f", "m": "i16:50ac", "tag": "conv/i16"}
+{"id": "mx-007165", "kind": "x87", "op": "fild_m16", "cw": "007f", "m": "i16:656f", "tag": "conv/i16"}
+{"id": "mx-007170", "kind": "x87", "op": "fild_m32", "cw": "0a7f", "m": "i32:f3048f02", "tag": "conv/i32"}
+{"id": "mx-007172", "kind": "x87", "op": "fild_m32", "cw": "007f", "m": "i32:cb6840b3", "tag": "conv/i32"}
+{"id": "mx-007199", "kind": "x87", "op": "fild_m16", "cw": "037f", "m": "i16:3bfa", "tag": "conv/i16"}
+{"id": "mx-007204", "kind": "x87", "op": "fild_m32", "cw": "067f", "m": "i32:5d131644", "tag": "conv/i32"}
+{"id": "mx-007214", "kind": "x87", "op": "fild_m32", "cw": "0e7f", "m": "i32:e2599680", "tag": "conv/i32"}
+{"id": "mx-007218", "kind": "x87", "op": "fild_m32", "cw": "007f", "m": "i32:ae3d9b23", "tag": "conv/i32"}
+{"id": "mx-007219", "kind": "x87", "op": "fild_m16", "cw": "0e7f", "m": "i16:cdc1", "tag": "conv/i16"}
+{"id": "mx-007242", "kind": "x87", "op": "fild_m32", "cw": "027f", "m": "i32:6d5b8089", "tag": "conv/i32"}
+{"id": "mx-007243", "kind": "x87", "op": "fild_m16", "cw": "007f", "m": "i16:4b0b", "tag": "conv/i16"}
+{"id": "mx-007249", "kind": "x87", "op": "fild_m16", "cw": "037f", "m": "i16:272b", "tag": "conv/i16"}
+{"id": "mx-007276", "kind": "x87", "op": "fild_m32", "cw": "067f", "m": "i32:d8e2a9ae", "tag": "conv/i32"}
+{"id": "mx-007283", "kind": "x87", "op": "fild_m16", "cw": "067f", "m": "i16:38ed", "tag": "conv/i16"}
+{"id": "mx-007287", "kind": "x87", "op": "fild_m16", "cw": "037f", "m": "i16:06c5", "tag": "conv/i16"}
+{"id": "mx-007293", "kind": "x87", "op": "fild_m16", "cw": "007f", "m": "i16:d19e", "tag": "conv/i16"}
+{"id": "mx-007314", "kind": "x87", "op": "fild_m32", "cw": "0a7f", "m": "i32:b2615dfd", "tag": "conv/i32"}
+{"id": "mx-007325", "kind": "x87", "op": "fild_m16", "cw": "037f", "m": "i16:b4f3", "tag": "conv/i16"}
+{"id": "mx-007340", "kind": "x87", "op": "fild_m32", "cw": "027f", "m": "i32:f5551965", "tag": "conv/i32"}
+{"id": "mx-007344", "kind": "x87", "op": "fild_m32", "cw": "027f", "m": "i32:186fcb75", "tag": "conv/i32"}
+{"id": "mx-007349", "kind": "x87", "op": "fild_m16", "cw": "007f", "m": "i16:9257", "tag": "conv/i16"}
+{"id": "mx-007351", "kind": "x87", "op": "fild_m16", "cw": "037f", "m": "i16:7589", "tag": "conv/i16"}
+{"id": "mx-007378", "kind": "x87", "op": "fild_m32", "cw": "067f", "m": "i32:9a233396", "tag": "conv/i32"}
+{"id": "mx-007379", "kind": "x87", "op": "fild_m16", "cw": "067f", "m": "i16:9543", "tag": "conv/i16"}
+{"id": "mx-007382", "kind": "x87", "op": "fild_m32", "cw": "067f", "m": "i32:397028c5", "tag": "conv/i32"}
+{"id": "mx-007391", "kind": "x87", "op": "fild_m16", "cw": "067f", "m": "i16:77b9", "tag": "conv/i16"}
+{"id": "mx-007397", "kind": "x87", "op": "fild_m16", "cw": "037f", "m": "i16:4cef", "tag": "conv/i16"}
+{"id": "mx-007401", "kind": "x87", "op": "fild_m16", "cw": "067f", "m": "i16:b9b8", "tag": "conv/i16"}
+{"id": "mx-007411", "kind": "x87", "op": "fild_m16", "cw": "0a7f", "m": "i16:2630", "tag": "conv/i16"}
+{"id": "mx-007415", "kind": "x87", "op": "fild_m16", "cw": "027f", "m": "i16:68c6", "tag": "conv/i16"}
+{"id": "mx-007416", "kind": "x87", "op": "fild_m32", "cw": "007f", "m": "i32:deabb4ea", "tag": "conv/i32"}
+{"id": "mx-007417", "kind": "x87", "op": "fild_m16", "cw": "0e7f", "m": "i16:bff4", "tag": "conv/i16"}
+{"id": "mx-007429", "kind": "x87", "op": "fild_m16", "cw": "067f", "m": "i16:9e59", "tag": "conv/i16"}
+{"id": "mx-007436", "kind": "x87", "op": "fild_m32", "cw": "037f", "m": "i32:6fdc4f9a", "tag": "conv/i32"}
+{"id": "mx-007443", "kind": "x87", "op": "fild_m16", "cw": "0a7f", "m": "i16:bc6b", "tag": "conv/i16"}
+{"id": "mx-007448", "kind": "x87", "op": "fild_m32", "cw": "027f", "m": "i32:88b97073", "tag": "conv/i32"}
+{"id": "mx-007456", "kind": "x87", "op": "fild_m32", "cw": "0e7f", "m": "i32:973abee3", "tag": "conv/i32"}
+{"id": "mx-007484", "kind": "x87", "op": "fild_m32", "cw": "007f", "m": "i32:e19f0248", "tag": "conv/i32"}
+{"id": "mx-007514", "kind": "x87", "op": "fild_m32", "cw": "027f", "m": "i32:8b4272c6", "tag": "conv/i32"}
+{"id": "mx-007523", "kind": "x87", "op": "fild_m16", "cw": "0e7f", "m": "i16:ec09", "tag": "conv/i16"}
+{"id": "mx-007527", "kind": "x87", "op": "fild_m16", "cw": "067f", "m": "i16:ba25", "tag": "conv/i16"}
+{"id": "mx-007532", "kind": "x87", "op": "fild_m32", "cw": "007f", "m": "i32:93768b4b", "tag": "conv/i32"}
+{"id": "mx-007535", "kind": "x87", "op": "fild_m16", "cw": "0a7f", "m": "i16:05ec", "tag": "conv/i16"}
+{"id": "mx-007536", "kind": "x87", "op": "fild_m32", "cw": "007f", "m": "i32:6504d60c", "tag": "conv/i32"}
+{"id": "mx-007542", "kind": "x87", "op": "fild_m32", "cw": "0a7f", "m": "i32:351b71a6", "tag": "conv/i32"}
+{"id": "mx-007549", "kind": "x87", "op": "fild_m16", "cw": "037f", "m": "i16:126e", "tag": "conv/i16"}
+{"id": "mx-007558", "kind": "x87", "op": "fild_m32", "cw": "027f", "m": "i32:c21eca97", "tag": "conv/i32"}
+{"id": "mx-007562", "kind": "x87", "op": "fild_m32", "cw": "067f", "m": "i32:47881fcf", "tag": "conv/i32"}
+{"id": "mx-007600", "kind": "x87", "op": "fild_m32", "cw": "0a7f", "m": "i32:28fe3fdf", "tag": "conv/i32"}
+{"id": "mx-007620", "kind": "x87", "op": "fild_m32", "cw": "0a7f", "m": "i32:47516401", "tag": "conv/i32"}
+{"id": "mx-007621", "kind": "x87", "op": "fild_m16", "cw": "0a7f", "m": "i16:41c8", "tag": "conv/i16"}
+{"id": "mx-007626", "kind": "x87", "op": "fild_m32", "cw": "037f", "m": "i32:5b3fa76b", "tag": "conv/i32"}
+{"id": "mx-007640", "kind": "x87", "op": "fild_m32", "cw": "0a7f", "m": "i32:7bbdd1fa", "tag": "conv/i32"}
+{"id": "mx-007644", "kind": "x87", "op": "fild_m32", "cw": "0e7f", "m": "i32:826e0188", "tag": "conv/i32"}
+{"id": "mx-007647", "kind": "x87", "op": "fild_m16", "cw": "0a7f", "m": "i16:1ea8", "tag": "conv/i16"}
+{"id": "mx-007665", "kind": "x87", "op": "fild_m16", "cw": "027f", "m": "i16:94f6", "tag": "conv/i16"}
+{"id": "mx-007669", "kind": "x87", "op": "fild_m16", "cw": "0a7f", "m": "i16:57cf", "tag": "conv/i16"}
+{"id": "mx-007673", "kind": "x87", "op": "fild_m16", "cw": "037f", "m": "i16:c3c4", "tag": "conv/i16"}
+{"id": "mx-007684", "kind": "x87", "op": "fild_m32", "cw": "0e7f", "m": "i32:78a8d4b1", "tag": "conv/i32"}
+{"id": "mx-007689", "kind": "x87", "op": "fild_m16", "cw": "007f", "m": "i16:0022", "tag": "conv/i16"}
+{"id": "mx-007702", "kind": "x87", "op": "fild_m32", "cw": "0a7f", "m": "i32:fe220d9f", "tag": "conv/i32"}
+{"id": "mx-007706", "kind": "x87", "op": "fild_m32", "cw": "027f", "m": "i32:cdd938d2", "tag": "conv/i32"}
+{"id": "mx-007719", "kind": "x87", "op": "fild_m16", "cw": "0a7f", "m": "i16:6414", "tag": "conv/i16"}
+{"id": "mx-007720", "kind": "x87", "op": "fild_m32", "cw": "037f", "m": "i32:4d833c1d", "tag": "conv/i32"}
+{"id": "mx-007728", "kind": "x87", "op": "fild_m32", "cw": "0a7f", "m": "i32:f217fa2e", "tag": "conv/i32"}
+{"id": "mx-007741", "kind": "x87", "op": "fild_m16", "cw": "027f", "m": "i16:1acf", "tag": "conv/i16"}
+{"id": "mx-007745", "kind": "x87", "op": "fild_m16", "cw": "007f", "m": "i16:8f5e", "tag": "conv/i16"}
+{"id": "mx-007776", "kind": "x87", "op": "fild_m32", "cw": "0e7f", "m": "i32:803de6aa", "tag": "conv/i32"}
+{"id": "mx-007777", "kind": "x87", "op": "fild_m16", "cw": "027f", "m": "i16:6f1e", "tag": "conv/i16"}
+{"id": "mx-007779", "kind": "x87", "op": "fild_m16", "cw": "007f", "m": "i16:7612", "tag": "conv/i16"}
+{"id": "mx-007792", "kind": "x87", "op": "fild_m32", "cw": "007f", "m": "i32:4ac38c8d", "tag": "conv/i32"}
+{"id": "mx-007793", "kind": "x87", "op": "fild_m16", "cw": "007f", "m": "i16:d9b3", "tag": "conv/i16"}
+{"id": "mx-007794", "kind": "x87", "op": "fild_m32", "cw": "037f", "m": "i32:7320c1ec", "tag": "conv/i32"}
+{"id": "mx-007795", "kind": "x87", "op": "fild_m16", "cw": "0e7f", "m": "i16:62f4", "tag": "conv/i16"}
+{"id": "mx-007796", "kind": "x87", "op": "fild_m32", "cw": "0e7f", "m": "i32:8f4bff43", "tag": "conv/i32"}
+{"id": "mx-007802", "kind": "x87", "op": "fild_m32", "cw": "067f", "m": "i32:82ee9396", "tag": "conv/i32"}
+{"id": "mx-007828", "kind": "x87", "op": "fild_m32", "cw": "0e7f", "m": "i32:03a2c73c", "tag": "conv/i32"}
+{"id": "mx-007832", "kind": "x87", "op": "fild_m32", "cw": "067f", "m": "i32:6bdd63ba", "tag": "conv/i32"}
+{"id": "mx-007834", "kind": "x87", "op": "fild_m32", "cw": "007f", "m": "i32:9ee428b5", "tag": "conv/i32"}
+{"id": "mx-007836", "kind": "x87", "op": "fild_m32", "cw": "0e7f", "m": "i32:c873b677", "tag": "conv/i32"}
+{"id": "mx-007842", "kind": "x87", "op": "fild_m32", "cw": "037f", "m": "i32:34ab0ae4", "tag": "conv/i32"}
+{"id": "mx-007847", "kind": "x87", "op": "fild_m16", "cw": "027f", "m": "i16:e1e9", "tag": "conv/i16"}
+{"id": "mx-007848", "kind": "x87", "op": "fild_m32", "cw": "037f", "m": "i32:caaa564e", "tag": "conv/i32"}
+{"id": "mx-007850", "kind": "x87", "op": "fild_m32", "cw": "0e7f", "m": "i32:cb187e90", "tag": "conv/i32"}
+{"id": "mx-007858", "kind": "x87", "op": "fild_m32", "cw": "027f", "m": "i32:99aa005e", "tag": "conv/i32"}
+{"id": "mx-007874", "kind": "x87", "op": "fild_m32", "cw": "0e7f", "m": "i32:b8183cf6", "tag": "conv/i32"}
+{"id": "mx-007875", "kind": "x87", "op": "fild_m16", "cw": "0a7f", "m": "i16:d58c", "tag": "conv/i16"}
+{"id": "mx-007888", "kind": "x87", "op": "fild_m32", "cw": "027f", "m": "i32:2fc09027", "tag": "conv/i32"}
+{"id": "mx-007890", "kind": "x87", "op": "fild_m32", "cw": "037f", "m": "i32:75894468", "tag": "conv/i32"}
+{"id": "mx-007902", "kind": "x87", "op": "fild_m32", "cw": "0a7f", "m": "i32:44a53f29", "tag": "conv/i32"}
+{"id": "mx-007915", "kind": "x87", "op": "fild_m16", "cw": "0e7f", "m": "i16:83ff", "tag": "conv/i16"}
+{"id": "mx-007917", "kind": "x87", "op": "fild_m16", "cw": "027f", "m": "i16:a9ee", "tag": "conv/i16"}
+{"id": "mx-007928", "kind": "x87", "op": "fild_m32", "cw": "037f", "m": "i32:11c61c12", "tag": "conv/i32"}
+{"id": "mx-007935", "kind": "x87", "op": "fild_m16", "cw": "0e7f", "m": "i16:dbf9", "tag": "conv/i16"}
+{"id": "mx-007946", "kind": "x87", "op": "fild_m32", "cw": "0e7f", "m": "i32:cc4dbe37", "tag": "conv/i32"}
+{"id": "mx-007948", "kind": "x87", "op": "fild_m32", "cw": "007f", "m": "i32:fb9a1430", "tag": "conv/i32"}
+{"id": "mx-007975", "kind": "x87", "op": "fild_m16", "cw": "067f", "m": "i16:a8be", "tag": "conv/i16"}
+{"id": "mx-007988", "kind": "x87", "op": "fild_m32", "cw": "0a7f", "m": "i32:40764e06", "tag": "conv/i32"}
+{"id": "mx-007993", "kind": "x87", "op": "fild_m16", "cw": "0a7f", "m": "i16:bf78", "tag": "conv/i16"}
+{"id": "mx-008002", "kind": "x87", "op": "fild_m32", "cw": "037f", "m": "i32:304640ff", "tag": "conv/i32"}
+{"id": "mx-008007", "kind": "x87", "op": "fild_m16", "cw": "027f", "m": "i16:980f", "tag": "conv/i16"}
+{"id": "mx-008013", "kind": "x87", "op": "fild_m16", "cw": "0a7f", "m": "i16:6f21", "tag": "conv/i16"}
+{"id": "mx-008024", "kind": "x87", "op": "fild_m32", "cw": "037f", "m": "i32:a0f26cbc", "tag": "conv/i32"}
+{"id": "mx-008035", "kind": "x87", "op": "fild_m16", "cw": "027f", "m": "i16:3df3", "tag": "conv/i16"}
+{"id": "mx-008048", "kind": "x87", "op": "fild_m32", "cw": "0a7f", "m": "i32:8ba5655b", "tag": "conv/i32"}
+{"id": "mx-008056", "kind": "x87", "op": "fild_m32", "cw": "007f", "m": "i32:1be9dd5b", "tag": "conv/i32"}
+{"id": "mx-008073", "kind": "x87", "op": "fild_m16", "cw": "037f", "m": "i16:c4ed", "tag": "conv/i16"}
+{"id": "mx-008077", "kind": "x87", "op": "fild_m16", "cw": "037f", "m": "i16:127d", "tag": "conv/i16"}
+{"id": "mx-008080", "kind": "x87", "op": "fild_m32", "cw": "0e7f", "m": "i32:26d1dd27", "tag": "conv/i32"}
+{"id": "mx-008094", "kind": "x87", "op": "fild_m32", "cw": "027f", "m": "i32:5e6e422b", "tag": "conv/i32"}
+{"id": "mx-008101", "kind": "x87", "op": "fild_m16", "cw": "0e7f", "m": "i16:04c9", "tag": "conv/i16"}
+{"id": "mx-008106", "kind": "x87", "op": "fild_m32", "cw": "067f", "m": "i32:0f2803ab", "tag": "conv/i32"}
+{"id": "mx-008109", "kind": "x87", "op": "fild_m16", "cw": "067f", "m": "i16:8b8a", "tag": "conv/i16"}
+{"id": "mx-008118", "kind": "x87", "op": "fild_m32", "cw": "067f", "m": "i32:3dda3599", "tag": "conv/i32"}
+{"id": "mx-008123", "kind": "x87", "op": "fild_m16", "cw": "0e7f", "m": "i16:2576", "tag": "conv/i16"}
+{"id": "mx-008127", "kind": "x87", "op": "fild_m16", "cw": "007f", "m": "i16:508d", "tag": "conv/i16"}
+{"id": "mx-008151", "kind": "x87", "op": "fild_m16", "cw": "027f", "m": "i16:1bef", "tag": "conv/i16"}
+{"id": "mx-008155", "kind": "x87", "op": "fild_m16", "cw": "007f", "m": "i16:4bfc", "tag": "conv/i16"}
+{"id": "mx-008159", "kind": "x87", "op": "fild_m16", "cw": "0e7f", "m": "i16:a9d9", "tag": "conv/i16"}
+{"id": "mx-008165", "kind": "x87", "op": "fild_m16", "cw": "007f", "m": "i16:08c2", "tag": "conv/i16"}
+{"id": "mx-008169", "kind": "x87", "op": "fild_m16", "cw": "067f", "m": "i16:bad9", "tag": "conv/i16"}
+{"id": "mx-008174", "kind": "x87", "op": "fild_m32", "cw": "037f", "m": "i32:127b36e4", "tag": "conv/i32"}
+{"id": "mx-008175", "kind": "x87", "op": "fild_m16", "cw": "027f", "m": "i16:050c", "tag": "conv/i16"}
+{"id": "mx-008190", "kind": "x87", "op": "fild_m32", "cw": "067f", "m": "i32:0b797a23", "tag": "conv/i32"}
+{"id": "mx-008202", "kind": "x87", "op": "fild_m32", "cw": "067f", "m": "i32:aa45b9dd", "tag": "conv/i32"}
+{"id": "mx-008206", "kind": "x87", "op": "fild_m32", "cw": "007f", "m": "i32:728d83db", "tag": "conv/i32"}
+{"id": "mx-008225", "kind": "x87", "op": "fild_m16", "cw": "037f", "m": "i16:53ea", "tag": "conv/i16"}
+{"id": "mx-008232", "kind": "x87", "op": "fild_m32", "cw": "037f", "m": "i32:23ea3ee8", "tag": "conv/i32"}
+{"id": "mx-008239", "kind": "x87", "op": "fild_m16", "cw": "0a7f", "m": "i16:5e48", "tag": "conv/i16"}
+{"id": "mx-008242", "kind": "x87", "op": "fild_m32", "cw": "027f", "m": "i32:7ecdf103", "tag": "conv/i32"}
+{"id": "mx-008244", "kind": "x87", "op": "fild_m32", "cw": "027f", "m": "i32:b3f0830a", "tag": "conv/i32"}
+{"id": "mx-008249", "kind": "x87", "op": "fild_m16", "cw": "067f", "m": "i16:297c", "tag": "conv/i16"}
+{"id": "mx-008258", "kind": "x87", "op": "fild_m16", "cw": "027f", "m": "i16:7fff", "tag": "conv/i16"}

@@ -38,8 +38,7 @@ def test_every_non_transcendental_vector_equals_hardware(report):
 
 
 #: Operations x87_conformance.py can run that no hardware recording has
-#: covered yet. Against the SDM model that matches the recordings everywhere
-#: else, 8,264 vectors of these four agree bit for bit.
+#: covered yet. The edge vectors below cover them against the reference model.
 NOT_RECORDED = {"fsubr_m64", "fcom_m64", "fild_m16", "fild_m32"}
 
 
@@ -52,3 +51,21 @@ def test_every_operation_and_control_word_is_covered(report):
     cws = {cw for _, cw, _ in report["groups"]}
     assert ops == set(X.OPS) - NOT_RECORDED, (set(X.OPS) - NOT_RECORDED) ^ ops
     assert cws == {"027f", "007f", "037f", "0e7f", "067f", "0a7f"}
+
+
+def test_edge_vectors_equal_the_reference_model(tmp_path):
+    """The fast path's own edges, which the recorded classes do not reach: a
+    product that a double rounds up to DBL_MIN from below, PC=24 sums whose
+    double result is exactly a 24-bit midpoint, quotients beside DBL_MIN; and
+    the four NOT_RECORDED forms. Their reference is the SDM model that equals
+    the hardware on every recorded vector (data/x87/README.md), until a
+    hardware recording replaces it."""
+    if shutil.which("clang") is None:
+        pytest.skip("clang is not on PATH")
+    if platform.system() == "Windows":
+        pytest.skip("the conformance library builds as a POSIX shared library")
+    rep, text = X.check(os.path.join(X.DATA, "insn-edge.jsonl"),
+                        os.path.join(X.DATA, "insn-edge-model.jsonl"), work=str(tmp_path))
+    t = rep["totals"]
+    assert t["n"] > 1000 and t["diff"] == 0, "\n".join(str(e) for e in rep["examples"][:10])
+    assert NOT_RECORDED <= {op for op, _, _ in rep["groups"]}
