@@ -897,6 +897,59 @@ static void test_bad_cast(X86 *c) {
 }
 
 // ---------------------------------------------------------------------------
+// 11. A hardware fault: an access to guest memory nothing maps faults on the
+// guarded arena, and the guest's own __except takes it as the access
+// violation Windows would raise - read or write, at that address.
+// ---------------------------------------------------------------------------
+static uint32_t f11, f11_scope, f11_filter, f11_except, f11_saved_esp, f11_write;
+static uint32_t f11_code, f11_kind, f11_address;
+static volatile uint32_t f11_sink;
+static constexpr uint32_t UNMAPPED = 0xf0001234u;
+static void f11_fn(X86 *c) {
+    SEH_PROLOGUE(f11_scope, 0x10);
+    f11_saved_esp = c->r[R_ESP];
+    wr32(ebp(c, -4), 0);
+    if (f11_write)
+        wr32(UNMAPPED, 7); // MOV [UNMAPPED],7
+    else
+        f11_sink = rd32(UNMAPPED); // MOV EAX,[UNMAPPED]
+    CHECK(false);
+}
+static void f11_filter_fn(X86 *c) {
+    uint32_t record = rd32(rd32(ebp(c, -0x14)));
+    f11_code = rd32(record);
+    f11_kind = rd32(record + 20);
+    f11_address = rd32(record + 24);
+    c->r[R_EAX] = 1;
+    ret(c);
+}
+static void f11_except_fn(X86 *c) {
+    c->r[R_ESP] = rd32(ebp(c, -0x18));
+    ev("fault-taken");
+    CHECK(c->r[R_ESP] == f11_saved_esp);
+    wr32(ebp(c, -4), 0xffffffffu);
+    epilogue(c, f11_saved_esp + 12, 0, true, -0x10);
+}
+static void test_hardware_fault(X86 *c) {
+    if (!mem_guarded()) {
+        printf("eh_tests: no guarded arena on this host; the fault case is skipped\n");
+        return;
+    }
+    for (uint32_t write = 0; write < 2; ++write) {
+        events.clear();
+        f11_write = write;
+        f11_code = f11_kind = f11_address = 0;
+        uint32_t esp = c->r[R_ESP];
+        guest_call(c, f11);
+        CHECK(events_are({"fault-taken"}));
+        CHECK(f11_code == 0xc0000005u && f11_address == UNMAPPED);
+        CHECK(f11_kind == write);
+        CHECK(c->r[R_ESP] == esp && rd32(c->fs_base) == 0xffffffffu);
+        CHECK(recomp_seh_test_frame_count(c) == 0 && recomp_seh_dispatch_depth() == 0);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Fatal paths, each in a child process.
 // ---------------------------------------------------------------------------
 static uint32_t throwing_dtor, terminate_handler;
@@ -941,6 +994,8 @@ static int fatal_case(X86 *c, const char *which) {
         push(c, 1);
         push(c, buf);
         call(c, longjmp_import);
+    } else if (!strcmp(which, "fault-unhandled")) {
+        f11_sink = rd32(UNMAPPED); // no handler: the report, and exit code 5
     } else if (!strcmp(which, "setjmp-import")) {
         push(c, 0);
         push(c, galloc(64));
@@ -1074,6 +1129,11 @@ static void setup() {
         stub_for(func_info({{-1, 0}, {-1, 0}}, {{0, 0, 1, {{8, td_exception, -0x14, f10_catch}}}}));
     (void)td_bad_cast;
 
+    f11 = def(f11_fn);
+    f11_filter = def(f11_filter_fn);
+    f11_except = def(f11_except_fn);
+    f11_scope = scope_table({{0xffffffffu, f11_filter, f11_except}});
+
     throwing_dtor = def(throwing_dtor_fn);
     terminate_handler = def(terminate_handler_fn);
 }
@@ -1082,7 +1142,9 @@ int main(int argc, char **argv) {
     mem_init();
     imports_init();
     setup();
-    X86 c;
+    // The loader's context: the one a fault handler finds as the current
+    // guest thread's (guest_current_context).
+    X86 &c = *loader_context();
     loader_init_context(&c);
     if (argc > 1)
         return fatal_case(&c, argv[1]);
@@ -1096,6 +1158,7 @@ int main(int argc, char **argv) {
     test_seh(&c);
     test_longjmp(&c);
     test_bad_cast(&c);
+    test_hardware_fault(&c);
     test_basic(&c); // the state left behind serves the next exception as well
     char exe[4096];
     CHECK(os_exe_path(exe, sizeof exe) == 0);
@@ -1103,7 +1166,8 @@ int main(int argc, char **argv) {
         const char *which;
         int code;
     } fatal[] = {{"unhandled", 3},       {"terminate-handler", 7}, {"dtor-throws", 3},
-                 {"no-checkpoint", 134}, {"longjmp-unset", 134},   {"setjmp-import", 134}};
+                 {"no-checkpoint", 134}, {"longjmp-unset", 134},   {"setjmp-import", 134},
+                 {"fault-unhandled", 5}};
     for (auto &f : fatal) {
         const char *args[] = {exe, f.which, nullptr};
         int64_t pid = 0;

@@ -549,6 +549,15 @@ int os_install_fault_address_hook(OsFaultAddressFn fn) {
     SetUnhandledExceptionFilter(fault_filter);
     return 1;
 }
+// Not here yet: the filter ends the process for every fault the hook claims.
+int os_fault_continue_in(void (*fn)(uintptr_t), uintptr_t arg) {
+    (void)fn;
+    (void)arg;
+    return 0;
+}
+int os_fault_was_write(void) {
+    return -1;
+}
 void os_write_stderr_raw(const char *s, size_t n) {
     DWORD written = 0;
     WriteFile(GetStdHandle(STD_ERROR_HANDLE), s, (DWORD)n, &written, nullptr);

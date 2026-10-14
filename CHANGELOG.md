@@ -13,9 +13,11 @@
   `setjmp` at `_setjmp3` call sites; the translation report's `msvc_eh`
   section counts them and lists any that is missing. A caught exception
   resumes the establishing function without deepening the host stack. A
-  failed `dynamic_cast` to a reference throws `bad_cast`, and an integer
-  divide error is raised as `EXCEPTION_INT_DIVIDE_BY_ZERO` for the guest's
-  handlers.
+  failed `dynamic_cast` to a reference throws `bad_cast`, an integer divide
+  error is raised as `EXCEPTION_INT_DIVIDE_BY_ZERO`, and on the guarded arena
+  (macOS and Linux) an access to unmapped guest memory is raised as the
+  `EXCEPTION_ACCESS_VIOLATION` Windows would, read or write, for the guest's
+  handlers; with none, the run ends with the report it always had.
 
 - Make the x87 exact. A register is a double while its value is one and an
   80-bit extended otherwise; arithmetic at 53-bit precision and

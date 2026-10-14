@@ -305,17 +305,10 @@ const char *arena_region(uint64_t guest) {
     return "outside the guest arena ([game] guest_size)";
 }
 
-// An access fault inside the reservation is the guest's - generated code or a
-// shim following a guest pointer - and is reported as such: the guest address,
-// what is (not) there and the guest registers, instead of a host SIGSEGV with
-// a host address. Faults anywhere else belong to somebody else and pass on.
-// Not strictly signal safe (formatting, the backtrace); the process ends here
-// either way, and that is worth a report a debugger is not needed to read.
-int arena_fault(const char *what, uintptr_t address) {
-    const uintptr_t base = (uintptr_t)g_mem;
-    if (!g_mem || !g_guarded || address < base || address - base >= g_reserved)
-        return 0;
-    const uint64_t guest = address - base;
+// What a fault the guest takes no handler for prints: the guest address, what
+// is (not) there and the guest registers, instead of a host SIGSEGV with a
+// host address. Raw writes only: it runs inside the fault handler as well.
+void report_arena_fault(const char *what, uint64_t guest) {
     char line[320];
     int n = snprintf(line, sizeof line,
                      "\n[recomp] guest memory fault (%s): access to guest %08llx, %s\n", what,
@@ -332,6 +325,48 @@ int arena_fault(const char *what, uintptr_t address) {
     }
     n = snprintf(line, sizeof line, "[recomp]   in translated routine %s\n", watch_writer());
     os_write_stderr_raw(line, (size_t)n);
+}
+
+// Out of the fault handler, on the faulting thread's own stack (see
+// arena_fault): the access violation Windows would raise, for the guest's own
+// handlers - an __except, or catch(...) as MSVC 6 compiled it. One that takes
+// it resumes elsewhere and never comes back; with none, the run ends with the
+// report it always had. `packed` is the guest address, and bit 32 a write.
+void arena_fault_raise(uintptr_t packed) {
+    const uint32_t guest = (uint32_t)packed;
+    X86 *c = guest_current_context();
+    if (c && c->r[R_ESP] >= GUEST_NULL_LIMIT + 16 && c->r[R_ESP] - 16 + 8 <= GUEST_SIZE) {
+        // EXCEPTION_ACCESS_VIOLATION's parameters below the guest stack
+        // pointer, where the dispatcher copies them from before any handler.
+        const uint32_t info = c->r[R_ESP] - 16;
+        wr32(info, (uint32_t)(((uint64_t)packed >> 32) & 1));
+        wr32(info + 4, guest);
+        recomp_seh_raise_at(c, 0xc0000005u, 0, 2, info, c->eip);
+    }
+    report_arena_fault("SIGSEGV, no guest handler took the access violation", guest);
+    os_exit_immediately(5);
+}
+
+// An access fault inside the reservation is the guest's - generated code or a
+// shim following a guest pointer - and is reported as such. A guest thread
+// with exception handlers first gets the access violation Windows would give
+// it: the thread is moved on to arena_fault_raise, outside this handler. Not
+// strictly signal safe (formatting, the backtrace); the process ends here
+// otherwise, and that is worth a report a debugger is not needed to read.
+int arena_fault(const char *what, uintptr_t address) {
+    const uintptr_t base = (uintptr_t)g_mem;
+    if (!g_mem || !g_guarded || address < base || address - base >= g_reserved)
+        return 0;
+    const uint64_t guest = address - base;
+    // Not for an address past 4 GB (no guest pointer names it), and not when
+    // the faults are recursing: a handler that faults in turn gets a fresh
+    // dispatch each time, so a bounded number of them is the loop's limit.
+    if (guest < 0x100000000ull && guest_current_context() && recomp_seh_dispatch_depth() < 16) {
+        const uint64_t write = os_fault_was_write() == 1 ? 1 : 0;
+        if (os_fault_continue_in(arena_fault_raise, (uintptr_t)(guest | (write << 32))))
+            return 1;
+    }
+    report_arena_fault(what, guest);
     os_exit_immediately(5);
     return 1;
 }

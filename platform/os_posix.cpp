@@ -18,6 +18,7 @@
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/time.h>
+#include <sys/ucontext.h>
 #include <time.h>
 #include <unistd.h>
 #ifdef __APPLE__
@@ -350,10 +351,88 @@ static void fault_trampoline(int sig) {
 // unless something else (a debugger aid, a page tracker) was there first.
 static struct sigaction g_previous_segv, g_previous_bus;
 static bool g_access_handler_installed = false;
+// The fault the address hook is looking at, and where it asked the thread to
+// go next. Thread-local: each thread faults on its own.
+static thread_local ucontext_t *t_fault_context = nullptr;
+static thread_local void (*t_continue_fn)(uintptr_t) = nullptr;
+static thread_local uintptr_t t_continue_arg = 0;
+
+int os_fault_continue_in(void (*fn)(uintptr_t), uintptr_t arg) {
+#if (defined(__APPLE__) || defined(__linux__)) && (defined(__aarch64__) || defined(__x86_64__))
+    if (!t_fault_context || !fn)
+        return 0;
+    t_continue_fn = fn;
+    t_continue_arg = arg;
+    return 1;
+#else
+    (void)fn;
+    (void)arg;
+    return 0;
+#endif
+}
+
+int os_fault_was_write(void) {
+    ucontext_t *uc = t_fault_context;
+    if (!uc)
+        return -1;
+#if defined(__APPLE__) && defined(__aarch64__)
+    return (uc->uc_mcontext->__es.__esr >> 6) & 1; // ESR_ELx.WnR of the data abort
+#elif defined(__APPLE__) && defined(__x86_64__)
+    return (uc->uc_mcontext->__es.__err >> 1) & 1; // page-fault error code, W/R
+#elif defined(__linux__) && defined(__x86_64__)
+    return (int)((uc->uc_mcontext.gregs[REG_ERR] >> 1) & 1);
+#else
+    return -1;
+#endif
+}
+
+// The interrupted thread resumes in fn(arg) when the handler returns: its
+// program counter, first argument register and a stack that looks like the
+// faulting instruction called fn (x86-64: the red zone skipped, a return
+// slot pushed; arm64: no return address, fn never returns).
+static void continue_faulted_thread(ucontext_t *uc, void (*fn)(uintptr_t), uintptr_t arg) {
+#if defined(__APPLE__) && defined(__aarch64__)
+    uc->uc_mcontext->__ss.__x[0] = arg;
+    __darwin_arm_thread_state64_set_lr_fptr(uc->uc_mcontext->__ss, (void *)nullptr);
+    __darwin_arm_thread_state64_set_pc_fptr(uc->uc_mcontext->__ss, (void *)fn);
+#elif defined(__APPLE__) && defined(__x86_64__)
+    uint64_t sp = ((uc->uc_mcontext->__ss.__rsp - 128) & ~(uint64_t)15) - 8;
+    *(uint64_t *)sp = 0;
+    uc->uc_mcontext->__ss.__rsp = sp;
+    uc->uc_mcontext->__ss.__rdi = arg;
+    uc->uc_mcontext->__ss.__rip = (uint64_t)fn;
+#elif defined(__linux__) && defined(__aarch64__)
+    uc->uc_mcontext.regs[0] = arg;
+    uc->uc_mcontext.regs[30] = 0;
+    uc->uc_mcontext.pc = (uint64_t)fn;
+#elif defined(__linux__) && defined(__x86_64__)
+    uint64_t sp = (((uint64_t)uc->uc_mcontext.gregs[REG_RSP] - 128) & ~(uint64_t)15) - 8;
+    *(uint64_t *)sp = 0;
+    uc->uc_mcontext.gregs[REG_RSP] = (greg_t)sp;
+    uc->uc_mcontext.gregs[REG_RDI] = (greg_t)arg;
+    uc->uc_mcontext.gregs[REG_RIP] = (greg_t)fn;
+#else
+    (void)uc;
+    (void)fn;
+    (void)arg;
+#endif
+}
+
 static void access_fault(int sig, siginfo_t *info, void *ctx) {
     const char *what = sig == SIGSEGV ? "SIGSEGV" : "SIGBUS";
-    if (g_fault_address_fn && g_fault_address_fn(what, (uintptr_t)(info ? info->si_addr : 0)))
-        return;
+    if (g_fault_address_fn) {
+        t_fault_context = (ucontext_t *)ctx;
+        t_continue_fn = nullptr;
+        int mine = g_fault_address_fn(what, (uintptr_t)(info ? info->si_addr : 0));
+        void (*fn)(uintptr_t) = t_continue_fn;
+        t_fault_context = nullptr;
+        t_continue_fn = nullptr;
+        if (mine) {
+            if (fn)
+                continue_faulted_thread((ucontext_t *)ctx, fn, t_continue_arg);
+            return;
+        }
+    }
     if (g_fault_fn) {
         g_fault_fn(what);
         return;

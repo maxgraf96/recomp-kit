@@ -143,11 +143,20 @@ int os_install_fault_handlers(OsFaultFn fn);
 // An access fault, offered first to a hook that knows the faulting address.
 // The hook returns nonzero when the fault was its own: it has reported it and
 // must then end the process (os_exit_immediately), because returning would
-// retry the access. Zero passes the fault on to the os_install_fault_handlers
+// retry the access - unless it moved the thread on (os_fault_continue_in). Zero passes the fault on to the os_install_fault_handlers
 // report, or to whatever handled the signal before. One hook; installing
 // another replaces it. Returns 1 when installed, 0 where unsupported.
 typedef int (*OsFaultAddressFn)(const char *what, uintptr_t address);
 int os_install_fault_address_hook(OsFaultAddressFn fn);
+// Only from inside that hook: instead of ending the process, continue the
+// faulting thread in fn(arg) once the fault handler returns - on the thread's
+// own stack and outside the handler, as if the faulting instruction had
+// called fn. fn must not return. The hook then returns nonzero. Returns 1
+// when arranged, 0 where the platform cannot (the hook must end the process).
+int os_fault_continue_in(void (*fn)(uintptr_t), uintptr_t arg);
+// Only from inside that hook: 1 when the faulting access was a write, 0 a
+// read, -1 when the platform does not say.
+int os_fault_was_write(void);
 // For use inside a fault handler: a raw write to the error stream and an
 // immediate process exit, neither of which touches stdio or runs destructors.
 void os_write_stderr_raw(const char *s, size_t n);

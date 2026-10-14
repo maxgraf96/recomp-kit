@@ -428,7 +428,11 @@ because MSVC unlinks with ESP still below its registration). A catch or
 Windows does, then `recomp_seh_resume` longjmps to the checkpoint first and
 the establishing activation runs the continuation as a tail call: the host
 stack after a caught exception is no deeper than before it. Integer divide
-errors are now raised as guest exceptions too. Debugger integration,
+errors are now raised as guest exceptions too, and so are access faults on
+the guarded arena: the fault handler moves the thread on
+(`os_fault_continue_in`) to `arena_fault_raise`, which raises
+`EXCEPTION_ACCESS_VIOLATION` outside the signal handler, on the faulting
+thread's own stack (POSIX hosts; Windows hosts still end the run). Debugger integration,
 vectored handlers and a complete Windows exception subsystem are also outside
 this task. No game progress log, changelog, assets or parent-repository
 submodule update is committed by this task; the orchestrator records
