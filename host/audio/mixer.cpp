@@ -122,6 +122,9 @@ double g_render_rate = 48000.0;      // render mutex, and read by the clock
 std::unique_ptr<AudioSink> g_sink;
 HostAudioMusicRender g_music = nullptr;
 void *g_music_context = nullptr;
+// A shim's own synthesizer (host_synth_attach), summed after the MIDI music.
+HostSynthRender g_synth = nullptr;
+void *g_synth_context = nullptr;
 
 float lanczos3(float x) {
     if (x == 0.0f)
@@ -208,6 +211,8 @@ void render_block(float *left, float *right, uint32_t frames) {
         }
         if (g_music)
             g_music(g_music_context, left, right, frames);
+        if (g_synth)
+            g_synth(g_synth_context, left, right, frames, g_render_rate);
     }
     // The clipper: the identity below full scale, flat above it, which is the
     // map the original's 16-bit sum performs. Nothing rides the gain.
@@ -1286,6 +1291,33 @@ extern "C" void host_audio_set_music_source(HostAudioMusicRender render, void *c
     std::lock_guard<std::mutex> renderlock(g_render_mutex);
     g_music = render;
     g_music_context = context;
+}
+
+// A shim's synthesizer (DirectMusic): one more source in the same mix, which
+// needs the output running to be heard even when nothing else plays.
+extern "C" void host_synth_attach(HostSynthRender render, void *context) {
+    {
+        std::lock_guard<std::mutex> renderlock(g_render_mutex);
+        g_synth = render;
+        g_synth_context = context;
+    }
+    if (!render)
+        return;
+    std::lock_guard<std::mutex> api(g_api_mutex);
+    {
+        DataLock held;
+        if (!ensure_engine())
+            return;
+    }
+    ensure_running();
+}
+
+extern "C" double host_synth_rate(void) {
+    std::lock_guard<std::mutex> api(g_api_mutex);
+    DataLock held;
+    if (!ensure_engine() || g_ops)
+        return 0.0;
+    return g_render_rate;
 }
 
 // How many channels have something playing on them. Takes the data lock only,

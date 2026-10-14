@@ -286,6 +286,25 @@ uint32_t host_audio_position(int32_t channel);
 int32_t host_audio_is_playing(int32_t channel);
 
 // ---------------------------------------------------------------------------
+// Synthesised music. A shim that makes its own audio rather than handing the
+// host PCM - DirectMusic's synthesizer - attaches one render function. The
+// host calls it on its audio thread for every block it mixes, after the
+// voices and before its clipper, and the function ADDS `frames` of stereo
+// float audio at `rate` into `left`/`right`. It runs with the host's mixing
+// lock held, so it must neither call back into the host nor wait on anything
+// a guest thread holds while calling the host. Attaching starts the output;
+// null detaches.
+//
+// host_synth_rate is the rate the host mixes at, which is what a synthesizer
+// should run at, or 0 when there is no audio output: then nothing is ever
+// rendered and a synthesizer keeps no time.
+// ---------------------------------------------------------------------------
+typedef void (*HostSynthRender)(void *context, float *left, float *right, uint32_t frames,
+                                double rate);
+void host_synth_attach(HostSynthRender render, void *context);
+double host_synth_rate(void);
+
+// ---------------------------------------------------------------------------
 // Input. Filled by the host from the real mouse and keyboard.
 // `keys` is indexed by DirectInput scan code (DIK_*); 0x80 means down.
 // The mouse deltas are consumed: the host resets them once read.

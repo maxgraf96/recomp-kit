@@ -2459,6 +2459,49 @@ static void test_midi_soundfont() {
     CHECK_EQ(host_audio_lock_violations(), 0u);
 }
 
+// A shim's synthesizer (host_synth_attach): the mixer calls it for every
+// block at its own rate, after the voices and before the clipper, and stops
+// the moment it is detached. Offline, so nothing is heard.
+namespace {
+struct SynthProbe {
+    uint64_t frames = 0;
+    double rate = 0.0;
+    uint32_t calls = 0;
+};
+void synth_probe_render(void *context, float *left, float *right, uint32_t frames, double rate) {
+    SynthProbe *p = (SynthProbe *)context;
+    ++p->calls;
+    p->frames += frames;
+    p->rate = rate;
+    for (uint32_t i = 0; i < frames; ++i) {
+        left[i] += 0.25f; // a DC level the peak can see
+        right[i] += 0.5f;
+    }
+}
+} // namespace
+
+static void test_synth_slot() {
+    if (!host_audio_offline_begin(48000.0, 4096)) {
+        printf("  (this machine has no audio engine, so the synth slot is not tested)\n");
+        return;
+    }
+    CHECK(host_synth_rate() == 48000.0);
+    SynthProbe probe;
+    host_synth_attach(synth_probe_render, &probe);
+    float peak = 0.0f;
+    CHECK_EQ(host_audio_offline_render(4800, &peak), 4800u);
+    CHECK_EQ(probe.frames, 4800u);
+    CHECK(probe.rate == 48000.0);
+    CHECK(peak > 0.49f && peak < 0.51f); // summed in, not scaled or clipped
+    host_synth_attach(nullptr, nullptr);
+    const uint32_t calls = probe.calls;
+    CHECK_EQ(host_audio_offline_render(4800, &peak), 4800u);
+    CHECK_EQ(probe.calls, calls); // detached is not called
+    CHECK(peak == 0.0f);
+    host_audio_offline_end();
+    CHECK_EQ(host_audio_lock_violations(), 0u);
+}
+
 // ===========================================================================
 // d3d_render.mm
 // ===========================================================================
@@ -9958,6 +10001,7 @@ int main(int argc, char **argv) {
         {"negative player time", test_audio_negative_player_time},
         {"FMV ring", test_audio_fmv_ring},
         {"MIDI SoundFont", test_midi_soundfont},
+        {"Synthesizer slot", test_synth_slot},
         {"capture metrics", test_audio_capture_metrics},
         {"format change", test_audio_format_change},
         {"clipper", test_audio_clipper_takes_only_the_overshoot},

@@ -89,6 +89,10 @@ HOST_DEFAULT uint32_t host_audio_position(int32_t) {
 HOST_DEFAULT int32_t host_audio_is_playing(int32_t) {
     return 0;
 }
+HOST_DEFAULT void host_synth_attach(HostSynthRender, void *) {}
+HOST_DEFAULT double host_synth_rate(void) {
+    return 0.0;
+}
 
 // No host means no input: every key up, the pointer at the origin. The guest
 // then simply sees nothing happening, which is what a headless run wants.
