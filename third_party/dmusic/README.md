@@ -57,6 +57,7 @@ git format-patch --relative=third_party/dmusic <commit>^!   # one upstream-ready
 | Select an instrument by bank MSB, LSB and drum flag | A band patch is `drum<<31 \| MSB<<16 \| LSB<<8 \| program`; upstream passed the LSB as the bank and ignored the drum flag, so most GM/GS instruments and every drum kit played the collection's first preset. A missing GS variation plays its capital tone (MSB 0), as GS synthesizers do. |
 | Master groove level (`DmPerformance_setMasterGroove`) | DirectMusic's `GUID_PerfMasterGrooveLevel`, added to every command's groove level: how a game sets the intensity of style-based music. Without it a segment whose command track says groove 1 only ever plays its groove-1 patterns. |
 | Segment repeats setter (`DmSegment_setRepeats`) | `IDirectMusicSegment::SetRepeats`: a game sets how often a segment loops, whatever its file says. |
+| Read the playing state under the lock | `playSegment` computed its boundary and `playTransition` composed from the playing style, band and chord without the performance lock, racing the render thread that changes them; a transition from a segment without a style dereferenced a null style. |
 
 To move to a newer upstream commit, replace the files listed under *What is
 here*, re-apply the patches that upstream has not taken, and run

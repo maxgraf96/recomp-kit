@@ -113,6 +113,20 @@ static uint32_t Dm_getBoundaryOffset(DmPerformance* slf, DmTiming timing) {
 	return slf->time + delay;
 }
 
+// Queues `sgt` (NULL stops) to start at the next `timing` boundary. The performance lock is held: the
+// boundary depends on the time and the time signature, which the render thread changes.
+static DmResult DmPerformance_queueSegmentLocked(DmPerformance* slf, DmSegment* sgt, DmTiming timing) {
+	uint32_t offset = Dm_getBoundaryOffset(slf, timing);
+
+	DmMessage msg;
+	msg.time = 0;
+	msg.type = DmMessage_SEGMENT;
+	msg.segment.segment = sgt == NULL ? NULL : DmSegment_retain(sgt);
+	msg.segment.loop = 0;
+
+	return DmMessageQueue_add(&slf->control_queue, &msg, offset, DmQueueConflict_REPLACE);
+}
+
 DmResult DmPerformance_playSegment(DmPerformance* slf, DmSegment* sgt, DmTiming timing) {
 	if (slf == NULL) {
 		return DmResult_INVALID_ARGUMENT;
@@ -123,22 +137,14 @@ DmResult DmPerformance_playSegment(DmPerformance* slf, DmSegment* sgt, DmTiming 
 		return DmResult_INVALID_ARGUMENT;
 	}
 
-	uint32_t offset = Dm_getBoundaryOffset(slf, timing);
-
-	DmMessage msg;
-	msg.time = 0;
-	msg.type = DmMessage_SEGMENT;
-	msg.segment.segment = DmSegment_retain(sgt);
-	msg.segment.loop = 0;
-
 	if (mtx_lock(&slf->lock) != thrd_success) {
 		return DmResult_MUTEX_ERROR;
 	}
 
-	DmMessageQueue_add(&slf->control_queue, &msg, offset, DmQueueConflict_REPLACE);
+	DmResult rv = DmPerformance_queueSegmentLocked(slf, sgt, timing);
 
 	(void) mtx_unlock(&slf->lock);
-	return DmResult_SUCCESS;
+	return rv;
 }
 
 static uint8_t bit_count(uint32_t v) {
@@ -973,29 +979,33 @@ DmPerformance_playTransition(DmPerformance* slf, DmSegment* sgt, DmEmbellishment
 		return DmResult_INVALID_ARGUMENT;
 	}
 
-	// If no segment is currently playing, simply start playing the
-	// new segment without a transition.
-	if (slf->segment == NULL) {
-		return DmPerformance_playSegment(slf, sgt, timing);
+	if (!sgt->downloaded) {
+		Dm_report(DmLogLevel_ERROR, "DmPerformance: You must download the segment before playing it");
+		return DmResult_INVALID_ARGUMENT;
 	}
 
-	if (!sgt->downloaded) {
-		return DmResult_INVALID_ARGUMENT;
+	// The transition is composed from what is playing, which the render thread changes: hold the lock.
+	if (mtx_lock(&slf->lock) != thrd_success) {
+		return DmResult_MUTEX_ERROR;
+	}
+
+	// If no segment is currently playing, or it has no style to take a transition from, simply start playing
+	// the new segment without a transition.
+	if (slf->segment == NULL || slf->style == NULL) {
+		DmResult rv = DmPerformance_queueSegmentLocked(slf, sgt, timing);
+		(void) mtx_unlock(&slf->lock);
+		return rv;
 	}
 
 	DmSegment* transition = NULL;
 	DmResult rv = Dm_composeTransition(slf->style, slf->band, &slf->chord, sgt, embellishment, &transition);
-	if (rv != DmResult_SUCCESS) {
-		return rv;
+	if (rv == DmResult_SUCCESS) {
+		rv = DmPerformance_queueSegmentLocked(slf, transition, timing);
 	}
 
-	rv = DmPerformance_playSegment(slf, transition, timing);
-	if (rv != DmResult_SUCCESS) {
-		return rv;
-	}
-
+	(void) mtx_unlock(&slf->lock);
 	DmSegment_release(transition);
-	return DmResult_SUCCESS;
+	return rv;
 }
 
 void DmPerformance_setVolume(DmPerformance* slf, float vol) {
