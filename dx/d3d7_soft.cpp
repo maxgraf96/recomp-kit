@@ -8,9 +8,10 @@
 // equations rather than the GPU renderer's code.
 //
 // Conventions it fixes, which the GPU renderer must reproduce:
-//   * Pixel centres are at integer screen coordinates (Direct3D 7, not 10).
-//   * Coverage: the top-left rule on edges through a pixel centre, vertex
-//     positions snapped to 1/256 pixel.
+//   * Pixel centres are at integer screen coordinates (Direct3D 7, not 10),
+//     sampled one subpixel step (1/256) right and down of them (kNudge).
+//   * Coverage: the top-left rule on exact ties, vertex positions snapped to
+//     1/256 pixel.
 //   * Depth is interpolated linearly in screen space; every other attribute
 //     perspective-correctly.
 //   * Lighting runs in camera space, normals through the inverse transpose of
@@ -645,6 +646,13 @@ void shade_pixel(const PixelContext &px, Target &t, int x, int y, double z, cons
         *zp = float(z);
 }
 
+// Pixels are sampled one subpixel step (1/256) right of and below Direct3D's
+// integer centres. On an axis-aligned edge through a centre this is exactly
+// the top-left rule; elsewhere it decides only exact ties, and it puts an
+// attribute sampled on a vertex row or column just inside the primitive. The
+// GPU renderer shifts its geometry by the same amount (d3d7_render.cpp).
+const double kNudge = 1.0 / 256;
+
 inline double snap(double v) {
     return std::floor(v * 256.0 + 0.5) / 256.0;
 }
@@ -705,17 +713,17 @@ void raster_triangle(const PixelContext &px, Target &t, const PV *v, const PV &p
                  maxx = std::max({S[0].x, S[1].x, S[2].x});
     const double miny = std::min({S[0].y, S[1].y, S[2].y}),
                  maxy = std::max({S[0].y, S[1].y, S[2].y});
-    const int x0 = std::max(t.x0, int(std::ceil(minx))),
-              x1 = std::min(t.x1 - 1, int(std::floor(maxx)));
-    const int y0 = std::max(t.y0, int(std::ceil(miny))),
-              y1 = std::min(t.y1 - 1, int(std::floor(maxy)));
+    const int x0 = std::max(t.x0, int(std::ceil(minx - kNudge))),
+              x1 = std::min(t.x1 - 1, int(std::floor(maxx - kNudge)));
+    const int y0 = std::max(t.y0, int(std::ceil(miny - kNudge))),
+              y1 = std::min(t.y1 - 1, int(std::floor(maxy - kNudge)));
     const double tw = px.tex ? px.tex->w : 0, th = px.tex ? px.tex->h : 0;
     for (int y = y0; y <= y1; ++y) {
         for (int x = x0; x <= x1; ++x) {
             double e[3];
             bool inside = true;
             for (int i = 0; i < 3 && inside; ++i) {
-                e[i] = edge(i, x, y);
+                e[i] = edge(i, x + kNudge, y + kNudge);
                 inside = e[i] > 0 || (e[i] == 0 && top_left(i));
             }
             if (!inside)
@@ -733,11 +741,16 @@ void raster_triangle(const PixelContext &px, Target &t, const PV *v, const PV &p
                     *u = q.u;
                     *vv = q.v;
                 };
-                double ux, vx, uy, vy;
-                uv_at(x + 1, y, &ux, &vx);
-                uv_at(x, y + 1, &uy, &vy);
-                const double dux = (ux - a.u) * tw, dvx = (vx - a.v) * th;
-                const double duy = (uy - a.u) * tw, dvy = (vy - a.v) * th;
+                // The level of detail comes from differences across the 2x2
+                // pixel quad the pixel belongs to, the same for all four, as
+                // a GPU takes it: x from the quad's top pair, y from its left.
+                const int qx = x & ~1, qy = y & ~1;
+                double u0, v0, ux, vx, uy, vy;
+                uv_at(qx + kNudge, qy + kNudge, &u0, &v0);
+                uv_at(qx + 1 + kNudge, qy + kNudge, &ux, &vx);
+                uv_at(qx + kNudge, qy + 1 + kNudge, &uy, &vy);
+                const double dux = (ux - u0) * tw, dvx = (vx - v0) * th;
+                const double duy = (uy - u0) * tw, dvy = (vy - v0) * th;
                 rho = std::max(std::sqrt(dux * dux + dvx * dvx), std::sqrt(duy * duy + dvy * dvy));
             }
             shade_pixel(px, t, x, y, z, a, provoking, rho);
@@ -755,7 +768,8 @@ void raster_line(const PixelContext &px, Target &t, const PV *v, bool rhw) {
     const int steps = int(std::ceil(std::max(std::fabs(dx), std::fabs(dy))));
     for (int i = 0; i < steps; ++i) {
         const double f = double(i) / steps;
-        const int x = int(std::floor(a.x + dx * f + 0.5)), y = int(std::floor(a.y + dy * f + 0.5));
+        const int x = int(std::floor(a.x + dx * f - kNudge + 0.5)),
+                  y = int(std::floor(a.y + dy * f - kNudge + 0.5));
         if (x < t.x0 || x >= t.x1 || y < t.y0 || y >= t.y1)
             continue;
         const Screen s3[3] = {a, b, b};
@@ -767,7 +781,7 @@ void raster_line(const PixelContext &px, Target &t, const PV *v, bool rhw) {
 
 void raster_point(const PixelContext &px, Target &t, const PV &v, bool rhw) {
     const Screen s = to_screen(v, *px.st, rhw);
-    const int x = int(std::floor(s.x + 0.5)), y = int(std::floor(s.y + 0.5));
+    const int x = int(std::floor(s.x - kNudge + 0.5)), y = int(std::floor(s.y - kNudge + 0.5));
     if (x < t.x0 || x >= t.x1 || y < t.y0 || y >= t.y1)
         return;
     shade_pixel(px, t, x, y, s.z, v, v, 0);

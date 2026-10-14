@@ -692,10 +692,19 @@ void D3D7Renderer::Impl::draw(const HostD7Draw &d) {
     memcpy(v.mat_specular, st.material + 8, 16);
     memcpy(v.mat_emissive, st.material + 12, 16);
     unpack(rs[d7::RS_AMBIENT], v.ambient);
+    // Direct3D 7 pixel centres are at integer coordinates, Metal's half a
+    // pixel further on: move the geometry half a pixel right and down, less
+    // one subpixel step. Then a centre on an axis-aligned left or top edge
+    // falls just inside and one on a right or bottom edge just outside - the
+    // top-left rule, with no tie for float rounding to break - and an
+    // attribute at a centre on a vertex row or column is evaluated just
+    // inside the primitive, as Direct3D evaluates it exactly there. (A tie
+    // broken the other way samples a wrapped texture's opposite edge.)
+    const double shift = 0.5 - 1.0 / 256;
     v.ndc[0] = float(vw / mw);
     v.ndc[1] = float(vh / mh);
-    v.ndc[2] = float((vx + vw / 2 + 0.5 - mx0) * 2 / mw - 1);
-    v.ndc[3] = float(1 - (vy + vh / 2 + 0.5 - my0) * 2 / mh);
+    v.ndc[2] = float((vx + vw / 2 + shift - mx0) * 2 / mw - 1);
+    v.ndc[3] = float(1 - (vy + vh / 2 + shift - my0) * 2 / mh);
     v.viewport[0] = float(vx);
     v.viewport[1] = float(vy);
     v.viewport[2] = float(vw);

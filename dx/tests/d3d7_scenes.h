@@ -13,8 +13,9 @@ namespace d7t {
 struct Scene {
     const char *name;
     Image (*run)();
-    // Pixels whose largest channel difference may exceed the tolerance (edge
-    // rasterization, filtering, float vs double), as a fraction of the image.
+    // Pixels whose largest channel difference may exceed the tolerance, as a
+    // fraction of the image: exact ties (a line endpoint, a depth or texel
+    // boundary met exactly) that float and double may break differently.
     double edge_budget;
     int tolerance;
 };
@@ -755,29 +756,264 @@ inline Image scene_movie_blit() {
     return img;
 }
 
+// One frame the way a 2001-era engine draws it through a single system-memory
+// vertex buffer (FVF 0x152, NOOVERWRITE / DISCARDCONTENTS locks): a 3D pass
+// under a perspective camera in a viewport below a top bar (z 0..1), with
+// lighting on for one span (one directional light, a white and a coloured
+// material, vertex-colour material sources), fog toggled, mipmapped textures
+// modulated and stage 1 disabled on every draw, CLIPPING toggled; a minimap
+// in its own viewport with an orthographic projection fed from a 4-4-4-4
+// texture rewritten by Lock and blitted into another; then the 2D interface
+// with WORLD = VIEW = identity, alpha-blended, in viewports with MinZ = MaxZ;
+// and the software cursor's three blits.
+inline Image scene_engine_frame() {
+    const int W = 128, H = 96;
+    Device d = make_device(W, H);
+    const uint32_t vb = vertex_buffer(d.d3d, {}, 2442);
+    const uint32_t ptr = gmem(4);
+    uint32_t cursor = 0;
+    // Appends vertices to the VB the way the engine does; returns the start.
+    auto put = [&](const std::vector<Vertex> &v) {
+        uint32_t start = cursor;
+        uint32_t flags = 0x1020; // NOOVERWRITE | WRITEONLY
+        if (start + v.size() > 2442) {
+            start = 0;
+            flags = 0x2020; // DISCARDCONTENTS | WRITEONLY
+        }
+        CHECK_EQ(call_method(vb, VB_Lock, {flags, ptr, 0}), 0);
+        memcpy(gm_ptr(rd32(ptr) + start * 36), v.data(), v.size() * 36);
+        CHECK_EQ(call_method(vb, VB_Unlock, {}), 0);
+        cursor = start + uint32_t(v.size());
+        return start;
+    };
+    const uint32_t idx = gmem(2 * 600);
+    auto draw_indexed = [&](const std::vector<Vertex> &v, const std::vector<uint16_t> &i) {
+        const uint32_t start = put(v);
+        memcpy(gm_ptr(idx), i.data(), i.size() * 2);
+        CHECK_EQ(call_method(d.dev, DEV_DrawIndexedPrimitiveVB,
+                             {d7::PT_TRIANGLELIST, vb, start, uint32_t(v.size()), idx,
+                              uint32_t(i.size()), 0}),
+                 0);
+    };
+    auto stage1_off = [&] {
+        call_method(d.dev, DEV_SetTexture, {1, 0});
+        tss(d.dev, 1, d7::TSS_COLOROP, d7::TOP_DISABLE);
+        tss(d.dev, 1, d7::TSS_ALPHAOP, d7::TOP_DISABLE);
+    };
+    // Textures: a mipmapped terrain texture, a unit texture, a 4-4-4-4 minimap
+    // source rewritten each frame and the texture it is blitted into.
+    const uint32_t terrain = texture(d.dd, 32, 32, PF_A8R8G8B8, 6);
+    uint32_t level = terrain;
+    for (int i = 0; i < 6; ++i) {
+        write(level, [i](int x, int y) {
+            return 0xff000000u | uint32_t(40 + 30 * i) << 16 |
+                   uint32_t(((x / 4 + y / 4) & 1) ? 160 : 100) << 8 | uint32_t(20 * i);
+        });
+        const uint32_t next = attached(level, d7::DDSCAPS_TEXTURE | d7::DDSCAPS_MIPMAP);
+        if (level != terrain)
+            call_method(level, Release, {});
+        if (!(level = next))
+            break;
+    }
+    const uint32_t unit = texture(d.dd, 16, 16, PF_A8R8G8B8, 5);
+    write(unit, [](int x, int y) {
+        return (std::abs(x - 8) + std::abs(y - 8) < 7) ? 0xffe0e0e0u : 0x00000000u;
+    });
+    const uint32_t mini_src = texture(d.dd, 16, 16, PF_A4R4G4B4);
+    const uint32_t mini = texture(d.dd, 16, 16, PF_A4R4G4B4);
+    write(mini_src,
+          [](int x, int y) { return 0xf000u | uint32_t(x) << 8 | uint32_t(y) << 4 | 0x8u; });
+    CHECK_EQ(call_method(mini, S_Blt, {0, mini_src, 0, d7::DDBLT_DONOTWAIT, 0}), 0);
+
+    clear(d.dev, d7::CLEAR_TARGET | d7::CLEAR_ZBUFFER, 0xff000000u);
+    call_method(d.dev, DEV_BeginScene, {});
+    // --- 3D: the game view below a 12-pixel top bar.
+    viewport(d.dev, 0, 12, W, H - 12);
+    set_transform(d.dev, d7::TS_PROJECTION, perspective(1.1f, float(W) / float(H - 12), 1, 200));
+    Matrix view = identity();
+    view[13] = -3; // camera 3 units up
+    set_transform(d.dev, d7::TS_VIEW, view);
+    rs(d.dev, d7::RS_ZENABLE, 1);
+    rs(d.dev, d7::RS_ZWRITEENABLE, 1);
+    rs(d.dev, d7::RS_CULLMODE, d7::CULL_CCW);
+    rs(d.dev, d7::RS_FOGVERTEXMODE, d7::FOG_LINEAR);
+    rs(d.dev, d7::RS_FOGCOLOR, 0xff6080a0u);
+    rs(d.dev, d7::RS_FOGSTART, fbits(10));
+    rs(d.dev, d7::RS_FOGEND, fbits(40));
+    rs(d.dev, d7::RS_NORMALIZENORMALS, 1);
+    rs(d.dev, d7::RS_AMBIENT, 0xff303030u);
+    Light sun;
+    sun.direction[0] = -0.5f;
+    sun.direction[1] = -1;
+    sun.direction[2] = 0.7f;
+    set_light(d.dev, 0, sun);
+    // Terrain: fogged, unlit, vertex-coloured, mipmapped.
+    rs(d.dev, d7::RS_FOGENABLE, 1);
+    rs(d.dev, d7::RS_CLIPPING, 1);
+    call_method(d.dev, DEV_SetTexture, {0, terrain});
+    stage1_off();
+    tss(d.dev, 0, d7::TSS_COLOROP, d7::TOP_MODULATE);
+    tss(d.dev, 0, d7::TSS_COLORARG1, d7::TA_TEXTURE);
+    tss(d.dev, 0, d7::TSS_COLORARG2, d7::TA_DIFFUSE);
+    tss(d.dev, 0, d7::TSS_MINFILTER, d7::TFN_LINEAR);
+    tss(d.dev, 0, d7::TSS_MAGFILTER, d7::TFG_LINEAR);
+    // Trilinear: with a point mip filter the level flips along iso-LOD lines
+    // where GPU quad derivatives and the reference's exact ones part.
+    tss(d.dev, 0, d7::TSS_MIPFILTER, d7::TFP_LINEAR);
+    tss(d.dev, 0, d7::TSS_ADDRESS, d7::TADDRESS_WRAP);
+    {
+        std::vector<Vertex> v;
+        std::vector<uint16_t> i;
+        const int n = 10;
+        for (int z = 0; z <= n; ++z)
+            for (int x = 0; x <= n; ++x)
+                v.push_back({-20 + 4.0f * x, 0.3f * float((x * 7 + z * 3) % 5), 4 + 4.0f * z, 0, 1,
+                             0,
+                             0xff000000u | uint32_t(200 - 10 * z) << 16 | uint32_t(220) << 8 |
+                                 uint32_t(150 + 8 * x),
+                             x * 0.5f, z * 0.5f});
+        for (int z = 0; z < n; ++z)
+            for (int x = 0; x < n; ++x) {
+                const uint16_t a = uint16_t(z * (n + 1) + x);
+                i.insert(i.end(), {a, uint16_t(a + n + 1), uint16_t(a + 1), uint16_t(a + 1),
+                                   uint16_t(a + n + 1), uint16_t(a + n + 2)});
+            }
+        draw_indexed(v, i);
+    }
+    // Units: lit, a white and a coloured material, vertex colour on and off.
+    rs(d.dev, d7::RS_FOGENABLE, 0);
+    rs(d.dev, d7::RS_LIGHTING, 1);
+    call_method(d.dev, DEV_SetTexture, {0, unit});
+    stage1_off();
+    const float white[4] = {1, 1, 1, 1}, blue[4] = {0, 0, 1, 1};
+    for (int u = 0; u < 4; ++u) {
+        rs(d.dev, d7::RS_CLIPPING, u & 1);
+        rs(d.dev, d7::RS_AMBIENT, 0xff000000u | uint32_t(0x202020 * (u + 1)));
+        material(d.dev, (u & 1) ? blue : white, (u & 1) ? blue : white);
+        rs(d.dev, d7::RS_COLORVERTEX, u >> 1);
+        rs(d.dev, d7::RS_DIFFUSEMATERIALSOURCE, u >> 1);
+        rs(d.dev, d7::RS_AMBIENTMATERIALSOURCE, u >> 1);
+        // Floating clear of the terrain: geometry that intersects at a shallow
+        // angle is decided by depth ties, which no two implementations share.
+        set_transform(d.dev, d7::TS_WORLD, translate(-6 + 4.0f * u, 3, 12 + 3.0f * u));
+        // A box with per-face normals.
+        std::vector<Vertex> v;
+        std::vector<uint16_t> i;
+        const float f[6][3] = {{0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, -1, 0}};
+        for (int k = 0; k < 6; ++k) {
+            const float *nrm = f[k];
+            const float ax[3] = {nrm[1] != 0   ? 1.0f
+                                 : nrm[2] != 0 ? nrm[2]
+                                               : 0.0f,
+                                 0, nrm[0] != 0 ? -nrm[0] : 0.0f};
+            const float ay[3] = {0, nrm[1] != 0 ? 0.0f : 1.0f, nrm[1] != 0 ? nrm[1] : 0.0f};
+            const uint16_t b = uint16_t(v.size());
+            for (int c = 0; c < 4; ++c) {
+                const float sx = (c & 1) ? 1.0f : -1.0f, sy = (c & 2) ? -1.0f : 1.0f;
+                v.push_back({nrm[0] + sx * ax[0] + sy * ay[0], nrm[1] + sx * ax[1] + sy * ay[1],
+                             nrm[2] + sx * ax[2] + sy * ay[2], nrm[0], nrm[1], nrm[2],
+                             0xff40c080u + uint32_t(k * 0x101000), (c & 1) ? 1.0f : 0.0f,
+                             (c & 2) ? 1.0f : 0.0f});
+            }
+            i.insert(i.end(), {b, uint16_t(b + 1), uint16_t(b + 2), uint16_t(b + 2),
+                               uint16_t(b + 1), uint16_t(b + 3)});
+        }
+        draw_indexed(v, i);
+    }
+    rs(d.dev, d7::RS_LIGHTING, 0);
+    set_transform(d.dev, d7::TS_WORLD, identity());
+    // A selection line list.
+    {
+        const uint32_t start = put({{-4, 0.5f, 10, 0, 1, 0, 0xffffff00u, 0, 0},
+                                    {4, 0.5f, 10, 0, 1, 0, 0xffffff00u, 0, 0}});
+        call_method(d.dev, DEV_SetTexture, {0, 0});
+        tss(d.dev, 0, d7::TSS_COLOROP, d7::TOP_DISABLE);
+        tss(d.dev, 0, d7::TSS_ALPHAOP, d7::TOP_DISABLE);
+        CHECK_EQ(call_method(d.dev, DEV_DrawPrimitiveVB, {d7::PT_LINELIST, vb, start, 2, 0}), 0);
+    }
+    // --- The minimap, its own viewport and an orthographic projection.
+    viewport(d.dev, W - 34, H - 26, 32, 24);
+    set_transform(d.dev, d7::TS_VIEW, identity());
+    set_transform(d.dev, d7::TS_PROJECTION, ortho2d(32, 24));
+    write(mini_src,
+          [](int x, int y) { return 0xf000u | uint32_t(15 - x) << 8 | uint32_t(y) << 4 | 0x4u; });
+    CHECK_EQ(call_method(mini, S_Blt, {0, mini_src, 0, d7::DDBLT_DONOTWAIT, 0}), 0);
+    call_method(d.dev, DEV_SetTexture, {0, mini});
+    tss(d.dev, 0, d7::TSS_COLOROP, d7::TOP_SELECTARG1);
+    tss(d.dev, 0, d7::TSS_ALPHAOP, d7::TOP_SELECTARG1);
+    tss(d.dev, 0, d7::TSS_MINFILTER, d7::TFN_POINT);
+    tss(d.dev, 0, d7::TSS_MAGFILTER, d7::TFG_POINT);
+    tss(d.dev, 0, d7::TSS_MIPFILTER, d7::TFP_NONE);
+    rs(d.dev, d7::RS_CULLMODE, d7::CULL_NONE);
+    rs(d.dev, d7::RS_ZENABLE, 0);
+    draw_indexed(quad2d(0, 0, 32, 24, 0xffffffffu), QUAD_INDICES);
+    rs(d.dev, d7::RS_ZENABLE, 1);
+    // --- The 2D interface: identity world and view, depth forced by MinZ = MaxZ.
+    set_transform(d.dev, d7::TS_PROJECTION, ortho2d(float(W), float(H)));
+    viewport(d.dev, 0, 0, W, H, 0, 0);
+    rs(d.dev, d7::RS_ALPHABLENDENABLE, 1);
+    rs(d.dev, d7::RS_SRCBLEND, d7::BLEND_SRCALPHA);
+    rs(d.dev, d7::RS_DESTBLEND, d7::BLEND_INVSRCALPHA);
+    call_method(d.dev, DEV_SetTexture, {0, 0});
+    tss(d.dev, 0, d7::TSS_COLOROP, d7::TOP_SELECTARG2);
+    tss(d.dev, 0, d7::TSS_COLORARG2, d7::TA_DIFFUSE);
+    tss(d.dev, 0, d7::TSS_ALPHAOP, d7::TOP_SELECTARG2);
+    tss(d.dev, 0, d7::TSS_ALPHAARG2, d7::TA_DIFFUSE);
+    draw_indexed(quad2d(0, 0, float(W), 12, 0xc0302018u), QUAD_INDICES); // the top bar
+    call_method(d.dev, DEV_SetTexture, {0, unit});
+    tss(d.dev, 0, d7::TSS_COLOROP, d7::TOP_MODULATE);
+    tss(d.dev, 0, d7::TSS_COLORARG1, d7::TA_TEXTURE);
+    tss(d.dev, 0, d7::TSS_ALPHAOP, d7::TOP_MODULATE);
+    tss(d.dev, 0, d7::TSS_ALPHAARG1, d7::TA_TEXTURE);
+    for (int b = 0; b < 4; ++b)
+        draw_indexed(quad2d(4.0f + 14 * b, 1, 14.0f + 14 * b, 11, 0xffff8040u - uint32_t(b * 0x30)),
+                     QUAD_INDICES);
+    viewport(d.dev, 0, 0, W, H, 1, 1);
+    rs(d.dev, d7::RS_ZFUNC, d7::CMP_LESSEQUAL);
+    draw_indexed(quad2d(40, 40, 60, 60, 0x80ffffffu), QUAD_INDICES); // behind everything drawn
+    rs(d.dev, d7::RS_ALPHABLENDENABLE, 0);
+    call_method(d.dev, DEV_EndScene, {});
+    call_method(d.dev, DEV_SetTexture, {0, 0});
+    // --- The cursor: restore (nothing yet), save, draw keyed.
+    const uint32_t save = offscreen(d.dd, 8, 8, PF_X8R8G8B8, false);
+    const uint32_t arrow = offscreen(d.dd, 8, 8, PF_X8R8G8B8, false);
+    write(arrow, [](int x, int y) { return x <= y ? 0x00ffffffu : 0x00ff00ffu; });
+    set_src_key(arrow, 0x00ff00ffu);
+    const uint32_t r8 = rect(0, 0, 8, 8), at = rect(70, 50, 78, 58);
+    CHECK_EQ(call_method(save, S_Blt, {r8, d.rt, at, d7::DDBLT_DONOTWAIT, 0}), 0);
+    CHECK_EQ(call_method(d.rt, S_Blt, {at, arrow, r8, d7::DDBLT_DONOTWAIT | d7::DDBLT_KEYSRC, 0}),
+             0);
+    Image img = read(d.rt);
+    for (uint32_t a : {ptr, idx, r8, at})
+        heap_free(a);
+    release_all(d, {save, arrow, mini, mini_src, unit, terrain, vb});
+    return img;
+}
+
 inline const std::vector<Scene> &scenes() {
     static const std::vector<Scene> list = {
-        {"quad coverage", scene_quad_coverage, 0.0, 1},
-        {"gouraud and flat", scene_gouraud, 0.01, 3},
-        {"point and bilinear texture", scene_texture_point, 0.0, 3},
-        {"directional light", scene_light_directional, 0.01, 2},
-        {"point light, vertex colour", scene_light_point, 0.01, 3},
-        {"linear vertex fog", scene_fog, 0.02, 3},
-        {"mip chain", scene_mips, 0.01, 3},
-        {"stage-0 combiner", scene_combiner, 0.0, 2},
-        {"combiner alpha", scene_combiner_alpha, 0.0, 2},
-        {"alpha test and blend", scene_alpha, 0.0, 3},
-        {"depth and MinZ = MaxZ", scene_depth, 0.0, 1},
-        {"culling", scene_cull, 0.02, 1},
-        {"colour-keyed texture", scene_colorkey_texture, 0.0, 1},
-        {"render to texture", scene_render_to_texture, 0.0, 1},
-        {"vertex buffer, 5-6-5", scene_vb_565, 0.0, 1},
-        {"specular and spot light", scene_specular_spot, 0.01, 3},
-        {"table fog", scene_table_fog, 0.02, 3},
-        {"addressing, tfactor", scene_addressing, 0.0, 2},
-        {"pre-transformed vertices", scene_pretransformed, 0.005, 3},
-        {"lines and points", scene_lines_points, 0.0, 1},
-        {"movie frame blit", scene_movie_blit, 0.0, 0},
+        {"quad coverage", scene_quad_coverage, 0.000, 1},
+        {"gouraud and flat", scene_gouraud, 0.002, 3},
+        {"point and bilinear texture", scene_texture_point, 0.000, 3},
+        {"directional light", scene_light_directional, 0.002, 2},
+        {"point light, vertex colour", scene_light_point, 0.002, 3},
+        {"linear vertex fog", scene_fog, 0.002, 3},
+        {"mip chain", scene_mips, 0.002, 3},
+        {"stage-0 combiner", scene_combiner, 0.000, 2},
+        {"combiner alpha", scene_combiner_alpha, 0.000, 2},
+        {"alpha test and blend", scene_alpha, 0.000, 3},
+        {"depth and MinZ = MaxZ", scene_depth, 0.000, 1},
+        {"culling", scene_cull, 0.002, 1},
+        {"colour-keyed texture", scene_colorkey_texture, 0.000, 1},
+        {"render to texture", scene_render_to_texture, 0.000, 1},
+        {"vertex buffer, 5-6-5", scene_vb_565, 0.000, 1},
+        {"specular and spot light", scene_specular_spot, 0.002, 3},
+        {"table fog", scene_table_fog, 0.002, 3},
+        {"addressing, tfactor", scene_addressing, 0.000, 2},
+        {"pre-transformed vertices", scene_pretransformed, 0.002, 3},
+        {"lines and points", scene_lines_points, 0.000, 1},
+        {"movie frame blit", scene_movie_blit, 0.000, 0},
+        {"an engine's frame", scene_engine_frame, 0.002, 3},
     };
     return list;
 }
