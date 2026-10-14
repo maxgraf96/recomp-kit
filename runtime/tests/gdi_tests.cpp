@@ -8,9 +8,12 @@
 #include "gdi_font_ttf.h"
 #include "../gdi32_truetype.h"
 #include "../gdi_surface.h"
+#include "../msvcrt_internal.h"
 #include "../../platform/os.h"
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <cstdarg>
 #include <cstring>
 #include <vector>
@@ -1523,7 +1526,118 @@ static void test_installed_windows_faces() {
     call_import(&c, "USER32.dll", "ReleaseDC", {0, dc});
 }
 
+// gdi_tests --capture cases.txt out.jsonl: the runtime's answers to
+// tools/gdi_metrics/cases.txt, in capture_win32.c's format, with the
+// installed fonts (system_fonts) on. compare.py holds them against Windows'.
+static std::vector<uint32_t> utf8_points(const std::string &s) {
+    std::vector<uint32_t> out;
+    for (size_t i = 0; i < s.size();) {
+        const uint8_t b = uint8_t(s[i]);
+        const int n = b < 0x80 ? 1 : b < 0xe0 ? 2 : b < 0xf0 ? 3 : 4;
+        uint32_t cp = n == 1 ? b : b & (0x3f >> (n - 1));
+        for (int k = 1; k < n && i + size_t(k) < s.size(); ++k)
+            cp = (cp << 6) | (uint8_t(s[i + size_t(k)]) & 0x3f);
+        out.push_back(cp);
+        i += size_t(n);
+    }
+    return out;
+}
+static int capture_metrics(const char *cases, const char *out_path) {
+    FILE *in = fopen(cases, "rb"), *out = fopen(out_path, "wb");
+    if (!in || !out) {
+        fprintf(stderr, "cannot open %s or %s\n", cases, out_path);
+        return 2;
+    }
+    if (!recomp_env("SYSTEM_FONTS"))
+        os_setenv("RECOMP_SYSTEM_FONTS", "1");
+    X86 c;
+    loader_init_context(&c);
+    const uint32_t s = 0x00380000;
+    std::vector<std::string> strings, fonts;
+    char line[1024];
+    while (fgets(line, sizeof line, in)) {
+        std::string l(line);
+        while (!l.empty() && (l.back() == '\n' || l.back() == '\r'))
+            l.pop_back();
+        if (l.rfind("string ", 0) == 0)
+            strings.push_back(l.substr(7));
+        else if (l.rfind("font ", 0) == 0)
+            fonts.push_back(l.substr(5));
+    }
+    fclose(in);
+    const uint32_t dc = call_import(&c, "USER32.dll", "GetDC", {0});
+    auto split = [](const std::string &text, char sep) {
+        std::vector<std::string> parts;
+        size_t start = 0;
+        for (;;) {
+            const size_t end = text.find(sep, start);
+            parts.push_back(text.substr(start, end - start));
+            if (end == std::string::npos)
+                return parts;
+            start = end + 1;
+        }
+    };
+    for (const std::string &spec : fonts) {
+        const auto fields = split(spec, ';');
+        if (fields.size() != 4)
+            continue;
+        for (const std::string &h : split(fields[1], ','))
+            for (const std::string &w : split(fields[2], ',')) {
+                const int32_t height = atoi(h.c_str());
+                const uint32_t weight = uint32_t(atoi(w.c_str())),
+                               italic = uint32_t(atoi(fields[3].c_str()));
+                std::string ansi_face;
+                for (uint32_t cp : utf8_points(fields[0])) {
+                    const int b = crt::unicode_to_cp1252(cp);
+                    ansi_face.push_back(char(b < 0 ? '?' : b));
+                }
+                const uint32_t font = font_a(&c, s, height, weight, ansi_face.c_str(), italic);
+                const uint32_t old = call_import(&c, "GDI32.dll", "SelectObject", {dc, font});
+                memset(g_mem + s, 0, 56);
+                call_import(&c, "GDI32.dll", "GetTextMetricsA", {dc, s});
+                call_import(&c, "GDI32.dll", "GetTextFaceA", {dc, 32, s + 0x80});
+                call_import(&c, "GDI32.dll", "GetCharWidth32A", {dc, 0x20, 0xff, s + 0x100});
+                fprintf(out,
+                        "{\"face\":\"%s\",\"height\":%d,\"weight\":%u,\"italic\":%u,"
+                        "\"realized\":\"%s\",\"tm\":[",
+                        fields[0].c_str(), height, weight, italic, gm_str(s + 0x80).c_str());
+                for (uint32_t i = 0; i < 11; ++i)
+                    fprintf(out, "%s%d", i ? "," : "", int32_t(rd32(s + 4 * i)));
+                for (uint32_t i = 0; i < 9; ++i)
+                    fprintf(out, ",%u", rd8(s + 44 + i));
+                fprintf(out, "],\"widths\":[");
+                for (uint32_t i = 0; i < 224; ++i)
+                    fprintf(out, "%s%d", i ? "," : "", int32_t(rd32(s + 0x100 + 4 * i)));
+                fprintf(out, "],\"extents\":[");
+                for (size_t i = 0; i < strings.size(); ++i) {
+                    uint32_t n = 0;
+                    for (uint32_t cp : utf8_points(strings[i])) {
+                        const int b = crt::unicode_to_cp1252(cp);
+                        wr8(s + 0x800 + n++, uint8_t(b < 0 ? '?' : b));
+                    }
+                    call_import(&c, "GDI32.dll", "GetTextExtentPoint32A",
+                                {dc, s + 0x800, n, s + 0x40});
+                    fprintf(out, "%s[%d,%d]", i ? "," : "", int32_t(rd32(s + 0x40)),
+                            int32_t(rd32(s + 0x44)));
+                }
+                fprintf(out, "]}\n");
+                call_import(&c, "GDI32.dll", "SelectObject", {dc, old});
+                call_import(&c, "GDI32.dll", "DeleteObject", {font});
+            }
+    }
+    call_import(&c, "USER32.dll", "ReleaseDC", {0, dc});
+    fclose(out);
+    return g_failures ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
+    if (argc == 4 && strcmp(argv[1], "--capture") == 0) {
+        mem_init();
+        imports_init();
+        const int rc = capture_metrics(argv[2], argv[3]);
+        mem_shutdown();
+        return rc;
+    }
     mem_init();
     imports_init();
     test_model();

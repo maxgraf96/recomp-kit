@@ -1,0 +1,45 @@
+# GDI text-metric reference cases: what a 96-dpi Windows screen DC reports
+# for the faces a game of its time uses, and what the runtime reports for
+# the same requests. capture_win32.c reads this on Windows; gdi_tests
+# --capture reads it here; compare.py holds the two side by side.
+#
+#   font <face>;<heights>;<weights>;<italic>
+#       every combination of the comma-separated heights (LOGFONT lfHeight:
+#       negative = em, positive = cell, 0 = default) and weights, italic 0/1
+#   string <text>
+#       measured with GetTextExtentPoint32A in every font (code page 1252)
+#
+# Faces a Windows 2000/XP-era game names, and the aliases its mapper resolves.
+font Arial;-8,-9,-10,-11,-12,-13,-14,-15,-16,-17,-18,-19,-20,-21,-22,-24,-26,-28,-32,-36;400,700;0
+font Arial;-11,-12,-13,-16;400,700;1
+font Arial;0,10,12,13,14,15,16,17,18,20,22,24;400,700;0
+font Arial Bold;-10,-12,-14,-16,-18;400;0
+font Arial Black;-12,-16;400;0
+font Tahoma;-8,-9,-10,-11,-12,-13,-14,-15,-16,-18,-20,-24;400,700;0
+font Tahoma;11,13,16;400,700;0
+font Verdana;-9,-10,-11,-12,-13,-14,-16,-18;400,700;0
+font Times New Roman;-9,-10,-11,-12,-13,-14,-15,-16,-18,-20,-24,-28;400,700;0
+font Times New Roman;-12,-16;400;1
+font Courier New;-10,-11,-12,-13,-14,-16,-18,-20;400,700;0
+font Trebuchet MS;-11,-12,-14,-16;400,700;0
+font Georgia;-12,-14,-16;400,700;0
+font Impact;-14,-18,-24;400;0
+font Comic Sans MS;-12,-14,-16;400,700;0
+font MS Sans Serif;-8,-11,-13;400,700;0
+font Microsoft Sans Serif;-11,-13;400;0
+string A
+string The quick brown fox jumps over the lazy dog.
+string THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG!
+string 0123456789 +-*/=%()[]{}<>,.;:'"
+string Single Player
+string Multiplayer
+string Options
+string Random Map
+string Scenario Editor
+string Civilization Builder
+string Exit Game
+string Wood: 1,250   Food: 300   Gold: 75   Stone: 10
+string Iron Age - Medieval Times (A.D. 900 - 1300)
+string façade naïve Ærø Ökonom ¡Señor! ¿Qué? 95°C £ € ©®™
+string WWWWWWWWWW
+string iiiiiiiiii

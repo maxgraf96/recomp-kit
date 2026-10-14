@@ -120,6 +120,18 @@ add_test(NAME gdi_model_tests COMMAND gdi_tests model WORKING_DIRECTORY ${POP_RO
 set_tests_properties(gdi_model_tests PROPERTIES LABELS nogame)
 add_test(NAME gdi_draw_tests COMMAND gdi_tests draw WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(gdi_draw_tests PROPERTIES LABELS nogame)
+# Text metrics against the numbers a Windows 96-dpi screen DC reports for the
+# same requests (tools/gdi_metrics: capture_win32.c there, gdi_tests --capture
+# here, compare.py's tolerances). Only once those numbers are committed, and
+# only on macOS, which installs the Windows faces the cases name.
+set(POP_GDI_WINDOWS_METRICS ${POP_ROOT}/runtime/tests/data/gdi_metrics_windows.jsonl)
+if(APPLE AND EXISTS ${POP_GDI_WINDOWS_METRICS})
+  add_test(NAME gdi_metrics_reference
+    COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/tools/gdi_metrics/compare.py
+            ${POP_GDI_WINDOWS_METRICS} --gdi-tests $<TARGET_FILE:gdi_tests>
+    WORKING_DIRECTORY ${POP_ROOT})
+  set_tests_properties(gdi_metrics_reference PROPERTIES LABELS nogame)
+endif()
 # The msvcrt.dll / msvcp60.dll HLE, against synthetic guest memory.
 add_executable(crt_tests tests/crt_tests.cpp tests/stub_recomp_call.cpp)
 target_link_libraries(crt_tests PRIVATE recomp_platform recomp_runtime)
