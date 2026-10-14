@@ -132,6 +132,24 @@ def test_an_image_without_relocations_stays_at_its_preferred_base():
         img.relocate(0x00500000)
 
 
+def test_an_empty_relocation_table_moves_with_nothing_to_fix():
+    """A resource-only DLL has a relocation directory with no entries and
+    IMAGE_FILE_RELOCS_STRIPPED clear: Windows loads it anywhere, so the
+    translator places it anywhere too; with the flag set it stays put."""
+    img = synthetic_image({0x10001000: b"\x34\x12\x78\x56"}, base=0x10000000, size=0x4000)
+    data = bytearray(img.data)
+    data[0x3000:0x3008] = struct.pack("<II", 0x1000, 8)          # one block, no entries
+    img.data, img.reloc_dir, img.path = bytes(data), (0x3000, 8), "resources.dll"
+    img.reloc_sites, img.iat_names = frozenset(), {}
+    img.relocate(0x10400000)
+    assert img.base == 0x10400000 and img.rd8(0x10401000) == 0x34    # moved, bytes unchanged
+    stripped = synthetic_image({}, base=0x10000000, size=0x4000)
+    stripped.reloc_dir, stripped.path, stripped.relocs_stripped = (0x3000, 8), "pinned.dll", True
+    stripped.reloc_sites = frozenset()
+    with pytest.raises(T.TranslateError, match="no base relocations"):
+        stripped.relocate(0x10400000)
+
+
 def test_a_listing_moves_with_its_relocations():
     """Ghidra exports at the preferred base. Each instruction moves; of its
     operands exactly the fields a relocation covers change, and a direct

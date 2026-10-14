@@ -885,6 +885,9 @@ class Image(object):
         self.end = self.base + self.size
         rel = pe.OPTIONAL_HEADER.DATA_DIRECTORY[5]      # IMAGE_DIRECTORY_BASERELOC
         self.reloc_dir = (rel.VirtualAddress, rel.Size)
+        #: IMAGE_FILE_RELOCS_STRIPPED: the one flag that pins an image to its
+        #: preferred base (the runtime loader's rule too).
+        self.relocs_stripped = bool(pe.FILE_HEADER.Characteristics & 0x0001)
         #: Addresses (at self.base) of every dword the loader relocates.
         self.reloc_sites = frozenset(self.base + rva for rva in
                                      highlow_sites(self.data, self.reloc_dir, self.size))
@@ -945,7 +948,10 @@ class Image(object):
         if base is None or base == self.base:
             return
         delta = (base - self.base) & 0xffffffff
-        if not any(relocation_entries(self.data, self.reloc_dir, self.size)):
+        # Movable unless the relocations were stripped or there is no table at
+        # all. A table with no entries is a resource-only DLL's: Windows moves
+        # it with nothing to fix up, and so do we.
+        if getattr(self, "relocs_stripped", False) or not (self.reloc_dir[0] and self.reloc_dir[1]):
             raise TranslateError("%s has no base relocations, so it can only be translated at "
                                  "its preferred base %08x, not %08x" % (self.path, self.base, base))
         image = bytearray(self.data)
@@ -4430,6 +4436,8 @@ def listing_index():
     with open(FUNCS_TSV) as fh:
         rows = [l.rstrip("\n").split("\t") for l in fh][1:]
     for row in rows:
+        if not row[0]:                    # a blank line: a module with no code lists none
+            continue
         listed = int(row[0], 16)
         addr = (listed + delta) & 0xffffffff
         name = row[1]
