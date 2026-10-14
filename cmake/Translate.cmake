@@ -89,6 +89,33 @@ if(POP_HAVE_GEN)
   endif()
 endif()
 
+# Freestanding bundles (tools/recomp/bundle.py): each module of the
+# translation, the image included, compiled with -ffreestanding -nostdinc and
+# RECOMP_FREESTANDING and linked by ld64.lld into ${POP_OUT}/bundles/<key>.bundle,
+# which a host dlopen()s instead of linking the generated archives (the
+# runtime's dispatch.cpp then serves the image's table). No SDK and no C
+# library are involved. recomp_add_bundles(<target> [MODULES main <key>...])
+# defines a target for some modules; recomp_bundles builds them all
+# (tools/build.py --target bundles).
+function(recomp_add_bundles target)
+  cmake_parse_arguments(ARG "" "" "MODULES" ${ARGN})
+  set(modules "")
+  foreach(module ${ARG_MODULES})
+    list(APPEND modules --module ${module})
+  endforeach()
+  add_custom_target(${target}
+    COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/tools/recomp/bundle.py
+            --gen ${POP_GEN_DIR} --out ${POP_OUT}/bundles ${modules}
+            -D GUEST_IMAGE_BASE=${RECOMP_IMAGE_BASE} -D GUEST_HEAP_BASE=${RECOMP_HEAP_BASE}
+            -D GUEST_SIZE=${RECOMP_GUEST_SIZE}
+    WORKING_DIRECTORY ${POP_ROOT}
+    COMMENT "Freestanding bundles: ${POP_OUT}/bundles"
+    USES_TERMINAL VERBATIM)
+endfunction()
+if(POP_HAVE_GEN AND APPLE AND NOT IOS AND NOT POP_TRANSLATE STREQUAL "STUB")
+  recomp_add_bundles(recomp_bundles)
+endif()
+
 # The portable spelling of -Wl,-force_load: every generated object is kept
 # whether or not anything references it, because the dispatch table is
 # reached by address.

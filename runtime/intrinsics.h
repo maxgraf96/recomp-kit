@@ -28,8 +28,12 @@
 #ifndef RECOMP_INTRINSICS_H
 #define RECOMP_INTRINSICS_H
 
+#ifdef RECOMP_FREESTANDING
+#include "freestanding.h"
+#else
 #include <setjmp.h>
 #include <stdint.h>
+#endif
 
 #if __has_include("x86.h")
 #include "x86.h"

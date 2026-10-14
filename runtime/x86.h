@@ -15,10 +15,14 @@
 #ifndef RECOMP_X86_H
 #define RECOMP_X86_H
 
+#ifdef RECOMP_FREESTANDING
+#include "freestanding.h" /* no C library: a bundle built by tools/recomp/bundle.py */
+#else
 #include <stdint.h>
 #include <limits.h>
 #include <string.h>
 #include <math.h>
+#endif
 #ifndef M_LN2 /* glibc and MSVC hide the M_ constants without feature macros */
 #define M_LN2 0.693147180559945309417
 #endif

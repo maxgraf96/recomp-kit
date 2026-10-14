@@ -3,8 +3,12 @@
 #include "loader.h"
 #include <stdio.h>
 
-extern "C" __attribute__((weak)) int recomp_thunk_target_kind(uint32_t) {
-    return 0;
+// The generated image table defines this; without one (a freestanding build,
+// runtime/dispatch.cpp) the registered modules answer.
+extern "C" __attribute__((weak)) int recomp_thunk_target_kind(uint32_t target) {
+    if (recomp_module_lookup(target) >= 0)
+        return 1;
+    return recomp_module_is_call_return(target) ? 2 : 0;
 }
 
 namespace {

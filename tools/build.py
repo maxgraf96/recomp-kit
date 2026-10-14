@@ -34,13 +34,14 @@ TARGETS = {
     "headless": ["pop_headless"],
     "fixture": ["pop_fixture"],
     "gen": ["recomp_gen"],
+    "bundles": ["recomp_bundles"],
     "plugins": ["plugins"],
     "ios": ["recomp_app"],
     "android": ["recomp_app"],
     "web": ["recomp_app"],
 }
 MACOS_ONLY = {"ios"}
-NEEDS_GEN = {"app", "smoke", "headless", "fixture", "gen", "ios", "android", "web"}
+NEEDS_GEN = {"app", "smoke", "headless", "fixture", "gen", "bundles", "ios", "android", "web"}
 # Targets with presets of their own, whatever the host system.
 OWN_PRESET = {"ios", "android", "web"}
 
@@ -405,6 +406,9 @@ def parse_args(argv, system=None):
                         help="Translate instructions the translator cannot model into a trap at "
                              "their own address (passed to translate.py)")
     parser.add_argument("--target", choices=sorted(TARGETS), default="app")
+    parser.add_argument("--cmake-target", action="append", default=[], metavar="NAME",
+                        help="Build this CMake target instead of --target's (repeatable): a game's "
+                             "own, defined by its mods/CMakeLists.txt")
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 2, 8))
     parser.add_argument("--preset", default=default_preset(system), help="CMake configure preset")
     parser.add_argument("--config", choices=("Release", "Debug"), default="Release")
@@ -455,7 +459,7 @@ def main():
     try:
         # The lock lives at <build root>/recomp/.lock: BuildLock joins build/recomp/.lock onto its argument.
         with buildlock.BuildLock(args.build_root.parent, "tools/build.py"):
-            if args.target in NEEDS_GEN and args.regenerate:
+            if (args.target in NEEDS_GEN or args.cmake_target) and args.regenerate:
                 if not (cfg["listings_path"] / "functions.tsv").is_file():
                     parser.error("Translation listings are missing; run tools/setup.py without --link-only")
                 publish_generated(args.build_root,
@@ -489,7 +493,10 @@ def main():
                 if args.target == "app" and not args.stub:
                     texture_pack(args.game_dir, args.build_root)
                 configure(preset, defines, build_dir=build_dir)
-                build(preset, TARGETS[args.target], args.jobs, build_dir=build_dir, config=args.config)
+                build(preset, args.cmake_target or TARGETS[args.target], args.jobs, build_dir=build_dir,
+                      config=args.config)
+                if args.cmake_target:
+                    return
                 if args.target == "web":
                     site = web_site(args.game_dir, args.build_root, preset, cfg)
                     print("Web site in %s (serve it with tools/web_launcher.py --serve)" % site)

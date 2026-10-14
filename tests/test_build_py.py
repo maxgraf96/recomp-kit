@@ -59,6 +59,15 @@ class BuildPyTests(unittest.TestCase):
         self.assertEqual(command[command.index("--parallel") + 1], "6")
         self.assertEqual(command[command.index("--target") + 1:], ["pop_smoke"])
 
+    def test_bundles_and_game_targets(self):
+        """--target bundles is the freestanding build (tools/recomp/bundle.py);
+        --cmake-target names a game's own targets instead of --target's."""
+        self.assertEqual(build_py.TARGETS["bundles"], ["recomp_bundles"])
+        self.assertIn("bundles", build_py.NEEDS_GEN)
+        args, _ = build_py.parse_args(["--cmake-target", "ee_one", "--cmake-target", "ee_two"], system="Darwin")
+        self.assertEqual(args.cmake_target, ["ee_one", "ee_two"])
+        self.assertEqual(build_py.parse_args([], system="Darwin")[0].cmake_target, [])
+
     def test_game_dir_defaults_to_the_stub_and_is_validated(self):
         args, _ = build_py.parse_args([], system="Darwin")
         self.assertEqual(args.game_dir, build_py.ROOT / "games/stub")

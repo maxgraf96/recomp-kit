@@ -2,7 +2,9 @@
 #ifndef RECOMP_SEH_H
 #define RECOMP_SEH_H
 #include "x86.h"
+#ifndef RECOMP_FREESTANDING /* x86.h brought freestanding.h's setjmp */
 #include <setjmp.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
