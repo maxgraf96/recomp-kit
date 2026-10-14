@@ -134,6 +134,9 @@ def build(gen, out, keys, cc, lld, defines, jobs, min_macos):
     out.mkdir(parents=True, exist_ok=True)
     bundles = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        # Every module's objects share the pool, so a small module does not
+        # wait for a large one; each links as soon as its own objects are done.
+        plans = []
         for key in keys:
             source_dir = available[key]
             flags = compile_flags(cc, gen, source_dir, defines, min_macos)
@@ -143,6 +146,8 @@ def build(gen, out, keys, cc, lld, defines, jobs, min_macos):
             sources = sorted(source_dir.glob("chunk_*.c")) + [source_dir / "table.c"]
             work = [pool.submit(compile_one, cc, flags, flags_hash, s, objdir / (s.stem + ".o"))
                     for s in sources]
+            plans.append((key, objdir, sources, work))
+        for key, objdir, sources, work in plans:
             rebuilt = sum(1 for w in work if w.result())
             bundle = out / ("%s.bundle" % key)
             objects = [str(objdir / (s.stem + ".o")) for s in sources]
