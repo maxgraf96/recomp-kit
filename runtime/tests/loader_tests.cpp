@@ -222,9 +222,11 @@ struct Image {
 } // namespace pe
 
 static std::string g_dir;
+static std::vector<std::string> g_written; // removed again at the end
 
 static std::string write_image(const std::string &file, pe::Image &img) {
     std::string path = g_dir + "/" + file;
+    g_written.push_back(path);
     std::vector<uint8_t> bytes = img.build();
     FILE *f = fopen(path.c_str(), "wb");
     if (!f || fwrite(bytes.data(), 1, bytes.size(), f) != bytes.size()) {
@@ -922,6 +924,12 @@ int main(int argc, char **argv) {
     test_dll_main_image(cfg);
     test_guards_and_strict(argv[0]);
 
+    for (auto it = g_written.rbegin(); it != g_written.rend(); ++it)
+        os_unlink(it->c_str());
+    os_unlink((g_dir + "/child.log").c_str());
+    os_unlink((g_dir + "/cycle/child.log").c_str());
+    os_rmdir((g_dir + "/cycle").c_str());
+    os_rmdir(g_dir.c_str());
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }
