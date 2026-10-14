@@ -347,7 +347,7 @@ Dm_createHydraSamplesForDls(DmDls* dls, float** pcm, int32_t* pcm_len, struct ts
 	for (uint32_t i = 0; i < dls->wave_table_size; ++i) {
 		DmDlsWave* wav = &dls->wave_table[i];
 
-		strncpy(sample_headers[i].sampleName, wav->info.inam, 19);
+		strncpy(sample_headers[i].sampleName, wav->info.inam != NULL ? wav->info.inam : "", 19);
 
 		sample_headers[i].start = (uint32_t) sample_offset;
 		sample_headers[i].startLoop = (uint32_t) sample_offset;
@@ -448,7 +448,7 @@ static DmResult Dm_createHydra(DmDls* dls, struct tsf_hydra* hydra, float** pcm,
 		DmDlsInstrument* ins = &dls->instruments[i];
 		uint32_t bank = ins->bank;
 
-		strncpy(hydra->phdrs[i].presetName, ins->info.inam, 19);
+		strncpy(hydra->phdrs[i].presetName, ins->info.inam != NULL ? ins->info.inam : "", 19);
 		// NOTE: Drum kits always go into MIDI Bank 128
 		hydra->phdrs[i].bank = bank & DmDls_DRUM_KIT ? 128 : bank;
 		hydra->phdrs[i].preset = ins->patch;
@@ -464,7 +464,7 @@ static DmResult Dm_createHydra(DmDls* dls, struct tsf_hydra* hydra, float** pcm,
 		hydra->pgens[pgen_ndx].genAmount.wordAmount = i;
 		pgen_ndx++;
 
-		strncpy(hydra->insts[i].instName, ins->info.inam, 19);
+		strncpy(hydra->insts[i].instName, ins->info.inam != NULL ? ins->info.inam : "", 19);
 		hydra->insts[i].instBagNdx = ibag_ndx;
 
 		for (size_t r = 0; r < ins->region_count; ++r) {
