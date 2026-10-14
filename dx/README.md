@@ -24,6 +24,8 @@ Metal and AVAudioEngine. That keeps every test here headless.
 | `d3d7_soft.cpp` | the software reference implementation of that seam |
 | `d3d7_types.h`, `d3d7_internal.h`, `d3d7_prim.h` | DirectX 7 layouts and constants; the surface model; topologies and vertex formats |
 | `dsound.cpp` | IDirectSound, buffer, 3D buffer, 3D listener, notify |
+| `dmusic.cpp`, `dmusic.h` | DirectMusic (DirectX 6.1/7) over GothicKit/dmusic: loader, performance, IDirectMusic, the synthesizer port and its IKsControl, segment, segment state, style, composer |
+| `dmusic_reverb.cpp` | the synthesizer's Waves reverb, approximated |
 | `mss32.cpp` | Miles digital drivers, preferences, PCM/MP3 samples (MP3 decoded once per image), EOS callbacks and streams |
 | `redbook.cpp` | Miles CD audio backed by configured media files |
 | `waveout.cpp` | WinMM PCM/IMA ADPCM queues and device-clock WAVEHDR completion |
@@ -36,6 +38,8 @@ Metal and AVAudioEngine. That keeps every test here headless.
 | `tests/dx_tests.cpp` | the headless tests |
 | `tests/pad_tests.cpp` | the virtual pad through DirectInput, with its own host pad callbacks |
 | `tests/d3d7_tests.cpp`, `tests/d3d7_scenes.h`, `tests/d3d7_client.h` | DirectDraw 7 / Direct3D 7, headless; the scenes are shared with `host/tests/d3d7_gpu_tests.cpp` |
+| `tests/dmusic_tests.cpp`, `tests/dmusic_client.h`, `tests/make_dmusic_fixtures.py` | DirectMusic on synthetic segments, styles, DLS and SoundFont files, rendered offline |
+| `tests/dmusic_render.cpp` | a game's segment rendered offline through the same calls, its level printed as JSON |
 
 ## Wiring it up
 
@@ -305,6 +309,60 @@ modes other than solid, `LASTPIXEL` (lines omit their last pixel), border
 colours other than transparent black, destination colour keys, palettes,
 clippers, overlays and FOURCC surfaces.
 
+## DirectMusic
+
+For a game that plays DirectMusic segments: `CoCreateInstance` makes the
+loader, the composer and the performance (and `IDirectMusic`) when the game
+opts in with `[runtime] dmusic = true` (`RECOMP_DMUSIC=0/1` overrides);
+otherwise they are not registered and DirectMusic looks absent. The music
+itself - segments, styles, bands and DLS collections read, patterns chosen by
+groove level, transitions, the synthesizer - is GothicKit/dmusic, vendored
+with its patches in `third_party/dmusic` (its README lists them).
+
+**The calls.** Every DirectX 6.1/7 slot is in place; what DirectMusic does
+that dmusic cannot is logged once when a game asks for it. What works:
+
+| interface | |
+| --- | --- |
+| `IDirectMusicLoader` | search directories (a missing one is `DMUS_E_LOADER_BADPATH`); `GetObject` of a segment by file name, full path or from memory; the cache, on by default as in DirectMusic. Names go through the runtime's file resolver, so case does not matter. |
+| `IDirectMusicPerformance` | `Init`, ports and PChannels, `PlaySegment`/`Stop` at the boundary the flags (or `DMUS_SEGF_DEFAULT` and the segment's resolution) name, `GetSegmentState`/`IsPlaying`, `GetTime`, the global parameters (auto-download, master groove level, master volume; every one kept for `GetGlobalParam`), `AllocPMsg`/`FreePMsg`, `CloseDown`. Notifications are accepted and never signalled. |
+| `IDirectMusic`, `IDirectMusicPort`, `IKsControl` | one software synthesizer port: output class, DLS, 1000 channel groups; `GUID_DMUS_PROP_Volume`, `_Effects` and `_WavesReverb` get and set. |
+| `IDirectMusicSegment`, `...SegmentState`, `...Style` | repeats, length, resolution, `GUID_Download`/`GUID_Unload`, the style (which has no motifs); the state's segment is the loader's own pointer. |
+| `IDirectMusicComposer` | `AutoTransition` (groove, fill, intro, break, end) at the next measure, beat, grid or at once. |
+
+**When a segment ends.** `Stop` ends the primary segment for the state
+queries at once, whatever the audio thread has still to render, so a game that
+retries an unload while its score "still plays" gets through on the first try.
+A segment that runs out of repeats ends when the render reaches its end; with
+no audio output nothing renders and a playing segment plays until stopped.
+
+**The sound.** The synthesizer renders on the host's audio thread through
+`host_synth_attach`, at the host's rate (`host_synth_rate`, resampled if the
+host's rate changes later), and the output stage does what the port does on
+Windows: the KS volume and the master volume in hundredths of a dB, ramped
+over about 5 ms so a game's stepped fade is a fade, a trim of -3 dB to the
+level of Windows' synthesizer (measured on one game's music against a loopback
+recording), and the Waves reverb (`dmusic_reverb.h`: a Freeverb-shaped network
+whose decay times are the ones asked for; its level against Windows' is still
+to be calibrated).
+
+**General MIDI instruments.** A band takes them from `gm.dls`/`gs.dls`, which
+Windows supplied. A game folder that has one is used; else the file
+`RECOMP_DMUSIC_GM` names (a DLS collection or a SoundFont; a name that is not
+there means none); else macOS's own Roland GS collection,
+`/System/Library/Components/CoreAudio.component/Contents/Resources/gs_instruments.dls`,
+read from the player's system and never copied; else the kit's GeneralUser GS
+SoundFont, which dmusic plays in place of a DLS collection. With none, those
+instruments are silent and the rest plays.
+
+**Approximations.** `GetTime`'s music time runs at 120 beats a minute from
+`Init`; start times passed to `PlaySegment`/`Stop` are not honoured; a queued
+segment starts at its boundary rather than after the playing one; secondary
+segments, motifs, chord maps, tracks and tools do not play; the synthesizer is
+TinySoundFont (no 32-voice limit, its own envelopes) at the host's rate rather
+than Microsoft's DLS1 synthesizer at 22.05 kHz. A band's first notes build
+that collection's instruments on the audio thread, once per collection.
+
 ## Known gaps
 
 - **`QSWAVEMIXOPENWAVEDATA`'s layout is unconfirmed.** The game builds it in a
@@ -379,6 +437,7 @@ RECOMP_AUDIO_TRACE=200 RECOMP_MAX_SECONDS=25 build/recomp/pop_headless
 .venv/bin/python tools/test.py --native          # build and run
 .venv/bin/python tools/test.py --compile-only    # build only
 .venv/bin/ctest --preset macos -R dx_tests       # one suite
+build/recomp/dmusic_render --dir DIR --segment NAME.sgt --seconds 60   # a game's music, measured
 ```
 
 Run from the repository root. 4540 checks: vtable integrity, the

@@ -22,6 +22,13 @@ layout model, geometry, routing, virtual pad, mapped binding, raster primitives
 and editor (including the old keypad geometry as a regression oracle), and
 `pad_tests` for the DirectInput joystick and the three XInput DLLs, which lives
 beside `dx_tests` because it defines the `host_pad_*` callbacks strongly.
+`dmusic_tests` (`nogame`) drives DirectMusic through its COM vtables on
+synthetic segments, styles, DLS and SoundFont files that
+`dx/tests/make_dmusic_fixtures.py` writes (`dmusic_fixtures_current` checks
+the committed header is its output), and renders the synthesizer offline:
+loading, playing, repeats, tempo to the sample, groove transitions at bar
+lines, volume and fades, the reverb, the General MIDI bank and a concurrent
+render thread. `dmusic_render` measures a game's own segments the same way.
 `win32_ui_tests` (`nogame`, beside `dx_tests`) drives the window system
 through guest calls and guest threads: activation and focus sequences, sent
 messages in order with queued input, per-thread queues, PostThreadMessage and

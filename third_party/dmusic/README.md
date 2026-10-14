@@ -44,12 +44,14 @@ shims has them:
 
 ## Local patches
 
-Each is its own commit on the kit's history touching only files above, with
+Each is its own commit on the kit's history, touching the library's files and this table, with
 the reason in its message, so that it can go upstream as it is:
 
 ```sh
-git log --oneline -- third_party/dmusic/src third_party/dmusic/include third_party/dmusic/vendor
-git format-patch --relative=third_party/dmusic <commit>^!   # one upstream-ready patch
+cd third_party/dmusic
+git log --oneline -- src include vendor
+# one upstream-ready patch, without this README's row for it
+git format-patch --relative=third_party/dmusic <commit>^! -- src include vendor
 ```
 
 | Patch | Why |

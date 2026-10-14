@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Play DirectMusic for a game that opts in (`[runtime] dmusic` in game.toml):
+  the DirectX 6.1/7 loader, performance, port, segment, segment state, style
+  and composer interfaces (`dx/dmusic.cpp`) over GothicKit/dmusic, vendored
+  with ten patches (`third_party/dmusic`): instruments selected by bank
+  MSB, LSB and drum flag, the master groove level, segment repeats and a
+  segment's end, a sample-exact clock, thread safety, partial downloads,
+  SoundFonts in place of DLS collections. The synthesizer renders into the
+  host's mix (`host_synth_attach`) through the port volume, the master volume
+  and an approximation of its Waves reverb. General MIDI instruments come
+  from the game, `RECOMP_DMUSIC_GM`, the system's GS collection on macOS or
+  the bundled GeneralUser GS. `dmusic_render` measures a game's segments
+  offline.
 - Play a Miles 6 game's sound effects the way Miles 6.1a does. The 17
   `mss32` imports a mixer plugin needed and the kit lacked -
   `AIL_open_digital_driver`/`close_digital_driver`, `get_DirectSound_info`,
