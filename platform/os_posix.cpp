@@ -21,6 +21,8 @@
 #include <sys/ucontext.h>
 #include <time.h>
 #include <unistd.h>
+
+#include <string>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif
@@ -238,6 +240,24 @@ int os_user_data_dir(const char *app, char *buf, size_t cap) {
 #endif
     int n = snprintf(buf, cap, "%s/%s", base, app);
     return n > 0 && (size_t)n < cap ? 0 : -1;
+}
+
+int os_font_dirs(char *buf, size_t cap) {
+    const char *home = getenv("HOME");
+    std::string dirs;
+#ifdef __APPLE__
+    if (home && *home)
+        dirs += std::string(home) + "/Library/Fonts\n";
+    dirs += "/Library/Fonts\n/System/Library/Fonts/Supplemental\n/System/Library/Fonts";
+#else
+    if (home && *home)
+        dirs += std::string(home) + "/.fonts\n" + std::string(home) + "/.local/share/fonts\n";
+    dirs += "/usr/local/share/fonts\n/usr/share/fonts";
+#endif
+    if (dirs.size() + 1 > cap)
+        return -1;
+    memcpy(buf, dirs.c_str(), dirs.size() + 1);
+    return 0;
 }
 
 extern "C" char **environ;

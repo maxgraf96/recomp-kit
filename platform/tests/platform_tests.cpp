@@ -185,6 +185,11 @@ void test_process_and_strings() {
     CHECK(os_user_data_dir("PopRecompTest", data, sizeof data) == 0);
     CHECK(strstr(data, "PopRecompTest") != nullptr);
     CHECK(data[strlen(data) - 1] != '/' && data[strlen(data) - 1] != '\\');
+    // Font directories: absolute, newline-separated, none empty or trailing.
+    CHECK(os_font_dirs(data, sizeof data) == 0);
+    CHECK(data[0] != 0 && data[strlen(data) - 1] != '\n' && !strstr(data, "\n\n"));
+    CHECK(strstr(data, "Fonts") != nullptr || strstr(data, "fonts") != nullptr);
+    CHECK(os_font_dirs(data, 4) == -1); // too small a buffer is an error, not a truncation
     {
         uint64_t free_bytes = 0;
         const std::string dir = scratch_dir();

@@ -101,6 +101,13 @@ int os_registry_read(const char *key, const char *value, char *buf, size_t cap);
 // Per-user data directory for `app` (not created): ~/Library/Application Support/<app>,
 // %APPDATA%\<app>, $XDG_DATA_HOME/<app> or ~/.local/share/<app>. 0 or -1.
 int os_user_data_dir(const char *app, char *buf, size_t cap);
+// The directories the platform keeps its installed fonts in, most specific
+// first, as one string with the entries separated by '\n' (not created, not
+// checked). macOS: ~/Library/Fonts, /Library/Fonts,
+// /System/Library/Fonts/Supplemental, /System/Library/Fonts; Windows:
+// %WINDIR%\Fonts; elsewhere ~/.fonts, ~/.local/share/fonts and
+// /usr/share/fonts (searched recursively by the caller). 0 or -1.
+int os_font_dirs(char *buf, size_t cap);
 // Runs argv[0] with argv (NULL-terminated), inheriting stdio; 0 and a pid, or -1.
 int os_spawn(const char *const argv[], int64_t *pid_out);
 // Waits for the child. exit_code receives the exit status, or 128 + signal on

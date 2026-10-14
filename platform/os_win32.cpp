@@ -386,6 +386,18 @@ int os_user_data_dir(const char *app, char *buf, size_t cap) {
     return 0;
 }
 
+int os_font_dirs(char *buf, size_t cap) {
+    wchar_t w[MAX_PATH + 1];
+    UINT n = GetWindowsDirectoryW(w, MAX_PATH + 1);
+    if (!n || n > MAX_PATH)
+        return -1;
+    std::string s = narrow(w) + "\\Fonts";
+    if (s.size() + 1 > cap)
+        return -1;
+    memcpy(buf, s.c_str(), s.size() + 1);
+    return 0;
+}
+
 int os_spawn(const char *const argv[], int64_t *pid_out) {
     std::wstring cmd;
     for (int i = 0; argv[i]; ++i) {
