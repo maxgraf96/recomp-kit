@@ -61,6 +61,7 @@ git format-patch --relative=third_party/dmusic <commit>^!   # one upstream-ready
 | A segment ends after its last repeat; `DmPerformance_isPlaying` | A DirectMusic segment state ends after its length times (repeats + 1); upstream let the style choose patterns for ever. **Changes behaviour** for a player that relied on endless playback: it should set the repeats (DirectMusic's `DMUS_SEG_REPEAT_INFINITE` is `0xFFFFFFFF`). `isPlaying` tells an API layer when the segment has ended. |
 | A missing DLS collection leaves its instruments silent | A band whose collection is missing (a system GM bank that is not installed) failed the whole download, and with automatic download the segment would not load; the first failure also stopped the remaining bands and the style downloading. Now each missing collection is a warning, every band and style is still downloaded, and a style that could not be loaded is skipped at play time instead of dereferenced. |
 | Accept a 16-byte `fmt ` chunk | A wave's format may be a `PCMWAVEFORMAT`, without `cbSize`; reading past it logged an error per wave (hundreds for Apple's GS bank). |
+| A SoundFont 2 bank in place of a DLS collection | A resolver may answer `gm.dls` with an SF2 (a General MIDI bank where the system has no `gm.dls`); TinySoundFont loads it as it is and the synthesizer plays its presets, banks numbered by MSB as SoundFonts number them. |
 
 To move to a newer upstream commit, replace the files listed under *What is
 here*, re-apply the patches that upstream has not taken, and run

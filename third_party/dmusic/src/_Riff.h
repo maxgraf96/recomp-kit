@@ -18,6 +18,7 @@
 #define DM_FOURCC_DATE DM_FOURCC('D', 'A', 'T', 'E')
 #define DM_FOURCC_DMRF DM_FOURCC('D', 'M', 'R', 'F')
 #define DM_FOURCC_GUID DM_FOURCC('g', 'u', 'i', 'd')
+#define DM_FOURCC_SFBK DM_FOURCC('s', 'f', 'b', 'k')
 #define DM_FOURCC_VERS DM_FOURCC('v', 'e', 'r', 's')
 #define DM_FOURCC_REFH DM_FOURCC('r', 'e', 'f', 'h')
 #define DM_FOURCC_NAME DM_FOURCC('n', 'a', 'm', 'e')

@@ -435,6 +435,20 @@ DmResult DmDls_parse(DmDls* slf, void* buf, size_t len) {
 		return DmResult_FILE_CORRUPT;
 	}
 
+	// A SoundFont 2 bank where a DLS collection was expected (a General MIDI set the system does not have, say):
+	// TinySoundFont loads it as it is, and the synthesizer plays its presets.
+	if (rif.id == DM_FOURCC_RIFF && rif.typ == DM_FOURCC_SFBK) {
+		slf->soundfont = len <= INT32_MAX ? tsf_load_memory(buf, (int) len) : NULL;
+		Dm_free(buf);
+
+		if (slf->soundfont == NULL) {
+			Dm_report(DmLogLevel_ERROR, "Dls: SoundFont bank could not be loaded");
+			return DmResult_FILE_CORRUPT;
+		}
+
+		return DmResult_SUCCESS;
+	}
+
 	slf->backing_memory = buf;
 
 	DmRiff cnk;

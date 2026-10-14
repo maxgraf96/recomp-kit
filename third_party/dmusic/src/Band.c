@@ -169,6 +169,14 @@ DmResult DmBand_download(DmBand* slf, DmLoader* loader) {
 			continue;
 		}
 
+		if (instrument->dls->soundfont != NULL) {
+			Dm_report(DmLogLevel_DEBUG,
+			          "DmBand: Instrument on channel %d of band '%s' plays from a SoundFont bank",
+			          instrument->channel,
+			          slf->info.unam != NULL ? slf->info.unam : "");
+			continue;
+		}
+
 		DmDlsInstrument* dls_instrument = DmInstrument_getDlsInstrument(instrument);
 		if (dls_instrument == NULL) {
 			continue;

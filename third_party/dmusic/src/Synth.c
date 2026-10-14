@@ -177,6 +177,11 @@ static DmResult DmSynth_assignInstrumentChannels(DmSynth* slf, DmBand* band) {
 		uint32_t bank = DmInstrument_isDrumKit(ins) ? 128U : DmInstrument_getBank(ins);
 		uint32_t patch = DmInstrument_getProgram(ins);
 
+		// A SoundFont numbers its banks by the bank select MSB alone (GS variations are banks 1-127).
+		if (fnt->dls->soundfont != NULL && bank != 128U) {
+			bank >>= 8;
+		}
+
 		tsf_set_volume(fnt->syn, slf->volume);
 		int found = tsf_channel_set_bank_preset(fnt->syn, (int) ins->channel, (int) bank, (int) patch);
 
@@ -184,6 +189,8 @@ static DmResult DmSynth_assignInstrumentChannels(DmSynth* slf, DmBand* band) {
 		// rather than leaving the channel on whatever it played before.
 		if (!found && bank != 128U && (bank & 0x7F00U) != 0) {
 			found = tsf_channel_set_bank_preset(fnt->syn, (int) ins->channel, (int) (bank & 0x7FU), (int) patch);
+		} else if (!found && bank != 128U && fnt->dls->soundfont != NULL && bank != 0) {
+			found = tsf_channel_set_bank_preset(fnt->syn, (int) ins->channel, 0, (int) patch);
 		}
 
 		if (!found) {

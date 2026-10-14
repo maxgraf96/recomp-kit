@@ -637,6 +637,13 @@ DmResult DmSynth_createTsfForDls(DmDls* dls, tsf** out) {
 		return DmResult_INVALID_ARGUMENT;
 	}
 
+	// A SoundFont bank is already a synthesizer: each user gets its own voices and channels over the shared
+	// presets and samples.
+	if (dls->soundfont != NULL) {
+		*out = tsf_copy(dls->soundfont);
+		return *out != NULL ? DmResult_SUCCESS : DmResult_MEMORY_EXHAUSTED;
+	}
+
 	// Initialize the hydra by allocation all required memory
 	struct tsf_hydra hydra;
 	float* pcm = NULL;

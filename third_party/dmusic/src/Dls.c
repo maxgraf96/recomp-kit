@@ -43,6 +43,7 @@ size_t DmDls_release(DmDls* slf) {
 	Dm_free(slf->pool_table);
 	Dm_free(slf->wave_table);
 	Dm_free(slf->backing_memory);
+	tsf_close(slf->soundfont);
 	Dm_free(slf);
 	return 0;
 }

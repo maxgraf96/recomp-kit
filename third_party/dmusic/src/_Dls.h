@@ -184,6 +184,10 @@ typedef struct DmDls {
 	_Atomic size_t reference_count;
 	void* backing_memory;
 
+	/// \brief A SoundFont 2 bank loaded in place of a DLS collection, or `NULL`. A collection that is one has no
+	///        DLS instruments, pool table or waves; the synthesizer plays the bank's presets directly.
+	struct tsf* soundfont;
+
 	DmGuid guid;
 	DmVersion version;
 	DmInfo info;
