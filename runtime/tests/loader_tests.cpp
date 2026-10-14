@@ -2,8 +2,9 @@
 // relocation to a configured base, import binding across modules in any
 // configuration order, dependency-ordered DllMain and static TLS for static and
 // LoadLibrary'd modules, thread notifications, reference counts and failure
-// paths; then the guarded arena, heap growth, strict mode, the initial x87
-// control word and the import argument counts. Needs no game: every image is
+// paths; a mapped DLL's resources; then the
+// guarded arena, heap growth, strict mode, the initial x87 control word and
+// the import argument counts. Needs no game: every image is
 // written to a temporary directory and its DllMain is a native stand-in
 // registered as a translated module.
 //
@@ -11,6 +12,7 @@
 #include "../imports.h"
 #include "../loader.h"
 #include "../memory.h"
+#include "../resources.h"
 #include "../win32.h"
 #include "../../platform/os.h"
 #include "game_config.h"
@@ -51,7 +53,7 @@ static void section(const char *s) {
 namespace pe {
 
 const uint32_t SECTION_RVA = 0x1000, SECTION_SIZE = 0x3000, IMAGE_SIZE = 0x4000;
-const uint32_t EXPORTS = 0x2000, IMPORTS = 0x2400, RELOCS = 0x3000, TLS = 0x3800;
+const uint32_t EXPORTS = 0x2000, IMPORTS = 0x2400, RELOCS = 0x3000, TLS = 0x3800, RSRC = 0x3c00;
 
 struct Import {
     std::string dll;
@@ -66,6 +68,7 @@ struct Image {
     std::vector<std::pair<std::string, uint32_t>> exports; // name, RVA (ordinals from 1)
     std::vector<Import> imports;
     std::vector<uint32_t> relocs; // RVAs of HIGHLOW sites
+    std::vector<uint8_t> rsrc;    // a resource directory, laid out for RVA RSRC
     std::vector<uint8_t> sec = std::vector<uint8_t>(SECTION_SIZE);
 
     uint32_t va(uint32_t rva) const {
@@ -162,6 +165,11 @@ struct Image {
             dirs[9][0] = TLS;
             dirs[9][1] = 24;
         }
+        if (!rsrc.empty()) {
+            memcpy(&sec[RSRC - SECTION_RVA], rsrc.data(), rsrc.size());
+            dirs[2][0] = RSRC;
+            dirs[2][1] = (uint32_t)rsrc.size();
+        }
         if (!rel.empty() && !strip) {
             std::sort(rel.begin(), rel.end());
             uint32_t at = RELOCS;
@@ -218,6 +226,58 @@ struct Image {
         return f;
     }
 };
+
+// A resource directory at RVA `rva`: RT_STRING block 1 (strings 0-15) in
+// German (0x407) and US English (0x409), string 3 "Hallo" / "Hello", and an
+// RT_RCDATA resource named "INTRO" holding "film".
+static std::vector<uint8_t> resource_blob(uint32_t rva) {
+    std::vector<uint8_t> b(0x130);
+    auto w16 = [&](uint32_t o, uint16_t v) { memcpy(&b[o], &v, 2); };
+    auto w32 = [&](uint32_t o, uint32_t v) { memcpy(&b[o], &v, 4); };
+    auto dir = [&](uint32_t o, uint16_t named, uint16_t ids) {
+        w16(o + 12, named);
+        w16(o + 14, ids);
+    };
+    const uint32_t D = 0x80000000u;
+    dir(0x000, 0, 2); // types
+    w32(0x010, 6), w32(0x014, D | 0x020);
+    w32(0x018, 10), w32(0x01c, D | 0x058);
+    dir(0x020, 0, 1); // RT_STRING: block 1
+    w32(0x030, 1), w32(0x034, D | 0x038);
+    dir(0x038, 0, 2); // block 1: languages, ascending
+    w32(0x048, 0x407), w32(0x04c, 0x088);
+    w32(0x050, 0x409), w32(0x054, 0x098);
+    dir(0x058, 1, 0); // RT_RCDATA: "INTRO"
+    w32(0x068, D | 0x0b8), w32(0x06c, D | 0x070);
+    dir(0x070, 0, 1);
+    w32(0x080, 0x409), w32(0x084, 0x0a8);
+    auto data = [&](uint32_t o, uint32_t at, uint32_t size) {
+        w32(o, rva + at);
+        w32(o + 4, size);
+    };
+    data(0x088, 0x0f4, 42);
+    data(0x098, 0x0c8, 42);
+    data(0x0a8, 0x120, 4);
+    w16(0x0b8, 5);
+    const char *intro = "INTRO";
+    for (int i = 0; i < 5; ++i)
+        w16(0x0ba + 2 * i, (uint16_t)intro[i]);
+    auto table = [&](uint32_t o, const char *s3) {
+        // 16 counted strings; only #3 has text.
+        uint32_t at = o;
+        for (int i = 0; i < 16; ++i) {
+            uint16_t n = i == 3 ? (uint16_t)strlen(s3) : 0;
+            w16(at, n);
+            at += 2;
+            for (uint16_t k = 0; k < n; ++k, at += 2)
+                w16(at, (uint16_t)s3[k]);
+        }
+    };
+    table(0x0c8, "Hello");
+    table(0x0f4, "Hallo");
+    memcpy(&b[0x120], "film", 4);
+    return b;
+}
 
 } // namespace pe
 
@@ -382,6 +442,7 @@ static Config build_world() {
     beta.name = "beta.dll";
     beta.exports = {{"BetaFn", 0x1020}};
     beta.pointer(0x1100, 0x1020);
+    beta.rsrc = pe::resource_blob(pe::RSRC); // data entries hold RVAs
     // gamma and delta are loaded only by LoadLibrary; gamma imports both
     // beta (already loaded) and delta (not yet); delta has static TLS.
     pe::Image gamma;
@@ -605,6 +666,79 @@ static void test_dynamic_load(X86 *c) {
 
 // gamma and delta importing each other: the cycle attaches once, in
 // discovery order, and every reference taken is the one given back.
+// ---------------------------------------------------------------------------
+// Resources of a mapped DLL: the kernel32 resource functions take the module
+// handle, as a game's resource-only language DLL needs.
+// ---------------------------------------------------------------------------
+static std::vector<std::string> g_res_names;
+static std::vector<uint32_t> g_res_langs;
+static uint32_t g_res_module = 0;
+static void res_names_cb(X86 *c) {
+    g_res_module = arg(c, 0);
+    uint32_t name = arg(c, 2);
+    g_res_names.push_back(name <= 0xffff ? "#" + std::to_string(name) : gm_str(name, 64));
+    set_eax(c, 1);
+}
+static void res_langs_cb(X86 *c) {
+    g_res_langs.push_back(arg(c, 3));
+    set_eax(c, 1);
+}
+
+static void test_module_resources(X86 *c) {
+    section("resources of a mapped DLL (FindResource, EnumResource*, LoadString's lookup)");
+    const uint32_t beta = 0x10000000;
+    check(call_import(c, "KERNEL32.dll", "GetUserDefaultLangID", {}) == 0x409 &&
+              call_import(c, "KERNEL32.dll", "GetSystemDefaultLangID", {}) == 0x409,
+          "the user's and the system's language are US English");
+    const uint32_t entry = call_import(c, "KERNEL32.dll", "FindResourceA", {beta, 1, 6});
+    const uint32_t size = call_import(c, "KERNEL32.dll", "SizeofResource", {beta, entry});
+    const uint32_t data = call_import(c, "KERNEL32.dll", "LoadResource", {beta, entry});
+    check(entry && size == 42 && data == beta + pe::RSRC + 0x0c8,
+          "FindResourceA(beta, 1, RT_STRING) finds the US English table in beta (%08x, %u bytes)",
+          data, size);
+    const uint32_t de = call_import(c, "KERNEL32.dll", "FindResourceExA", {beta, 6, 1, 0x407});
+    check(de &&
+              call_import(c, "KERNEL32.dll", "LoadResource", {beta, de}) == beta + pe::RSRC + 0x0f4,
+          "FindResourceExA(beta, RT_STRING, 1, de-DE) finds the German table");
+    const uint32_t intro =
+        call_import(c, "KERNEL32.dll", "FindResourceA", {beta, guest_str("intro"), 10});
+    const uint32_t intro_data = call_import(c, "KERNEL32.dll", "LoadResource", {beta, intro});
+    check(intro && intro_data && !memcmp(g_mem + intro_data, "film", 4),
+          "FindResourceA by ANSI name, case-insensitively: \"intro\" is INTRO");
+    check(call_import(c, "KERNEL32.dll", "FindResourceA",
+                      {beta, guest_str("#1"), guest_str("#6")}) == entry,
+          "\"#1\" and \"#6\" are the integer identifiers");
+    set_last_error(0);
+    check(call_import(c, "KERNEL32.dll", "FindResourceA", {0x12340000, 1, 6}) == 0 &&
+              call_import(c, "KERNEL32.dll", "GetLastError", {}) == 1812,
+          "a handle that is no module finds nothing (ERROR_RESOURCE_DATA_NOT_FOUND)");
+
+    const uint32_t names = imports_alloc_trampoline("test", "res_names_cb", res_names_cb, 4);
+    const uint32_t langs = imports_alloc_trampoline("test", "res_langs_cb", res_langs_cb, 5);
+    g_res_names.clear();
+    check(call_import(c, "KERNEL32.dll", "EnumResourceNamesA", {beta, 10, names, 0}) == 1 &&
+              g_res_names == std::vector<std::string>{"INTRO"} && g_res_module == beta,
+          "EnumResourceNamesA hands a string name over as ANSI, with the module");
+    g_res_names.clear();
+    check(call_import(c, "KERNEL32.dll", "EnumResourceNamesA", {beta, 6, names, 0}) == 1 &&
+              g_res_names == std::vector<std::string>{"#1"},
+          "...and an integer name as itself");
+    set_last_error(0);
+    check(call_import(c, "KERNEL32.dll", "EnumResourceNamesA", {beta, 3, names, 0}) == 0 &&
+              call_import(c, "KERNEL32.dll", "GetLastError", {}) == 1813,
+          "a type the module lacks is ERROR_RESOURCE_TYPE_NOT_FOUND");
+    g_res_langs.clear();
+    check(call_import(c, "KERNEL32.dll", "EnumResourceLanguagesA", {beta, 6, 1, langs, 0}) == 1 &&
+              g_res_langs == std::vector<uint32_t>{0x407, 0x409},
+          "EnumResourceLanguagesA lists both languages in directory order");
+
+    std::u16string s;
+    check(resource_string_in(beta, 3, &s) && s == u"Hello", "string 3 in the user's language");
+    check(resource_string_in(beta, 3, &s, 0x407) && s == u"Hallo", "string 3 in German");
+    check(resource_string_in(beta, 4, &s) && s.empty(), "string 4 exists and is empty");
+    check(!resource_string_in(beta, 0x20, &s), "string 0x20 is in a block the module lacks");
+}
+
 static void test_import_cycle(Config &cfg) {
     section("an import cycle");
     const std::string saved = g_dir;
@@ -986,6 +1120,7 @@ int main(int argc, char **argv) {
     X86 *c = loader_context();
     test_static_attach(c);
     test_dynamic_load(c);
+    test_module_resources(c);
     test_heap_growth(cfg);
     test_exact_ranges(cfg);
     test_import_cycle(cfg);

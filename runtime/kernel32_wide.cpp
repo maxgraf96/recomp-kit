@@ -832,27 +832,71 @@ void k_WaitForMultipleObjectsEx(X86 *c) {
     wait_multiple_objects(c);
 }
 
+// A module handle the resource functions accept: 0 or the image base for the
+// executable, or the base of any mapped DLL - a resource-only one such as a
+// game's language DLL included.
 bool resource_module(uint32_t module) {
-    if (!module || module == loader_image_base())
+    if (!module || module == loader_image_base() || loader_module_at_base(module))
         return true;
-    set_last_error(1812);
+    set_last_error(1812); // ERROR_RESOURCE_DATA_NOT_FOUND
     return false;
 }
-void k_FindResourceW(X86 *c) {
-    if (!resource_module(arg(c, 0))) {
+// The language FindResource and LoadString look for, as Windows picks it for a
+// thread that never called SetThreadUILanguage: the user's UI language.
+const uint32_t kUserLanguage = RESOURCE_USER_LANGID; // en-US
+// An ANSI resource identifier: an integer ID stays one; "#123" and names are
+// rewritten as the UTF-16 the shared reader takes, in a temporary guest buffer.
+struct AnsiResourceId {
+    uint32_t value = 0, temporary = 0;
+    explicit AnsiResourceId(uint32_t p) {
+        value = p;
+        if (p > 0xffff && gm_valid(p, 1)) {
+            std::string s = gm_str(p, 256);
+            uint32_t cap = (uint32_t)s.size() + 1;
+            temporary = heap_alloc(cap * 2, true);
+            if (temporary) {
+                for (uint32_t i = 0; i < cap; ++i)
+                    wr16(temporary + 2 * i, (uint8_t)s.c_str()[i]);
+                value = temporary;
+            }
+        }
+    }
+    ~AnsiResourceId() {
+        if (temporary)
+            heap_free(temporary);
+    }
+};
+void find_resource(X86 *c, uint32_t module, uint32_t type, uint32_t name, uint32_t language) {
+    if (!resource_module(module)) {
         set_eax(c, 0);
         return;
     }
     std::string why;
-    uint32_t entry = resource_find(arg(c, 2), arg(c, 1), &why);
+    uint32_t entry = resource_find_in(module, type, name, language, &why);
     if (!entry) {
-        set_last_error(1814);
-        LOGV("FindResourceW: %s", why.c_str());
+        set_last_error(1814); // ERROR_RESOURCE_NAME_NOT_FOUND
+        LOGV("FindResource: %s", why.c_str());
     }
     set_eax(c, entry);
 }
+void k_FindResourceW(X86 *c) {
+    find_resource(c, arg(c, 0), arg(c, 2), arg(c, 1), RESOURCE_LOADER_LANGUAGE);
+}
+void k_FindResourceA(X86 *c) {
+    AnsiResourceId name(arg(c, 1)), type(arg(c, 2));
+    find_resource(c, arg(c, 0), type.value, name.value, RESOURCE_LOADER_LANGUAGE);
+}
+// FindResourceEx takes (module, type, name, language): type before name.
+void k_FindResourceExW(X86 *c) {
+    find_resource(c, arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3) & 0xffff);
+}
+void k_FindResourceExA(X86 *c) {
+    AnsiResourceId type(arg(c, 1)), name(arg(c, 2));
+    find_resource(c, arg(c, 0), type.value, name.value, arg(c, 3) & 0xffff);
+}
 void k_LoadResource(X86 *c) {
-    uint32_t data = resource_module(arg(c, 0)) ? resource_data(arg(c, 1), nullptr) : 0;
+    uint32_t data =
+        resource_module(arg(c, 0)) ? resource_data_in(arg(c, 0), arg(c, 1), nullptr) : 0;
     if (!data)
         set_last_error(1812);
     set_eax(c, data);
@@ -862,32 +906,42 @@ void k_LockResource(X86 *c) {
 }
 void k_SizeofResource(X86 *c) {
     uint32_t size = 0;
-    if (!resource_module(arg(c, 0)) || !resource_data(arg(c, 1), &size))
+    if (!resource_module(arg(c, 0)) || !resource_data_in(arg(c, 0), arg(c, 1), &size))
         set_last_error(1812);
     set_eax(c, size);
 }
 void k_FreeResource(X86 *c) {
     set_eax(c, 0);
 } // PE resources remain image-backed.
-void k_EnumResourceNamesW(X86 *c) {
+// EnumResourceNames(module, type, callback, param): the callback gets
+// (module, type, name, param) for each name of the type, an integer ID as
+// itself and a string name as a temporary NUL-terminated copy in the caller's
+// encoding; a zero return stops the walk. Nothing of the type is
+// ERROR_RESOURCE_TYPE_NOT_FOUND.
+void enum_resource_names(X86 *c, bool wide) {
     uint32_t module = arg(c, 0), type = arg(c, 1), callback = arg(c, 2), param = arg(c, 3);
     std::vector<ResourceName> names;
-    if (!callback || !resource_module(module) || !resource_names(type, &names)) {
-        set_last_error(1814);
+    AnsiResourceId ansi_type(wide ? 0 : type);
+    uint32_t lookup = wide ? type : ansi_type.value;
+    if (!callback || !resource_module(module) || !resource_names_in(module, lookup, &names)) {
+        set_last_error(1813); // ERROR_RESOURCE_TYPE_NOT_FOUND
         set_eax(c, 0);
         return;
     }
     for (const auto &name : names) {
         uint32_t guest_name = name.id, temporary = 0;
         if (name.is_string) {
-            uint32_t cap = wide_units(name.name) + 1;
-            temporary = heap_alloc(cap * 2, true);
+            uint32_t cap = wide ? wide_units(name.name) + 1 : (uint32_t)name.name.size() + 1;
+            temporary = heap_alloc(wide ? cap * 2 : cap, true);
             if (!temporary) {
                 set_last_error(8);
                 set_eax(c, 0);
                 return;
             }
-            gm_put_wstr(temporary, name.name, cap);
+            if (wide)
+                gm_put_wstr(temporary, name.name, cap);
+            else
+                gm_put_str(temporary, name.name.c_str(), cap);
             guest_name = temporary;
         }
         uint32_t keep_going = guest_call(c, callback, module, type, guest_name, param);
@@ -898,14 +952,61 @@ void k_EnumResourceNamesW(X86 *c) {
     }
     set_eax(c, 1);
 }
+void k_EnumResourceNamesW(X86 *c) {
+    enum_resource_names(c, true);
+}
+void k_EnumResourceNamesA(X86 *c) {
+    enum_resource_names(c, false);
+}
+// EnumResourceLanguages(module, type, name, callback, param): the callback gets
+// (module, type, name, language, param) for each language the resource exists
+// in; a zero return stops the walk.
+void enum_resource_languages(X86 *c, bool wide) {
+    uint32_t module = arg(c, 0), type = arg(c, 1), name = arg(c, 2);
+    uint32_t callback = arg(c, 3), param = arg(c, 4);
+    AnsiResourceId ansi_type(wide ? 0 : type), ansi_name(wide ? 0 : name);
+    std::vector<uint32_t> languages;
+    if (!callback || !resource_module(module) ||
+        !resource_languages_in(module, wide ? type : ansi_type.value, wide ? name : ansi_name.value,
+                               &languages)) {
+        set_last_error(1814);
+        set_eax(c, 0);
+        return;
+    }
+    for (uint32_t language : languages) {
+        const uint32_t args[5] = {module, type, name, language, param};
+        if (!guest_call(c, callback, args, 5))
+            break;
+    }
+    set_eax(c, 1);
+}
+void k_EnumResourceLanguagesW(X86 *c) {
+    enum_resource_languages(c, true);
+}
+void k_EnumResourceLanguagesA(X86 *c) {
+    enum_resource_languages(c, false);
+}
+// The user's and the system's language: one answer, kUserLanguage (the UI
+// language functions are above).
+void k_GetUserDefaultLangID(X86 *c) {
+    set_eax(c, kUserLanguage);
+}
 
 static const ImportShim g_kernel32_wide[] = {
     {"KERNEL32.dll", "FindResourceW", 3, k_FindResourceW},
+    {"KERNEL32.dll", "FindResourceA", 3, k_FindResourceA},
+    {"KERNEL32.dll", "FindResourceExW", 4, k_FindResourceExW},
+    {"KERNEL32.dll", "FindResourceExA", 4, k_FindResourceExA},
     {"KERNEL32.dll", "LoadResource", 2, k_LoadResource},
     {"KERNEL32.dll", "LockResource", 1, k_LockResource},
     {"KERNEL32.dll", "SizeofResource", 2, k_SizeofResource},
     {"KERNEL32.dll", "FreeResource", 1, k_FreeResource},
     {"KERNEL32.dll", "EnumResourceNamesW", 4, k_EnumResourceNamesW},
+    {"KERNEL32.dll", "EnumResourceNamesA", 4, k_EnumResourceNamesA},
+    {"KERNEL32.dll", "EnumResourceLanguagesW", 5, k_EnumResourceLanguagesW},
+    {"KERNEL32.dll", "EnumResourceLanguagesA", 5, k_EnumResourceLanguagesA},
+    {"KERNEL32.dll", "GetUserDefaultLangID", 0, k_GetUserDefaultLangID},
+    {"KERNEL32.dll", "GetSystemDefaultLangID", 0, k_GetUserDefaultLangID},
 
     {"KERNEL32.dll", "GetCommandLineW", 0, k_GetCommandLineW},
     {"KERNEL32.dll", "GetStartupInfoW", 1, k_GetStartupInfoW},

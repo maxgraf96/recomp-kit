@@ -24,14 +24,15 @@ struct Directory {
     bool relative(uint32_t offset, uint32_t bytes) const {
         return offset <= size && bytes <= size - offset;
     }
-    uint32_t module = 0; // 0: the executable
-    bool open() {
+    // `module` is a module handle: 0 or the image base for the executable,
+    // otherwise the base of a mapped DLL (a resource-only DLL included).
+    bool open(uint32_t module = 0) {
         image = loader_image_base();
         image_size = loader_image_size();
         if (module && module != image) {
             const LoaderModule *m = loader_module_at_base(module);
             if (!m)
-                return fail(why, "no module is loaded at that handle");
+                return fail(why, "not a loaded module");
             image = m->base;
             image_size = m->size;
         }
@@ -150,15 +151,11 @@ bool identifier(uint32_t p, ResourceName &out, std::string *why) {
 }
 } // namespace
 
-uint32_t resource_find(uint32_t type_id_or_name, uint32_t name_id_or_name, std::string *why) {
-    return resource_find_in(0, type_id_or_name, name_id_or_name, why);
-}
 uint32_t resource_find_in(uint32_t module, uint32_t type_id_or_name, uint32_t name_id_or_name,
-                          std::string *why) {
+                          uint32_t language, std::string *why) {
     Directory dir(why);
-    dir.module = module;
     ResourceName type, name;
-    if (!dir.open() || !identifier(type_id_or_name, type, why) ||
+    if (!dir.open(module) || !identifier(type_id_or_name, type, why) ||
         !identifier(name_id_or_name, name, why))
         return 0;
     uint32_t type_dir, name_dir, first, count;
@@ -169,7 +166,32 @@ uint32_t resource_find_in(uint32_t module, uint32_t type_id_or_name, uint32_t na
         fail(why, "resource has no language entry");
         return 0;
     }
-    uint32_t data_offset = rd32(first + 4);
+    // Which language. FindResourceEx's: the one asked for, else a neutral one,
+    // else the first. The loader's own (FindResource, LoadString): a neutral
+    // entry, else the user's language, else one of its primary language, else
+    // the first. RESOURCE_ANY_LANGUAGE: the first.
+    uint32_t pick = first;
+    if (language != RESOURCE_ANY_LANGUAGE) {
+        const bool loader = language == RESOURCE_LOADER_LANGUAGE;
+        const uint32_t want = loader ? RESOURCE_USER_LANGID : language;
+        uint32_t neutral = 0, exact = 0, primary = 0;
+        for (uint32_t i = 0; i < count; ++i) {
+            uint32_t id = rd32(first + i * 8);
+            if (id & 0x80000000u)
+                continue;
+            if (id == want && !exact)
+                exact = first + i * 8;
+            if ((id & 0x3ff) == 0 && !neutral)
+                neutral = first + i * 8;
+            if ((id & 0x3ff) == (want & 0x3ff) && !primary)
+                primary = first + i * 8;
+        }
+        if (loader)
+            pick = neutral ? neutral : exact ? exact : primary ? primary : first;
+        else
+            pick = exact ? exact : neutral ? neutral : first;
+    }
+    uint32_t data_offset = rd32(pick + 4);
     if ((data_offset & 0x80000000u) || !dir.relative(data_offset, 16)) {
         fail(why, "invalid resource language data entry");
         return 0;
@@ -177,25 +199,28 @@ uint32_t resource_find_in(uint32_t module, uint32_t type_id_or_name, uint32_t na
     uint32_t entry = dir.root + data_offset;
     return dir.data(entry, nullptr) ? entry : 0;
 }
-uint32_t resource_data(uint32_t entry, uint32_t *size, std::string *why) {
-    return resource_data_in(0, entry, size, why);
+uint32_t resource_find(uint32_t type_id_or_name, uint32_t name_id_or_name, std::string *why) {
+    return resource_find_in(0, type_id_or_name, name_id_or_name, RESOURCE_LOADER_LANGUAGE, why);
 }
 uint32_t resource_data_in(uint32_t module, uint32_t entry, uint32_t *size, std::string *why) {
     if (size)
         *size = 0;
     Directory dir(why);
-    dir.module = module;
-    return dir.open() ? dir.data(entry, size) : 0;
+    return dir.open(module) ? dir.data(entry, size) : 0;
 }
-bool resource_names(uint32_t type_id_or_name, std::vector<ResourceName> *names, std::string *why) {
+uint32_t resource_data(uint32_t entry, uint32_t *size, std::string *why) {
+    return resource_data_in(0, entry, size, why);
+}
+bool resource_names_in(uint32_t module, uint32_t type_id_or_name, std::vector<ResourceName> *names,
+                       std::string *why) {
     if (!names)
         return fail(why, "missing resource-name output");
     names->clear();
     Directory dir(why);
     ResourceName type;
     uint32_t type_dir, first, count;
-    if (!dir.open() || !identifier(type_id_or_name, type, why) || !dir.child(0, type, type_dir) ||
-        !dir.entries(type_dir, first, count))
+    if (!dir.open(module) || !identifier(type_id_or_name, type, why) ||
+        !dir.child(0, type, type_dir) || !dir.entries(type_dir, first, count))
         return false;
     for (uint32_t i = 0; i < count; ++i) {
         ResourceName name;
@@ -206,4 +231,53 @@ bool resource_names(uint32_t type_id_or_name, std::vector<ResourceName> *names, 
         names->push_back(name);
     }
     return true;
+}
+bool resource_names(uint32_t type_id_or_name, std::vector<ResourceName> *names, std::string *why) {
+    return resource_names_in(0, type_id_or_name, names, why);
+}
+bool resource_languages_in(uint32_t module, uint32_t type_id_or_name, uint32_t name_id_or_name,
+                           std::vector<uint32_t> *languages, std::string *why) {
+    if (!languages)
+        return fail(why, "missing resource-language output");
+    languages->clear();
+    Directory dir(why);
+    ResourceName type, name;
+    uint32_t type_dir, name_dir, first, count;
+    if (!dir.open(module) || !identifier(type_id_or_name, type, why) ||
+        !identifier(name_id_or_name, name, why) || !dir.child(0, type, type_dir) ||
+        !dir.child(type_dir, name, name_dir) || !dir.entries(name_dir, first, count))
+        return false;
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t id = rd32(first + i * 8);
+        if (!(id & 0x80000000u))
+            languages->push_back(id & 0xffff);
+    }
+    return true;
+}
+bool resource_string_in(uint32_t module, uint32_t id, std::u16string *out, uint32_t language) {
+    if (!out)
+        return false;
+    out->clear();
+    id &= 0xffff;
+    uint32_t bytes = 0;
+    uint32_t p =
+        resource_data_in(module, resource_find_in(module, 6, (id >> 4) + 1, language), &bytes);
+    if (!p)
+        return false;
+    uint32_t end = p + bytes;
+    for (uint32_t i = 0; i < 16; ++i) {
+        if (end - p < 2)
+            return false;
+        uint32_t n = rd16(p);
+        p += 2;
+        if (n > (end - p) / 2)
+            return false;
+        if (i == (id & 15)) {
+            for (uint32_t k = 0; k < n; ++k)
+                out->push_back((char16_t)rd16(p + 2 * k));
+            return true;
+        }
+        p += n * 2;
+    }
+    return false;
 }
