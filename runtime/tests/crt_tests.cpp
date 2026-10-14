@@ -722,6 +722,67 @@ static void test_math() {
     fpush(&g_cpu, 1e30);
     ms("_ftol", {});
     check(g_cpu.r[R_EAX] == 0 && g_cpu.r[R_EDX] == 0x80000000u, "_ftol out of range");
+    // An extended ST(0): every bit of 2^60 + 1, which no double holds, and
+    // the chop RC only for the duration.
+    {
+        uint32_t m = gbuf(8);
+        wr32(m, 1);
+        wr32(m + 4, 0x10000000u);
+        x87_fild64(&g_cpu, (int64_t)rd64(m));
+        ms("_ftol", {});
+        check(g_cpu.r[R_EAX] == 1 && g_cpu.r[R_EDX] == 0x10000000u && g_cpu.fpu_cw == 0x027f &&
+                  g_cpu.ext_live == 0,
+              "_ftol takes an extended ST(0) whole and restores the control word");
+    }
+    // sqrt follows PC=64 too: the root of 2 to 64 bits is an extended value.
+    g_cpu.fpu_cw = 0x037f;
+    {
+        std::vector<uint32_t> a;
+        push_double(a, 2.0);
+        ms("sqrt", a);
+        check(g_cpu.ext_live == 1 && g_cpu.stx[g_cpu.fpu_top].signif == 0xb504f333f9de6484ull,
+              "sqrt at PC=64 leaves the 64-bit root in ST(0)");
+        fdrop(&g_cpu);
+    }
+    g_cpu.fpu_cw = 0x027f;
+}
+
+// ---------------------------------------------------------------------------
+// Floating-point control: _controlfp and friends on the thread's x87 state.
+// ---------------------------------------------------------------------------
+static void test_float_control() {
+    printf("float control\n");
+    reset_world();
+    x87_set_cw(&g_cpu, 0x027f);
+    check(ms("_controlfp", {0, 0}) == 0x9001fu, "0x027f reads as _PC_53 | _EM_ALL: 0x9001f");
+    check(ms("_controlfp", {0x20000u, 0x30000u}) == 0xa001fu && g_cpu.fpu_cw == 0x007f,
+          "_controlfp(_PC_24, _MCW_PC) sets the render thread's 0x007f");
+    check(x87_mode(&g_cpu) == X87_MODE_PC24, "and PC=24 arithmetic follows it");
+    check(ms("_controlfp", {0x300u, 0x300u}) == 0xa031fu && g_cpu.fpu_cw == 0x0c7f,
+          "_RC_CHOP sets RC");
+    check(ms("_controlfp", {0, 0x80000u}) == 0xa031fu && g_cpu.fpu_cw == 0x0c7f,
+          "_controlfp leaves the denormal mask alone");
+    check(ms("_control87", {0, 0x80000u}) == 0x2031fu && g_cpu.fpu_cw == 0x0c7d,
+          "_control87 unmasks it");
+    uint32_t words = gbuf(8);
+    check(ms("__control87_2", {0x9001fu, 0xffffffffu, words, words + 4}) == 1 &&
+              rd32(words) == 0x9001fu && rd32(words + 4) == 0x8001fu && g_cpu.fpu_cw == 0x027f,
+          "__control87_2 sets the x87 word and reports both");
+    // Status: an invalid operation and a zero divide, then _clearfp.
+    fpush(&g_cpu, 0.0);
+    x87_arith_m(&g_cpu, X87_DIV, 0.0);
+    fpush(&g_cpu, 1.0);
+    x87_arith_m(&g_cpu, X87_DIV, 0.0);
+    fdrop(&g_cpu);
+    fdrop(&g_cpu);
+    check((ms("_statusfp", {}) & 0x18u) == 0x18u, "_statusfp: _SW_INVALID | _SW_ZERODIVIDE");
+    check((ms("_clearfp", {}) & 0x18u) == 0x18u && ms("_statusfp", {}) == 0,
+          "_clearfp reports, then clears");
+    x87_set_cw(&g_cpu, 0x0f7f);
+    fpush(&g_cpu, 1.0);
+    ms("_fpreset", {});
+    check(g_cpu.fpu_cw == 0x027f && g_cpu.fpu_tag == 0xffff && g_cpu.fpu_top == 0,
+          "_fpreset: FNINIT, then the CRT's default 0x027f");
 }
 
 // ---------------------------------------------------------------------------
@@ -1126,10 +1187,13 @@ static void test_registration() {
     printf("registration\n");
     reset_world();
     const char *elsewhere[] = {"_CxxThrowException", "__CxxFrameHandler", "__CxxLongjmpUnwind",
-                               "_except_handler3",   "_setjmp3",          "longjmp",
-                               "_controlfp"};
+                               "_except_handler3",   "_setjmp3",          "longjmp"};
     for (const char *n : elsewhere)
         check(imports_resolve("msvcrt.dll", n) == 0, "%s is left to its own layer", n);
+    // The float-control entry points: the x87 layer's, registered with msvcrt.
+    for (const char *n :
+         {"_controlfp", "_control87", "__control87_2", "_statusfp", "_clearfp", "_fpreset"})
+        check(imports_resolve("msvcrt.dll", n) != 0, "%s is registered", n);
     for (const char *n : {"malloc", "sprintf", "??2@YAPAXI@Z", "__RTDynamicCast", "_CIpow"})
         check(imports_argc(imports_resolve("MSVCRT.dll", n)) == ARGC_CDECL, "%s is cdecl", n);
 }
@@ -1569,6 +1633,7 @@ int main(int argc, char **argv) {
     test_printf();
     test_parsing();
     test_math();
+    test_float_control();
     test_rand();
     test_startup();
     test_stdio();

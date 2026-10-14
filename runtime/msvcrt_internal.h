@@ -200,6 +200,7 @@ void register_string();
 void register_format();
 void register_stdio();
 void register_math();
+void register_float();
 void register_time();
 void register_process();
 

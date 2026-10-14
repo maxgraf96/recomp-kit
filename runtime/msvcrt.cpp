@@ -722,6 +722,7 @@ void msvcrt_register() {
     crt::register_format();
     crt::register_stdio();
     crt::register_math();
+    crt::register_float();
     crt::register_time();
     crt::register_process();
 }

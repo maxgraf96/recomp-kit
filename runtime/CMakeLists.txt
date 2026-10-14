@@ -6,7 +6,7 @@ set(POP_RUNTIME_SOURCES
   misc.cpp misc_dlls.cpp comctl32.cpp gdi32.cpp gdi32_draw.cpp gdi32_text.cpp gdi32_truetype.cpp msimg32.cpp
   media_foundation.cpp layout.cpp interp.cpp discovery.cpp dispatch.cpp
   msvcrt.cpp msvcrt_heap.cpp msvcrt_locale.cpp msvcrt_string.cpp msvcrt_format.cpp msvcrt_stdio.cpp
-  msvcrt_math.cpp msvcrt_time.cpp msvcp60.cpp
+  msvcrt_math.cpp msvcrt_float.cpp msvcrt_time.cpp msvcp60.cpp
   x87.c ${POP_ROOT}/third_party/softfloat/softfloat_x87.c)
 
 # The exact x87's out-of-line half and the part of SoftFloat 3e it uses

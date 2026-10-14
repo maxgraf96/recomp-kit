@@ -6,10 +6,11 @@
 // truncates ST(0) to EDX:EAX and pops it.
 //
 // sqrt (and _CIsqrt) run as x87 FSQRT in msvcrt, so their result follows the
-// caller's precision control: IEEE double at PC=53 and a 24-bit significand
-// with the extended exponent range at PC=24. That is computed exactly here,
-// including the double-rounding case. The remaining functions use the host's
-// libm; on Windows they are msvcrt's own SSE2 or x87 code, not guaranteed
+// caller's control word: IEEE double at PC=53, a 24-bit significand with the
+// extended exponent range at PC=24, 64 bits at PC=64, rounded per RC. They run
+// the x87 layer's own FSQRT (runtime/x86.h), exact for all of these. _ftol is
+// its FISTP m64 under a truncating control word. The remaining functions use
+// the host's libm; on Windows they are msvcrt's own SSE2 or x87 code, not guaranteed
 // correctly rounded, so they can differ in the last bit. None feeds a
 // simulation in the programs this kit serves today; the Windows vectors in
 // the game repository measure them.
@@ -18,8 +19,7 @@
 // payload zero), which is what msvcrt hands back for sqrt(-1) or log(-1),
 // not the host's positive default NaN, and set errno to EDOM.
 //
-// _controlfp and the other control-word functions belong to the x87 layer,
-// not to this file.
+// _controlfp and the other control-word functions are msvcrt_float.cpp.
 #include "msvcrt_internal.h"
 #include <cfenv>
 #include <cmath>
@@ -43,47 +43,6 @@ double quiet(double v) {
     return v;
 }
 
-// Rounds a positive double to `bits` significant bits, ties to even,
-// keeping the double's exponent range (the x87 keeps 15 exponent bits).
-double round_significand(double v, int bits) {
-    int e;
-    double m = std::frexp(v, &e); // v = m * 2^e, 0.5 <= m < 1
-    double scaled = std::ldexp(m, bits);
-    return std::ldexp(std::nearbyint(scaled), e - bits);
-}
-
-// sqrt as FSQRT computes it under the precision-control field of `cw`.
-double x87_sqrt(double x, uint16_t cw) {
-    if (std::isnan(x)) {
-        set_errno(E_DOM); // msvcrt reports a NaN operand as a domain error
-        return quiet(x);
-    }
-    if (x < 0) {
-        set_errno(E_DOM);
-        return indefinite();
-    }
-    double r = std::sqrt(x); // correctly rounded to 53 bits
-    if (((cw >> 8) & 3u) != 0 || r == 0 || std::isinf(r))
-        return r; // PC=53 (and PC=64, which a double register cannot hold)
-    // PC=24. Rounding the 53-bit result again is wrong only when the 29
-    // discarded bits are exactly a midpoint; then the exact square of the
-    // midpoint (25 bits squared fits a double) says which way the true root
-    // lies.
-    int e;
-    double m = std::frexp(r, &e);
-    double scaled = std::ldexp(m, 24);
-    double floor_part = std::floor(scaled);
-    if (scaled - floor_part != 0.5)
-        return round_significand(r, 24);
-    double mid = std::ldexp(floor_part + 0.5, e - 24);
-    double sq = mid * mid;
-    if (x > sq)
-        return std::ldexp(floor_part + 1, e - 24);
-    if (x < sq)
-        return std::ldexp(floor_part, e - 24);
-    return round_significand(r, 24); // an exact tie: even
-}
-
 // A double argument as msvcrt sees it: its x87 code loads the argument with
 // FLD, which turns a signalling NaN into the quiet one.
 double stack_double(X86 *c, int slot) {
@@ -91,8 +50,18 @@ double stack_double(X86 *c, int slot) {
     return std::isnan(v) ? quiet(v) : v;
 }
 
+// msvcrt reports a NaN or negative operand as a domain error; FSQRT gives
+// the quiet NaN or the indefinite.
+void sqrt_errno(double x) {
+    if (std::isnan(x) || x < 0)
+        set_errno(E_DOM);
+}
+
 void crt_sqrt(X86 *c) {
-    fpush(c, x87_sqrt(stack_double(c, 0), c->fpu_cw));
+    double x = stack_double(c, 0);
+    sqrt_errno(x);
+    fpush(c, x);
+    x87_fsqrt(c);
 }
 void crt_fabs(X86 *c) {
     fpush(c, std::fabs(stack_double(c, 0)));
@@ -167,9 +136,10 @@ void ci_unary(X86 *c, double (*fn)(double)) {
     double x = fpop(c);
     fpush(c, fn(x));
 }
+// In place: ST(0) may hold more than a double, and FSQRT takes all of it.
 void crt_CIsqrt(X86 *c) {
-    double x = fpop(c);
-    fpush(c, x87_sqrt(x, c->fpu_cw));
+    sqrt_errno(ST(c, 0));
+    x87_fsqrt(c);
 }
 void crt_CIsin(X86 *c) {
     ci_unary(c, [](double x) { return crt_trig(x, [](double v) { return std::sin(v); }); });
@@ -209,14 +179,14 @@ void crt_CIatan2(X86 *c) {
 
 // _ftol: ST(0) truncated toward zero into EDX:EAX, popped. Out of range and
 // NaN give the integer indefinite, 0x8000000000000000, as FISTP m64 does.
+// msvcrt's own code: FNSTCW, FLDCW with RC = chop, FISTP m64, FLDCW. ST(0)
+// may hold more than a double, and FISTP takes all of it.
 void crt_ftol(X86 *c) {
-    double x = fpop(c);
-    uint64_t v;
-    if (std::isnan(x) || x >= 9223372036854775808.0 || x < -9223372036854775808.0)
-        v = 0x8000000000000000ull;
-    else
-        v = (uint64_t)(int64_t)std::trunc(x);
-    set_eax64(c, v);
+    uint16_t cw = c->fpu_cw;
+    x87_set_cw(c, (uint16_t)(cw | 0x0c00u));
+    set_eax64(c, (uint64_t)x87_fist64(c));
+    x87_set_cw(c, cw);
+    fdrop(c);
 }
 
 const ImportShim shims[] = {
