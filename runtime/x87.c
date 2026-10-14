@@ -61,6 +61,13 @@ static X87Ext from_sf(extFloat80_t v) {
 
 static const X87Ext X80_INDEFINITE = {UINT64_C(0xc000000000000000), 0xffffu};
 
+/* The calling thread's counts (x87_stats in x86.h). */
+static _Thread_local X87Stats stats;
+
+X87Stats *x87_stats(void) {
+    return &stats;
+}
+
 /* ---------------------------------------------------------- classes --- */
 
 /* Operand classes, ordered so that everything from XC_QNAN up makes an
@@ -186,7 +193,11 @@ static void reg_put(X86 *c, unsigned phys, X87Ext v) {
         ftag_put(c, phys, ftag_classify(d));
         return;
     }
+    if (!c->st_kind[phys])
+        stats.ext_created++;
     x87_kind_set(c, phys, v);
+    if (c->ext_live > stats.ext_live_max)
+        stats.ext_live_max = c->ext_live;
     c->st[phys] = x80_round_f64(v);
     ftag_put(c, phys, x80_tag(v));
 }
@@ -226,9 +237,11 @@ static void host_env_restore(void) {
 
 static _Thread_local int env_checked;
 
-/* Every out-of-line entry: check the host environment once per thread. */
-static void x87_enter(X86 *c) {
+/* Every out-of-line entry: count it, and check the host environment once
+ * per thread. */
+static void x87_enter(X86 *c, unsigned kind) {
     (void)c;
+    stats.count[kind]++;
     if (RECOMP_UNLIKELY(!env_checked)) {
         env_checked = 1;
         if (!x87_host_env_ok()) {
@@ -413,9 +426,23 @@ static int pc24_settle(int op, double a, double b, double *out) {
     return 1;
 }
 
+/* The kind of an arithmetic entry: which path sent it out of line, and for
+ * the fast path's guard whether its result was a NaN (a NaN operand or an
+ * invalid operation) or out of range. */
+static void arith_enter(X86 *c, int op, double a, double b) {
+    unsigned mode = x87_mode(c), kind = X87_STAT_EXACT;
+    if (mode == X87_MODE_PC24) {
+        kind = X87_STAT_PC24;
+    } else if (mode == X87_MODE_FAST) {
+        double r = x87_host_op(op, a, b);
+        kind = r != r ? X87_STAT_GUARD_NAN : X87_STAT_GUARD_RANGE;
+    }
+    x87_enter(c, kind);
+}
+
 void x87_arith_slow_st(X86 *c, int op, unsigned pd, unsigned ps) {
     double r;
-    x87_enter(c);
+    arith_enter(c, op, c->st[pd], c->st[ps]);
     if (x87_mode(c) == X87_MODE_PC24 && pc24_settle(op, c->st[pd], c->st[ps], &r)) {
         c->st[pd] = r;
         ftag_put(c, pd, ftag_classify(r));
@@ -427,7 +454,7 @@ void x87_arith_slow_st(X86 *c, int op, unsigned pd, unsigned ps) {
 void x87_arith_slow_m(X86 *c, int op, double m) {
     unsigned p = top_slot(c, 0);
     double r;
-    x87_enter(c);
+    arith_enter(c, op, c->st[p], m);
     if (x87_mode(c) == X87_MODE_PC24 && pc24_settle(op, c->st[p], m, &r)) {
         c->st[p] = r;
         ftag_put(c, p, ftag_classify(r));
@@ -439,7 +466,7 @@ void x87_arith_slow_m(X86 *c, int op, double m) {
 void x87_fsqrt_slow(X86 *c) {
     unsigned p = top_slot(c, 0);
     double r;
-    x87_enter(c);
+    arith_enter(c, X87_SQRT, c->st[p], 0.0);
     if (x87_mode(c) == X87_MODE_PC24 && pc24_settle(X87_SQRT, c->st[p], 0.0, &r)) {
         c->st[p] = r;
         ftag_put(c, p, ftag_classify(r));
@@ -454,7 +481,7 @@ void x87_fsqrt_slow(X86 *c) {
 int64_t x87_fist_slow(X86 *c, unsigned bits) {
     int64_t lo = bits == 64 ? INT64_MIN : -(INT64_C(1) << (bits - 1));
     int64_t hi = bits == 64 ? INT64_MAX : (INT64_C(1) << (bits - 1)) - 1;
-    x87_enter(c);
+    x87_enter(c, X87_STAT_CONVERT);
     X87Ext v = reg_get(c, top_slot(c, 0));
     int cls = x80_class(v);
     if (cls >= XC_INF) {
@@ -476,7 +503,7 @@ int64_t x87_fist_slow(X86 *c, unsigned bits) {
 
 float x87_fst_f32_slow(X86 *c) {
     float f;
-    x87_enter(c);
+    x87_enter(c, X87_STAT_CONVERT);
     X87Ext v = reg_get(c, top_slot(c, 0));
     if (x80_class(v) == XC_UNSUPPORTED) {
         uint32_t indefinite = 0xffc00000u;
@@ -492,7 +519,7 @@ float x87_fst_f32_slow(X86 *c) {
 }
 
 double x87_fst_f64_slow(X86 *c) {
-    x87_enter(c);
+    x87_enter(c, X87_STAT_CONVERT);
     X87Ext v = reg_get(c, top_slot(c, 0));
     if (x80_class(v) == XC_UNSUPPORTED) {
         c->fpu_sw |= SW_IE;
@@ -510,6 +537,7 @@ double x87_fst_f64_slow(X86 *c) {
  * the indefinite, as x87's masked stack underflow does (IE, SF). */
 void x87_fst_f80(X86 *c, uint32_t a) {
     X87Ext v = reg_get(c, top_slot(c, 0));
+    stats.count[X87_STAT_OTHER]++;
     if (ftag_of(c, top_slot(c, 0)) == FTAG_EMPTY) {
         c->fpu_sw = (uint16_t)((c->fpu_sw & ~SW_C1) | SW_IE | 0x0040u);
         v = X80_INDEFINITE;
@@ -521,11 +549,13 @@ void x87_fst_f80(X86 *c, uint32_t a) {
 /* ------------------------------------------------------------ loads --- */
 
 void x87_fild64_slow(X86 *c, int64_t v) {
+    stats.count[X87_STAT_CONVERT]++;
     push_ext(c, from_sf(i64_to_extF80(v)));
 }
 
 /* FLD m80 is exact for every encoding, a signalling NaN included. */
 void x87_fld_f80(X86 *c, uint32_t a) {
+    stats.count[X87_STAT_OTHER]++;
     push_ext(c, x80(rd16(a + 8), rd64(a)));
 }
 
@@ -534,6 +564,7 @@ void x87_fld_f80(X86 *c, uint32_t a) {
  * one of the two directed results: `up` says which, and the up/down pair
  * differs in the last bit. FLD1 and FLDZ are exact and never come here. */
 void x87_fldconst(X86 *c, unsigned which) {
+    stats.count[X87_STAT_OTHER]++;
     static const struct {
         uint16_t signExp;
         uint64_t down; /* truncated */
@@ -589,6 +620,7 @@ static unsigned compare_cc(X86 *c, X87Ext a, X87Ext b, int quiet) {
 }
 
 void x87_fcom_slow(X86 *c, unsigned pb, double m, int mem, int quiet) {
+    stats.count[X87_STAT_COMPARE]++;
     X87Ext a = reg_get(c, top_slot(c, 0));
     X87Ext b = mem ? x80_from_f64(m) : reg_get(c, pb);
     unsigned cc = compare_cc(c, a, b, quiet);
@@ -596,6 +628,7 @@ void x87_fcom_slow(X86 *c, unsigned pb, double m, int mem, int quiet) {
 }
 
 void x87_fcomi_slow(X86 *c, unsigned pb, int quiet) {
+    stats.count[X87_STAT_COMPARE]++;
     unsigned cc = compare_cc(c, reg_get(c, top_slot(c, 0)), reg_get(c, pb), quiet);
     c->eflags_of = c->eflags_sf = c->eflags_af = 0;
     c->eflags_zf = (cc & SW_C3) != 0;
@@ -604,6 +637,7 @@ void x87_fcomi_slow(X86 *c, unsigned pb, int quiet) {
 }
 
 void x87_fxam_ext(X86 *c) {
+    stats.count[X87_STAT_COMPARE]++;
     X87Ext v = c->stx[top_slot(c, 0)];
     unsigned sw = c->fpu_sw & ~SW_CC;
     if (v.signExp & 0x8000u)
@@ -636,7 +670,7 @@ void x87_fxam_ext(X86 *c) {
 /* FRNDINT: round to an integer per RC; PC does not apply. */
 void x87_frndint(X86 *c) {
     unsigned p = top_slot(c, 0);
-    x87_enter(c);
+    x87_enter(c, X87_STAT_OTHER);
     X87Ext v = reg_get(c, p);
     int cls = x80_class(v);
     if (cls >= XC_QNAN) {
@@ -671,7 +705,7 @@ static uint64_t x80_normalize(X87Ext v, int32_t *exp) {
  * result leaves the extended range. */
 void x87_fscale(X86 *c) {
     unsigned p0 = top_slot(c, 0), p1 = top_slot(c, 1);
-    x87_enter(c);
+    x87_enter(c, X87_STAT_OTHER);
     X87Ext v[2] = {reg_get(c, p0), reg_get(c, p1)};
     int cls[2] = {x80_class(v[0]), x80_class(v[1])};
     uint16_t sign = v[0].signExp & 0x8000u;
@@ -717,7 +751,7 @@ void x87_fscale(X86 *c) {
  * +infinity, a NaN itself twice. */
 void x87_fxtract(X86 *c) {
     unsigned p = top_slot(c, 0);
-    x87_enter(c);
+    x87_enter(c, X87_STAT_OTHER);
     X87Ext v = reg_get(c, p), expo, sig;
     int cls = x80_class(v);
     if (cls >= XC_QNAN) {
@@ -766,7 +800,7 @@ static X87Ext pack_exact(uint16_t sign, int32_t e, uint64_t r) {
  * the quotient's bits 2, 1 and 0. */
 void x87_fprem(X86 *c, int ieee) {
     unsigned p0 = top_slot(c, 0), p1 = top_slot(c, 1);
-    x87_enter(c);
+    x87_enter(c, X87_STAT_OTHER);
     X87Ext v[2] = {reg_get(c, p0), reg_get(c, p1)};
     int cls[2] = {x80_class(v[0]), x80_class(v[1])};
     uint16_t sign = v[0].signExp & 0x8000u;
@@ -829,7 +863,7 @@ void x87_fprem(X86 *c, int ieee) {
 void x87_fbstp(X86 *c, uint32_t a) {
     uint8_t out[10];
     unsigned i;
-    x87_enter(c);
+    x87_enter(c, X87_STAT_CONVERT);
     X87Ext v = reg_get(c, top_slot(c, 0));
     int cls = x80_class(v);
     int64_t n = 0;
@@ -1319,7 +1353,7 @@ static int trig_special(X86 *c, unsigned p, X87Ext v, int twice) {
 
 void x87_fsin(X86 *c) {
     unsigned p = top_slot(c, 0);
-    x87_enter(c);
+    x87_enter(c, X87_STAT_TRANSC);
     X87Ext v = reg_get(c, p);
     XF s;
     if (trig_special(c, p, v, 0) || x80_class(v) == XC_ZERO)
@@ -1330,7 +1364,7 @@ void x87_fsin(X86 *c) {
 
 void x87_fcos(X86 *c) {
     unsigned p = top_slot(c, 0);
-    x87_enter(c);
+    x87_enter(c, X87_STAT_TRANSC);
     X87Ext v = reg_get(c, p);
     XF co;
     if (trig_special(c, p, v, 0))
@@ -1346,7 +1380,7 @@ void x87_fcos(X86 *c) {
 /* FSINCOS: ST(0) becomes the sine and the cosine is pushed. */
 void x87_fsincos(X86 *c) {
     unsigned p = top_slot(c, 0);
-    x87_enter(c);
+    x87_enter(c, X87_STAT_TRANSC);
     X87Ext v = reg_get(c, p);
     XF s, co;
     if (trig_special(c, p, v, 1))
@@ -1363,7 +1397,7 @@ void x87_fsincos(X86 *c) {
 /* FPTAN: ST(0) becomes the tangent and 1.0 is pushed. */
 void x87_fptan(X86 *c) {
     unsigned p = top_slot(c, 0);
-    x87_enter(c);
+    x87_enter(c, X87_STAT_TRANSC);
     X87Ext v = reg_get(c, p);
     XF s, co;
     if (trig_special(c, p, v, 1))
@@ -1379,7 +1413,7 @@ void x87_fptan(X86 *c) {
  * infinities give C99's atan2 results, which are x87's. */
 void x87_fpatan(X86 *c) {
     unsigned p0 = top_slot(c, 0), p1 = top_slot(c, 1);
-    x87_enter(c);
+    x87_enter(c, X87_STAT_TRANSC);
     X87Ext v[2] = {reg_get(c, p0), reg_get(c, p1)}; /* x, y */
     int cls[2] = {x80_class(v[0]), x80_class(v[1])};
     int sx = v[0].signExp >> 15, sy = v[1].signExp >> 15;
@@ -1424,7 +1458,7 @@ void x87_fpatan(X86 *c) {
  * -1 <= x <= 1; this computes it for any finite x below about 2^14. */
 void x87_f2xm1(X86 *c) {
     unsigned p = top_slot(c, 0);
-    x87_enter(c);
+    x87_enter(c, X87_STAT_TRANSC);
     X87Ext v = reg_get(c, p);
     int cls = x80_class(v);
     if (cls >= XC_QNAN) {
@@ -1460,7 +1494,7 @@ void x87_f2xm1(X86 *c) {
 /* FYL2X: ST(1) = ST(1) * log2(ST(0)), then pop. */
 void x87_fyl2x(X86 *c) {
     unsigned p0 = top_slot(c, 0), p1 = top_slot(c, 1);
-    x87_enter(c);
+    x87_enter(c, X87_STAT_TRANSC);
     X87Ext v[2] = {reg_get(c, p0), reg_get(c, p1)}; /* x, y */
     int cls[2] = {x80_class(v[0]), x80_class(v[1])};
     int sx = v[0].signExp >> 15, sy = v[1].signExp >> 15;
@@ -1511,7 +1545,7 @@ void x87_fyl2x(X86 *c) {
  * for |x| < 1 - sqrt(2)/2. */
 void x87_fyl2xp1(X86 *c) {
     unsigned p0 = top_slot(c, 0), p1 = top_slot(c, 1);
-    x87_enter(c);
+    x87_enter(c, X87_STAT_TRANSC);
     X87Ext v[2] = {reg_get(c, p0), reg_get(c, p1)}; /* x, y */
     int cls[2] = {x80_class(v[0]), x80_class(v[1])};
     int sx = v[0].signExp >> 15, sy = v[1].signExp >> 15;

@@ -430,11 +430,19 @@ uint32_t harness_header_selftest(void) {
     CHECK(h_arith(&c, 0x007f, X87_ADD, 1.0, 0x1p-24) == 1.0); /* a true tie: to even */
     /* PC=53 keeps the 15-bit exponent: DBL_MAX * 2 / 4 is DBL_MAX / 2, not infinity */
     h_load(&c, 0x027f, 1.7976931348623157e308);
+    memset(x87_stats(), 0, sizeof(X87Stats));
     x87_arith_m(&c, X87_MUL, 2.0);
     CHECK(c.ext_live == 1 && x87_mode(&c) == X87_MODE_EXACT); /* now an extended register */
     x87_arith_m(&c, X87_DIV, 4.0);
     CHECK(c.ext_live == 0 && x87_mode(&c) == X87_MODE_FAST && ST(&c, 0) == 1.7976931348623157e308 / 2);
     fdrop(&c);
+    /* and the thread's counters saw a range fix-up, then exact arithmetic */
+    CHECK(x87_stats()->count[X87_STAT_GUARD_RANGE] == 1 && x87_stats()->count[X87_STAT_EXACT] == 1 &&
+          x87_stats()->ext_created == 1 && x87_stats()->ext_live_max == 1);
+    (void)h_arith(&c, 0x027f, X87_ADD, 1.0, 2.0);
+    CHECK(x87_stats()->count[X87_STAT_GUARD_RANGE] == 1); /* the fast path counts nothing */
+    (void)h_arith(&c, 0x027f, X87_SUB, (double)INFINITY, (double)INFINITY);
+    CHECK(x87_stats()->count[X87_STAT_GUARD_NAN] == 1);
 
     /* Rounding reads fpu_cw directly, so it cannot drift with the host mode.
      * Prove it by rounding under each RC after deliberately setting the host

@@ -1235,6 +1235,28 @@ uint32_t x87_controlfp(X86 *c, uint32_t value, uint32_t mask);
 uint32_t x87_statusfp(const X86 *c);
 uint32_t x87_clearfp(X86 *c);
 void x87_fpreset(X86 *c);
+/* What the calling thread's x87 work cost: how often each kind of
+ * out-of-line work ran, and the extended registers it made. A thread that
+ * stays on the fast path shows only GUARD_* fix-ups, ideally none, and no
+ * extended register. Counting happens only out of line, so it costs the fast
+ * path nothing. x87_stats() is the calling thread's; zero it to restart. */
+enum {
+    X87_STAT_GUARD_RANGE, /* fast-path result beyond the double's normal range */
+    X87_STAT_GUARD_NAN,   /* fast-path NaN operand or invalid operation */
+    X87_STAT_EXACT,       /* arithmetic at another PC or RC, or on an extended register */
+    X87_STAT_PC24,        /* a PC=24 result the inline path left: midpoint, zero, range */
+    X87_STAT_CONVERT,     /* a store or integer conversion off the inline path */
+    X87_STAT_COMPARE,     /* a compare or FXAM with an extended operand */
+    X87_STAT_TRANSC,      /* FSIN ... FYL2XP1 */
+    X87_STAT_OTHER,       /* FPREM, FSCALE, FXTRACT, FRNDINT, FLD m80, constants, FBSTP, ... */
+    X87_STAT_KINDS
+};
+typedef struct X87Stats {
+    uint64_t count[X87_STAT_KINDS];
+    uint64_t ext_created;  /* registers that became extended */
+    uint32_t ext_live_max; /* the most extended registers live at once */
+} X87Stats;
+X87Stats *x87_stats(void);
 /* Whether the host's floating-point environment is the one the fast path
  * assumes (round to nearest, no flush-to-zero, no default NaN; on arm64 also
  * FPCR.AH = 0). Checked by the first out-of-line call on each thread too,
