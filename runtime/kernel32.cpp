@@ -145,6 +145,11 @@ struct HObj {
     uint32_t map_view = 0;
 };
 
+// File views the host mapped (k_MapViewOfFile): guest address -> mapped bytes.
+std::map<uint32_t, uint32_t> &file_views() {
+    static std::map<uint32_t, uint32_t> v;
+    return v;
+}
 std::map<uint32_t, HObj> &handles() {
     static std::map<uint32_t, HObj> m;
     return m;
@@ -555,6 +560,7 @@ void win32_init(const std::string &game_dir) {
     modules().clear();
     vm_regions().clear();
     dir_cache().clear();
+    file_views().clear(); // mem_init released the arena they were in
     g_next_handle = 0x00010004;
     modules()[lower(std::string(RECOMP_EXECUTABLE))] = IMAGE_BASE;
     g_process_heap = handle_new(H_HEAP);
@@ -1275,11 +1281,6 @@ void k_CreateFileMappingA(X86 *c) {
 // never the file (a FILE_MAP_WRITE view is logged once), and a read-only view
 // (FILE_MAP_READ) faults on a write as Windows does. Where the host cannot map
 // files at a fixed address the bytes are read in instead.
-std::map<uint32_t, uint32_t> &file_views() { // guest address -> host-mapped bytes
-    static std::map<uint32_t, uint32_t> v;
-    return v;
-}
-
 void k_MapViewOfFile(X86 *c) {
     HObj *m = handle_get(arg(c, 0), H_MAPPING);
     uint32_t access = arg(c, 1), off_low = arg(c, 3), bytes = arg(c, 4);
