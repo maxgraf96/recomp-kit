@@ -113,10 +113,12 @@ static const uint32_t DIERR_INVALIDPARAM = E_INVALIDARG;
 // code, not DirectInput-facility ones: 0x80070000 | ERROR_*. A DIERR_ built
 // from the DirectInput facility is a different number from the one the game
 // compares against, and it takes the wrong branch.
-static const uint32_t DIERR_NOTINITIALIZED = 0x80070015u;     // ERROR_NOT_READY
-static const uint32_t DIERR_INPUTLOST = 0x8007001Eu;          // ERROR_READ_FAULT
-static const uint32_t DIERR_NOTACQUIRED = 0x8007000Cu;        // ERROR_INVALID_ACCESS
-static const uint32_t DIERR_ACQUIRED = 0x800700AAu;           // ERROR_BUSY
+static const uint32_t DIERR_NOTINITIALIZED = 0x80070015u; // ERROR_NOT_READY
+static const uint32_t DIERR_INPUTLOST = 0x8007001Eu;      // ERROR_READ_FAULT
+static const uint32_t DIERR_NOTACQUIRED = 0x8007000Cu;    // ERROR_INVALID_ACCESS
+static const uint32_t DIERR_ACQUIRED = 0x800700AAu;       // ERROR_BUSY
+// Acquiring a foreground device while the application is in the background.
+static const uint32_t DIERR_OTHERAPPHASPRIO = 0x80070005u;    // E_ACCESSDENIED
 static const uint32_t DIERR_ALREADYINITIALIZED = 0x800704DFu; // ERROR_ALREADY_INITIALIZED
 static const uint32_t DIERR_UNSUPPORTED = E_NOTIMPL;
 static const uint32_t DIERR_DEVICENOTREG = 0x80040154u; // REGDB_E_CLASSNOTREG

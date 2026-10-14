@@ -81,6 +81,9 @@ void bink_shutdown();
 // failure is silent - the address is null, the guarded call is skipped, and
 // input stays dead with nothing to show for it.
 extern "C" void dinput_host_input_changed(void);
+// Whether an acquired DirectInput mouse holds the pointer exclusively: the
+// game's windows then get no mouse messages, and the pointer is the game's.
+extern "C" bool dinput_mouse_exclusive(void);
 void qmixer_reset();
 
 // Requested against delivered for the QMixer path: how many sounds the game

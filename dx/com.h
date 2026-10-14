@@ -355,6 +355,7 @@ struct ComObj {
     int32_t last_x = 0, last_y = 0, last_z = 0;
     uint32_t sequence = 0;
     std::vector<uint32_t> events; // packed dwOfs/dwData pairs
+    bool di_overflow = false;     // events were lost: the next read says DI_BUFFEROVERFLOW
     // Joystick only. Ranges are per DIJOYSTATE axis slot (lX..lRz). An empty
     // format means DIJOYSTATE or DIJOYSTATE2, by data_format_size.
     JoyAxisRange joy_ranges[6];

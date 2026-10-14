@@ -67,6 +67,18 @@ const uint32_t DIMOFS_Y = 4;
 const uint32_t DIMOFS_Z = 8;
 const uint32_t DIMOFS_BUTTON0 = 12;
 
+// The mouse this shim offers: X, Y, a wheel and three buttons (left, right,
+// middle), which is what every Mac pointer can produce. DIMOUSESTATE's fourth
+// button does not exist, so asking about it is DIERR_OBJECTNOTFOUND, as on a
+// three-button Windows mouse. The wheel's granularity is WHEEL_DELTA: a game
+// divides by it, and one notch is 120.
+const uint32_t MOUSE_BUTTONS = 3;
+const uint32_t WHEEL_DELTA = 120;
+
+// Every mouse and keyboard device by object id, for what concerns them all:
+// the foreground devices lose their acquisition when the application does.
+std::vector<uint32_t> g_devices;
+
 uint32_t g_scratch = 0, g_scratch_size = 0;
 uint32_t scratch(uint32_t n) {
     if (g_scratch_size < n) {
@@ -180,6 +192,28 @@ void refresh_host_input() {
     g_host_in.acc_dz += in.mouse_dz;
 }
 
+// A buffer of N holds N - 1 events, the way a circular buffer that keeps one
+// slot free does it (Wine's DirectInput is built so). An event that does not
+// fit is lost and the next GetDeviceData reports DI_BUFFEROVERFLOW once. The
+// one free slot is also what keeps a read from ever returning a full buffer:
+// a game that counts the records of its 256-entry buffer in a byte would
+// otherwise loop for ever on exactly 256.
+size_t buffer_capacity(const ComObj *d) {
+    return d->buffer_size > 1 ? d->buffer_size - 1 : d->buffer_size;
+}
+void push_event(ComObj *d, uint32_t event) {
+    if (!d->buffer_size)
+        return;
+    if (d->events.size() >= buffer_capacity(d)) {
+        if (!d->di_overflow)
+            log_once("dinput.overflow", "dinput: a %u-event buffer overflowed; newest events lost",
+                     d->buffer_size);
+        d->di_overflow = true;
+        return;
+    }
+    d->events.push_back(event);
+}
+
 // Appends whatever changed since the last poll. This is the only place device
 // state advances, so GetDeviceState and GetDeviceData always agree about what
 // "now" is.
@@ -194,8 +228,7 @@ void poll_device(ComObj *d) {
         for (uint32_t k = 0; k < 256; ++k) {
             uint8_t now = g_host_in.keys[k] & 0x80u;
             if (now != (d->last_keys[k] & 0x80u)) {
-                if (d->buffer_size)
-                    d->events.push_back(pack_event(k, now ? 0x80 : 0));
+                push_event(d, pack_event(k, now ? 0x80 : 0));
                 d->last_keys[k] = now;
             }
         }
@@ -210,12 +243,12 @@ void poll_device(ComObj *d) {
 
     host_input_pointer_correction(&dx, &dy);
 
-    if (dx && d->buffer_size)
-        d->events.push_back(pack_event(DIMOFS_X, dx));
-    if (dy && d->buffer_size)
-        d->events.push_back(pack_event(DIMOFS_Y, dy));
-    if (dz && d->buffer_size)
-        d->events.push_back(pack_event(DIMOFS_Z, dz));
+    if (dx)
+        push_event(d, pack_event(DIMOFS_X, dx));
+    if (dy)
+        push_event(d, pack_event(DIMOFS_Y, dy));
+    if (dz)
+        push_event(d, pack_event(DIMOFS_Z, dz));
     // The immediate state reports motion since the last GetDeviceState, so it
     // accumulates here and is cleared there. Overwriting would report only the
     // last poll's motion and lose everything a GetDeviceData poll had already
@@ -226,19 +259,115 @@ void poll_device(ComObj *d) {
     for (uint32_t b = 0; b < 8; ++b) {
         uint8_t now = g_host_in.buttons[b] & 0x80u;
         if (now != (d->last_buttons[b] & 0x80u)) {
-            if (d->buffer_size)
-                d->events.push_back(pack_event(DIMOFS_BUTTON0 + b, now ? 0x80 : 0));
+            push_event(d, pack_event(DIMOFS_BUTTON0 + b, now ? 0x80 : 0));
             d->last_buttons[b] = now;
         }
     }
-    // A buffer that overflows drops the oldest events and the next
-    // GetDeviceData has to report DI_BUFFEROVERFLOW; capping here keeps the
-    // vector bounded when the guest never drains it.
-    if (d->buffer_size && d->events.size() > d->buffer_size) {
-        size_t drop = d->events.size() - d->buffer_size;
-        d->events.erase(d->events.begin(), d->events.begin() + (ptrdiff_t)drop);
-        log_once("dinput.overflow", "dinput: the %u-event buffer overflowed; oldest events dropped",
-                 d->buffer_size);
+}
+
+// The application went to the background: every foreground device is
+// unacquired on the spot, as DirectInput does it, and reports
+// DIERR_NOTACQUIRED until the game acquires it again - which it does from its
+// own WM_ACTIVATE handling, never automatically.
+void on_activation(bool active) {
+    if (active)
+        return;
+    for (uint32_t id : g_devices) {
+        ComObj *d = com_get(id);
+        if (!d || d->kind != K_DIDEVICE || !d->acquired || !(d->di_coop & DISCL_FOREGROUND))
+            continue;
+        d->acquired = false;
+        d->events.clear();
+        d->di_overflow = false;
+        LOGV("dinput: device type %u unacquired: the application lost the foreground", d->dev_type);
+    }
+}
+
+// The data-format offset of a mouse or keyboard object, found by offset
+// (DIPH_BYOFFSET, in the standard c_dfDIMouse / c_dfDIKeyboard layouts every
+// game uses) or by id (DIPH_BYID: type bits and instance, as GetObjectInfo
+// reports it).
+uint32_t object_offset(const ComObj *d, uint32_t obj, uint32_t how, uint32_t *ofs) {
+    if (d->dev_type == DIDEVTYPE_KEYBOARD) {
+        uint32_t key = how == DIPH_BYOFFSET ? obj
+                       : how == DIPH_BYID && (obj & DIDFT_TYPEMASK) & DIDFT_BUTTON
+                           ? didft_instance(obj)
+                           : 0x100;
+        if (how != DIPH_BYOFFSET && how != DIPH_BYID)
+            return DIERR_INVALIDPARAM;
+        if (key == 0 || key > 0xff)
+            return DIERR_OBJECTNOTFOUND;
+        *ofs = key;
+        return DI_OK;
+    }
+    if (how == DIPH_BYOFFSET) {
+        if (obj == DIMOFS_X || obj == DIMOFS_Y || obj == DIMOFS_Z ||
+            (obj >= DIMOFS_BUTTON0 && obj < DIMOFS_BUTTON0 + MOUSE_BUTTONS)) {
+            *ofs = obj;
+            return DI_OK;
+        }
+        return DIERR_OBJECTNOTFOUND;
+    }
+    if (how == DIPH_BYID) {
+        const uint32_t instance = didft_instance(obj);
+        if ((obj & DIDFT_TYPEMASK) & DIDFT_AXIS) {
+            if (instance > 2)
+                return DIERR_OBJECTNOTFOUND;
+            *ofs = instance * 4;
+            return DI_OK;
+        }
+        if ((obj & DIDFT_TYPEMASK) & DIDFT_BUTTON) {
+            if (instance >= MOUSE_BUTTONS)
+                return DIERR_OBJECTNOTFOUND;
+            *ofs = DIMOFS_BUTTON0 + instance;
+            return DI_OK;
+        }
+        return DIERR_OBJECTNOTFOUND;
+    }
+    return DIERR_INVALIDPARAM;
+}
+
+// One DIDEVICEOBJECTINSTANCE{A,W} for the mouse or keyboard object at `ofs`.
+void write_object_info(const ComObj *d, uint32_t out, uint32_t size, uint32_t ofs) {
+    gm_zero(out + 4, size - 4);
+    // GUID_XAxis, _YAxis, _ZAxis and GUID_Button share all but the first
+    // dword; GUID_Key is its own.
+    static const uint8_t kAxisTail[12] = {0xF3, 0xC9, 0xCF, 0x11, 0xBF, 0xC7,
+                                          0x44, 0x45, 0x53, 0x54, 0x00, 0x00};
+    static const uint8_t kKey[16] = {0x20, 0x82, 0x72, 0x55, 0x3C, 0xD3, 0xCF, 0x11,
+                                     0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00};
+    char name[32];
+    uint32_t type = 0;
+    uint16_t page = 1, usage = 0;
+    if (d->dev_type == DIDEVTYPE_KEYBOARD) {
+        memcpy(gm_ptr(out + DIDOI_OFF_guidType), kKey, 16);
+        type = DIDFT_PSHBUTTON | (ofs << 8);
+        snprintf(name, sizeof name, "Key %u", ofs);
+        page = 7; // HID keyboard page; the usage is left to the scan code
+    } else {
+        const bool axis = ofs < DIMOFS_BUTTON0;
+        const uint32_t instance = axis ? ofs / 4 : ofs - DIMOFS_BUTTON0;
+        wr32(out + DIDOI_OFF_guidType, axis ? 0xA36D02E0u + instance : 0xA36D02F0u);
+        memcpy(gm_ptr(out + DIDOI_OFF_guidType + 4), kAxisTail, 12);
+        type = (axis ? DIDFT_RELAXIS : DIDFT_PSHBUTTON) | (instance << 8);
+        static const char *const kAxes[3] = {"X-axis", "Y-axis", "Wheel"};
+        if (axis)
+            snprintf(name, sizeof name, "%s", kAxes[instance]);
+        else
+            snprintf(name, sizeof name, "Button %u", instance);
+        page = axis ? 1 : 9;
+        usage = axis ? uint16_t(instance == 2 ? 0x38 : 0x30 + instance) : uint16_t(instance + 1);
+    }
+    wr32(out + DIDOI_OFF_dwOfs, ofs);
+    wr32(out + DIDOI_OFF_dwType, type);
+    const uint32_t tail = DIDOI_OFF_tszName + DIDOI_NAME_CHARS * (d->di_wide ? 2u : 1u);
+    if (d->di_wide)
+        di_put_wide(out + DIDOI_OFF_tszName, name, DIDOI_NAME_CHARS);
+    else
+        gm_put_str(out + DIDOI_OFF_tszName, name, DIDOI_NAME_CHARS);
+    if (size >= tail + DIDOI_TAIL_OFF_wUsage + 2) {
+        wr16(out + tail + DIDOI_TAIL_OFF_wUsagePage, page);
+        wr16(out + tail + DIDOI_TAIL_OFF_wUsage, usage);
     }
 }
 
@@ -313,7 +442,19 @@ void Device_GetProperty(X86 *c) {
         return;
     }
     if (prop == DIPROP_GRANULARITY) {
-        wr32(ph + DIPROPDWORD_OFF_dwData, 1);
+        // Per object: an axis moves in steps of 1, the wheel in notches of
+        // WHEEL_DELTA. A game divides by the answer, so it is never 0.
+        uint32_t ofs = 0;
+        uint32_t hr = object_offset(d, rd32(ph + DIPH_OFF_dwObj), rd32(ph + DIPH_OFF_dwHow), &ofs);
+        if (hr != DI_OK) {
+            com_ret(c, hr);
+            return;
+        }
+        if (d->dev_type != DIDEVTYPE_MOUSE || ofs >= DIMOFS_BUTTON0) {
+            com_ret(c, DIERR_UNSUPPORTED); // buttons and keys have no granularity
+            return;
+        }
+        wr32(ph + DIPROPDWORD_OFF_dwData, ofs == DIMOFS_Z ? WHEEL_DELTA : 1);
         com_ret(c, DI_OK);
         return;
     }
@@ -370,7 +511,12 @@ void Device_Acquire(X86 *c) {
         com_ret(c, S_FALSE);
         return;
     }
+    if ((d->di_coop & DISCL_FOREGROUND) && !win32_app_active()) {
+        com_ret(c, DIERR_OTHERAPPHASPRIO);
+        return;
+    }
     d->acquired = true;
+    d->di_overflow = false;
     // Acquiring resets the event stream, so the first read after acquisition
     // reports the state now rather than a backlog from before.
     d->events.clear();
@@ -531,7 +677,11 @@ void Device_GetDeviceData(X86 *c) {
     wr32(inout, n);
     if (!peek && n)
         d->events.erase(d->events.begin(), d->events.begin() + (ptrdiff_t)n);
-    com_ret(c, DI_OK);
+    // Lost events are reported once, by the read that follows the loss.
+    const bool overflowed = d->di_overflow;
+    if (!peek)
+        d->di_overflow = false;
+    com_ret(c, overflowed ? DI_BUFFEROVERFLOW : DI_OK);
 }
 
 void Device_SetDataFormat(X86 *c) {
@@ -578,13 +728,36 @@ void Device_SetEventNotification(X86 *c) {
     com_ret(c, DI_OK);
 }
 
+// SetCooperativeLevel(hwnd, flags): exactly one of exclusive and
+// non-exclusive, exactly one of foreground and background, and not while the
+// device is acquired. The keyboard cannot be exclusive in the background. An
+// exclusive mouse takes the pointer from Windows: no mouse messages reach the
+// game's windows while it is acquired (dinput_mouse_exclusive).
 void Device_SetCooperativeLevel(X86 *c) {
     ComObj *d = this_device(c);
     if (!d) {
         com_ret(c, DIERR_INVALIDPARAM);
         return;
     }
-    d->di_coop = arg(c, 2);
+    const uint32_t flags = arg(c, 2);
+    if (!is_joystick(d)) {
+        const bool exclusive = flags & DISCL_EXCLUSIVE, shared = flags & DISCL_NONEXCLUSIVE;
+        const bool fore = flags & DISCL_FOREGROUND, back = flags & DISCL_BACKGROUND;
+        if (exclusive == shared || fore == back) {
+            com_ret(c, DIERR_INVALIDPARAM);
+            return;
+        }
+        if (d->acquired) {
+            com_ret(c, DIERR_ACQUIRED);
+            return;
+        }
+        if (d->dev_type == DIDEVTYPE_KEYBOARD && exclusive && back) {
+            com_ret(c, DIERR_UNSUPPORTED);
+            return;
+        }
+    }
+    d->di_coop = flags;
+    LOGV("dinput: cooperative level %x on device type %u", flags, d->dev_type);
     com_ret(c, DI_OK);
 }
 
@@ -600,8 +773,27 @@ void Device_GetObjectInfo(X86 *c) {
         com_ret(c, joy_get_object_info(d, out, arg(c, 2), arg(c, 3)));
         return;
     }
-    log_once("dinput.objectinfo", "dinput: GetObjectInfo is not supported");
-    com_ret(c, DIERR_UNSUPPORTED);
+    if (!d) {
+        com_ret(c, DIERR_INVALIDPARAM);
+        return;
+    }
+    const uint32_t size = rd32(out);
+    const bool ok_size =
+        d->di_wide
+            ? (size == DIDEVICEOBJECTINSTANCEW_SIZE || size == DIDEVICEOBJECTINSTANCE_DX3W_SIZE)
+            : (size == DIDEVICEOBJECTINSTANCEA_SIZE || size == DIDEVICEOBJECTINSTANCE_DX3A_SIZE);
+    if (!ok_size || !gm_valid(out, size)) {
+        com_ret(c, DIERR_INVALIDPARAM);
+        return;
+    }
+    uint32_t ofs = 0;
+    const uint32_t hr = object_offset(d, arg(c, 2), arg(c, 3), &ofs);
+    if (hr != DI_OK) {
+        com_ret(c, hr);
+        return;
+    }
+    write_object_info(d, out, size, ofs);
+    com_ret(c, DI_OK);
 }
 
 void Device_GetDeviceInfo(X86 *c) {
@@ -755,6 +947,7 @@ static void create_device(X86 *c, ComIface iface) {
     d->dev_type = type;
     d->di_wide = di->di_wide;
     d->di_version = di->di_version;
+    g_devices.push_back(d->id);
     uint32_t view = com_view(d, iface);
     if (!view) {
         com_release(d);
@@ -1058,6 +1251,21 @@ const ImportShim g_dinput_exports[] = {
 
 } // namespace
 
+// Whether an acquired mouse holds the pointer exclusively. Windows then
+// hides its cursor and sends the game's windows no mouse messages: the game
+// reads the mouse through DirectInput alone. USER32 asks this before it queues
+// a mouse message, and a host asks it to decide whether the pointer is the
+// game's (raw relative motion, no system cursor).
+extern "C" bool dinput_mouse_exclusive(void) {
+    for (uint32_t id : g_devices) {
+        ComObj *d = com_get(id);
+        if (d && d->kind == K_DIDEVICE && d->dev_type == DIDEVTYPE_MOUSE && d->acquired &&
+            (d->di_coop & DISCL_EXCLUSIVE))
+            return true;
+    }
+    return false;
+}
+
 extern "C" void dinput_discard_mouse_motion(uint32_t device) {
     ComObj *mouse = device ? com_this(device) : nullptr;
     if (!mouse || mouse->kind != K_DIDEVICE || mouse->dev_type != DIDEVTYPE_MOUSE)
@@ -1099,6 +1307,7 @@ uint32_t di_scratch(uint32_t n) {
 void dinput_reset() {
     g_scratch = 0;
     g_scratch_size = 0;
+    g_devices.clear();
     // The devices these handles belonged to are gone with the arena, and the
     // handles themselves name kernel objects that no longer exist. Signalling
     // one after a reset would be signalling whatever now has that number.
@@ -1112,6 +1321,7 @@ void dinput_register() {
     if (done)
         return;
     done = true;
+    win32_add_activation_observer(on_activation);
 
     com_define(IF_DINPUT, "DINPUT.dll", "IDirectInputA", g_dinput, std::size(g_dinput));
     com_define(IF_DINPUTDEVICE, "DINPUT.dll", "IDirectInputDeviceA", g_didevice,
