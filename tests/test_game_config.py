@@ -221,6 +221,33 @@ class LoadTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 game_config.load(game)   # a module needs an arena that reaches it: checked at load
 
+    def test_function_db_is_optional_and_resolved_beside_game_toml(self):
+        """[translate] function_db and [modules.aux.<key>] function_db name the
+        authoritative function database (translate.py FunctionDB). It lives in
+        the ignored analysis/ tree, so loading does not require it to exist."""
+        self.assertIsNone(game_config.load(ROOT / "games/stub")["function_db_path"])
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp) / "g"
+            game.mkdir()
+            text = (ROOT / "games/stub/game.toml").read_text()   # its arena reaches 0x10328000
+            text = text.replace('listings = "analysis/STUB.EXE"',
+                                'listings = "analysis/STUB.EXE"\nfunction_db = "analysis/STUB.EXE/funcdb.json"', 1)
+            text += ('\n[modules.aux.blit]\nname = "Blit_p6.dll"\npath = "original/Blit_p6.dll"\n'
+                     'sha256 = "%s"\nbase = 0x10300000\nsize = 0x28000\nlistings = "analysis/blit"\n'
+                     'function_db = "analysis/blit/funcdb.json"\n' % ("ab" * 32))
+            (game / "game.toml").write_text(text)
+            (game / "globals.toml").write_text((ROOT / "games/stub/globals.toml").read_text())
+            cfg = game_config.load(game)
+            self.assertEqual(cfg["function_db_path"], (game / "analysis/STUB.EXE/funcdb.json").resolve())
+            mod = cfg["aux_modules"][0]
+            self.assertEqual(mod["function_db_path"], (game / "analysis/blit/funcdb.json").resolve())
+            # A load base other than the preferred one is the module's to reach by relocation.
+            self.assertEqual(mod["base"], 0x10300000)
+            (game / "game.toml").write_text(text.replace('function_db = "analysis/blit/funcdb.json"',
+                                                         'function_db = 7'))
+            with self.assertRaisesRegex(ValueError, "function_db"):
+                game_config.load(game)
+
     def test_controls_section(self):
         with tempfile.TemporaryDirectory() as tmp:
             game = Path(tmp)

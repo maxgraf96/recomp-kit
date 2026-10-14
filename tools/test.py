@@ -38,6 +38,7 @@ PORTABLE_TESTS = [
     "tools/recomp/tests/test_translate_vector.py",
     "tools/recomp/tests/test_translate_noreturn.py",
     "tools/recomp/tests/test_translate_rebase.py",
+    "tools/recomp/tests/test_function_db.py",
 ]
 
 

@@ -4,9 +4,10 @@ Every DLL of a game may prefer the same ImageBase, and only one of them can
 have it; the runtime loader maps the rest at their configured bases and applies
 their base relocations (runtime/loader.cpp). The translation must bake in the
 same addresses: Image applies the same relocations to the bytes it reads, and
-Rebase moves the Ghidra listings, which were exported at the preferred base -
-every listed address, every operand a relocation names, and every direct
-branch target - while a constant that merely looks like an address stays.
+rebase_listing_text moves the Ghidra listings, which were exported at the
+preferred base - every listed address, every operand field a relocation
+covers, and every direct branch target - while a constant that merely looks
+like an address stays.
 """
 import os
 import struct
@@ -95,26 +96,21 @@ def test_the_image_reads_as_the_loader_maps_it(tmp_path):
     assert image.rd32(BASE + TEXT + 1) == BASE + DATA, "an operand the code stores moves"
     assert image.rd32(BASE + TEXT + 0x0b) == PREFERRED, "an immediate no relocation names stays"
     assert image.is_exec(BASE + TEXT) and not image.is_exec(PREFERRED + TEXT)
-    assert sorted(image.reloc_sites) == [(PREFERRED + TEXT + 1, PREFERRED + DATA),
-                                         (PREFERRED + TEXT + 0x10, PREFERRED + DATA + 4),
-                                         (PREFERRED + DATA, PREFERRED + TEXT + 0x20)]
+    assert sorted(image.reloc_sites) == [BASE + TEXT + 1, BASE + TEXT + 0x10, BASE + DATA]
     assert image.relocated_pointers()[BASE + TEXT + 0x20] == BASE + DATA
 
 
 def test_listings_move_with_the_image(tmp_path):
     path = tmp_path / "a.dll"
     dll(path)
-    rebase = T.Rebase(T.Image(str(path), BASE))
-    assert rebase.delta == DELTA
-    assert rebase.listing(LISTING) == (
+    image = T.Image(str(path), BASE)
+    assert T.rebase_listing_text(LISTING, image, DELTA) == (
         "10101000  MOV EAX,[0x10102000]\n"
         "10101005  CALL 0x10101020\n"
         "1010100a  PUSH 0x10000000\n"
         "1010100f  MOV ECX,0x10102004\n"
         "10101014  JZ 0x10101021\n"
         "10101016  RET\n")
-    assert rebase.address(0x10001234) == 0x10101234
-    assert rebase.address(0x00401234) == 0x00401234, "outside the image: not this module's"
 
 
 def test_a_relocated_operand_the_listing_does_not_show_is_an_error(tmp_path):
@@ -122,9 +118,8 @@ def test_a_relocated_operand_the_listing_does_not_show_is_an_error(tmp_path):
     calling the preferred base; that has to stop the translation, not pass."""
     path = tmp_path / "a.dll"
     dll(path)
-    rebase = T.Rebase(T.Image(str(path), BASE))
     with pytest.raises(T.TranslateError):
-        rebase.listing("10001000  MOV EAX,[DAT_10002000]\n")
+        T.rebase_listing_text("10001000  MOV EAX,[DAT_10002000]\n", T.Image(str(path), BASE), DELTA)
 
 
 def test_parse_listing_rebases_when_configured(tmp_path):
@@ -132,15 +127,18 @@ def test_parse_listing_rebases_when_configured(tmp_path):
     dll(path)
     listing = tmp_path / "10001000.asm"
     listing.write_text(LISTING)
-    saved = T.REBASE
+    (tmp_path / "functions.tsv").write_text(
+        "address\tname\tbytes\tstatus\tmessage\n10001000\tfn_10001000\t23\tlisting\t\n")
+    saved = T.LISTING_SHIFT, T.FUNCS_TSV, T.LISTINGS
     try:
-        T.REBASE = T.Rebase(T.Image(str(path), BASE))
+        T.LISTING_SHIFT = (T.Image(str(path), BASE), DELTA)
+        T.FUNCS_TSV, T.LISTINGS = str(tmp_path / "functions.tsv"), str(tmp_path)
         insns = T.parse_listing(str(listing))
         assert insns[0].addr == 0x10101000 and insns[0].ops == ["EAX", "[0x10102000]"]
-        assert T.listed_address(0x10001000) == 0x10101000
+        assert T.listing_index() == [(0x10101000, "fn_10101000", 23, str(listing))]
         assert T.listing_name(0x10101000) == "10001000"
     finally:
-        T.REBASE = saved
+        T.LISTING_SHIFT, T.FUNCS_TSV, T.LISTINGS = saved
     assert T.parse_listing(str(listing))[0].addr == 0x10001000
 
 
@@ -163,9 +161,9 @@ def test_listings_already_exported_at_the_configured_base_are_kept(tmp_path):
         T.FUNCS_TSV = str(tmp_path / "functions.tsv")
         (tmp_path / "functions.tsv").write_text(
             "address\tname\tbytes\tstatus\tmessage\n10001000\tfn\t23\tlisting\t\n")
-        assert T.listings_base(image) == PREFERRED
+        assert T.listings_base(image, PREFERRED) == PREFERRED
         (tmp_path / "functions.tsv").write_text(
             "address\tname\tbytes\tstatus\tmessage\n10101000\tfn\t23\tlisting\t\n")
-        assert T.listings_base(image) == BASE
+        assert T.listings_base(image, PREFERRED) == BASE
     finally:
         T.FUNCS_TSV = saved

@@ -45,6 +45,15 @@ VISUAL_ANIMATION_READS = frozenset()
 EXTRA_ENTRY_POINTS = frozenset()
 RESUMABLE_STACKS = False
 FUNCTION_ALIGNMENT = 16
+#: game.toml [translate] function_db (or [modules.aux.<key>] function_db): the
+#: function database that is authoritative for what is code (FunctionDB), or
+#: None for the heuristic discovery. LOAD_BASE: the address the image is
+#: translated for and loaded at; a relocatable image whose preferred base
+#: differs is relocated (Image) and its listings moved there (rebase_listing_text).
+FUNCTION_DB = None
+LOAD_BASE = None
+#: (image, delta) while listings exported at another base are being read.
+LISTING_SHIFT = None
 
 #: game.toml [translate] rewrites: an instruction's memory operand moved to a
 #: free address, and the words the loader seeds before the game runs.
@@ -68,14 +77,6 @@ def patch_instructions(insns):
     return insns
 
 
-#: The base the image is translated for - game.toml [game] image_base, or a
-#: module's [modules.aux.KEY] base - which is where the runtime loader maps it.
-#: None keeps the PE's own ImageBase. When the two differ the image is
-#: relocated (Image) and its listings, exported at the preferred base by Ghidra
-#: and the function DB, are moved with it (Rebase).
-IMAGE_BASE = None
-REBASE = None
-
 #: Every global the generated tables define starts with this; a module
 #: translation (--module) uses recomp_<key>_ so its tables link beside the
 #: main image's and register themselves with the runtime (x86.h RecompModule).
@@ -89,18 +90,21 @@ def configure_module(cfg, key):
     reads, no curated symbols (those describe the executable)."""
     global LISTINGS, FUNCS_TSV, BINARY, CURATED, ANIMATION_COUNTER, VISUAL_ANIMATION_READS
     global EXTRA_ENTRY_POINTS, FUNCTION_ALIGNMENT, SYMBOL_PREFIX, AUX_MODULE
-    global RESUMABLE_STACKS, IMAGE_BASE
+    global RESUMABLE_STACKS, FUNCTION_DB, LOAD_BASE
     RESUMABLE_STACKS = cfg["translate"].get("resumable_stacks", False)
     mods = {m["key"]: m for m in cfg.get("aux_modules", [])}
     if key not in mods:
         raise SystemExit("game.toml has no [modules.aux.%s]" % key)
     mod = mods[key]
-    IMAGE_BASE = mod.get("base")
+    FUNCTION_DB = mod.get("function_db_path")
+    LOAD_BASE = mod.get("base")
     listings = str(mod["listings_path"])
     LISTINGS = os.path.join(listings, "functions")
     FUNCS_TSV = os.path.join(listings, "functions.tsv")
     BINARY = str(mod["path"])
-    CURATED = None
+    # The game's curated symbols; main() keeps the ones inside this module.
+    CURATED = (os.path.join(str(cfg["dir"]), cfg["translate"].get("globals", "globals.toml"))
+               if "dir" in cfg else None)
     ANIMATION_COUNTER = 0
     VISUAL_ANIMATION_READS = frozenset()
     EXTRA_ENTRY_POINTS = frozenset(mod.get("entry_points", ()))
@@ -134,13 +138,13 @@ def configure(cfg):
     FUNCS_TSV = os.path.join(listings, "functions.tsv")
     BINARY = str(cfg["developer_exe_path"])
     CURATED = os.path.join(str(cfg["dir"]), cfg["translate"].get("globals", "globals.toml"))
-    global IMAGE_BASE
-    IMAGE_BASE = int(cfg["game"]["image_base"])
     ANIMATION_COUNTER = cfg["translate"]["animation_counter"]
     VISUAL_ANIMATION_READS = frozenset(cfg["translate"].get("volatile_reads", ()))
     global EXTRA_ENTRY_POINTS, FUNCTION_ALIGNMENT
-    global RESUMABLE_STACKS
+    global RESUMABLE_STACKS, FUNCTION_DB, LOAD_BASE
     RESUMABLE_STACKS = cfg["translate"].get("resumable_stacks", False)
+    FUNCTION_DB = cfg.get("function_db_path")
+    LOAD_BASE = cfg["game"].get("image_base")
     EXTRA_ENTRY_POINTS = frozenset(int(a) for a in cfg["translate"].get("entry_points", ()))
     FUNCTION_ALIGNMENT = cfg["translate"].get("function_alignment", 16)
     global OPERAND_REDIRECTS, INSTRUCTION_PATCHES, DATA_SEEDS
@@ -663,108 +667,9 @@ class Insn(object):
 def parse_listing(path):
     with open(path) as fh:
         text = fh.read()
-    return parse_listing_text(REBASE.listing(text) if REBASE is not None else text)
-
-
-def listed_address(addr):
-    """A functions.tsv address as the translation sees it."""
-    return REBASE.address(addr) if REBASE is not None else addr
-
-
-def listing_name(addr):
-    """The listing file stem of a translated address: the address it was
-    exported at."""
-    return "%08x" % (addr - REBASE.delta if REBASE is not None else addr)
-
-
-def listings_base(image):
-    """The base the listings were exported at: the image's preferred base (the
-    function DB's and a plain Ghidra import's convention) unless every listed
-    function lies in the image as it is mapped and none in the preferred range -
-    a program Ghidra rebased before exporting."""
-    with open(FUNCS_TSV) as fh:
-        listed = [int(l.split("\t")[0], 16) for l in list(fh)[1:] if l.strip()]
-    preferred = image.preferred_base
-    at_preferred = any(preferred <= a < preferred + image.size for a in listed)
-    at_base = listed and all(image.base <= a < image.end for a in listed)
-    return image.base if at_base and not at_preferred else preferred
-
-
-#: Relative branches: absolute in Ghidra's text, relative in the encoding, so a
-#: rebase moves them although no relocation names them.
-DIRECT_BRANCHES = frozenset(("CALL", "JMP", "LOOP", "LOOPE", "LOOPZ", "LOOPNE", "LOOPNZ",
-                             "JCXZ", "JECXZ"))
-HEX_RE = re.compile(r"^0x[0-9a-fA-F]+$")
-
-
-class Rebase(object):
-    """Listings exported at the PE's preferred base, for an image translated at
-    another (IMAGE_BASE). Every listed address moves by `delta`. So does every
-    operand that the image's base relocations mark as an address - the loader
-    rewrites those bytes, so the translation must bake in the moved value - and
-    every direct branch target. Anything else is a constant and stays."""
-
-    def __init__(self, image):
-        self.delta = image.base - image.preferred_base
-        self.lo = image.preferred_base
-        self.hi = image.preferred_base + image.size
-        self.image = image
-        #: preferred VA of every HIGHLOW site -> the address stored there.
-        self.values = dict(image.reloc_sites)
-        self.sites = sorted(self.values)
-
-    def address(self, a):
-        return a + self.delta if self.lo <= a < self.hi else a
-
-    def length(self, va):
-        """The length of the instruction at translated address va."""
-        img = self.image
-        o = va - img.base
-        if img.md is not None and 0 <= o < len(img.data):
-            got = list(img.md.disasm(img.data[o:o + 16], va, count=1))
-            if got:
-                return got[0].size
-        return 15
-
-    def listing(self, text):
-        import bisect
-        out = []
-        lines = text.splitlines()
-        listed = sorted(int(m.group(1), 16) for m in map(LINE_RE.match, lines) if m)
-        for line in lines:
-            m = LINE_RE.match(line.rstrip("\n"))
-            if not m:
-                out.append(line)
-                continue
-            a = int(m.group(1), 16)
-            mnem, ops = m.group(2), m.group(3) or ""
-            if not self.lo <= a < self.hi:
-                raise TranslateError("listing line %r lies outside the image (%08x-%08x)"
-                                     % (line, self.lo, self.hi))
-            new = a + self.delta
-            # The instruction's own bytes: its decoded length, and never past
-            # the next listed instruction.
-            end = a + self.length(new)
-            k = bisect.bisect_right(listed, a)
-            if k < len(listed):
-                end = min(end, listed[k])
-            k = bisect.bisect_left(self.sites, a)
-            while k < len(self.sites) and self.sites[k] < end:
-                v = self.values[self.sites[k]]
-                pat = re.compile(r"(?<![0-9A-Za-z_])0x0*%x(?![0-9A-Fa-f])" % v, re.I)
-                ops, n = pat.subn("0x%x" % ((v + self.delta) & 0xffffffff), ops)
-                if not n:
-                    raise TranslateError("%08x: relocated address %08x is not an operand of %r"
-                                         % (a, v, line))
-                k += 1
-            base_mnem = mnem.split(".")[-1]
-            if ((base_mnem in DIRECT_BRANCHES or base_mnem.startswith("J"))
-                    and HEX_RE.match(ops.strip())):
-                t = int(ops.strip(), 16)
-                if self.lo <= t < self.hi:
-                    ops = "0x%x" % (t + self.delta)
-            out.append("%08x  %s%s" % (new, mnem, " " + ops if ops else ""))
-        return "\n".join(out) + "\n"
+    if LISTING_SHIFT is not None:
+        text = rebase_listing_text(text, *LISTING_SHIFT)
+    return parse_listing_text(text)
 
 
 def parse_listing_text(text):
@@ -931,15 +836,33 @@ def flag_effect(insn):
 
 # ------------------------------------------------------------------- image --
 
+def highlow_sites(data, reloc_dir, size):
+    """RVAs of the IMAGE_REL_BASED_HIGHLOW entries of a mapped image's base
+    relocation table, in table order. HIGHLOW (type 3) is the only relocation
+    a 32-bit x86 image uses for a full address; ABSOLUTE (type 0) is block
+    padding and names nothing."""
+    rva, length = reloc_dir
+    off, end = rva, rva + length
+    while rva and length and off + 8 <= end:
+        page = int.from_bytes(data[off:off + 4], "little")
+        blk = int.from_bytes(data[off + 4:off + 8], "little")
+        if blk < 8 or off + blk > end:
+            break
+        for k in range(off + 8, off + blk, 2):
+            e = int.from_bytes(data[k:k + 2], "little")
+            if e >> 12 == 3 and page + (e & 0xfff) + 4 <= size:
+                yield page + (e & 0xfff)
+        off += blk
+
+
 class Image(object):
     def __init__(self, path, base=None):
         """The image as the runtime maps it: at `base` (default: its preferred
-        ImageBase), with its base relocations applied when the two differ, as
-        runtime/loader.cpp applies them."""
+        ImageBase), relocated when the two differ (relocate)."""
         import pefile
         pe = pefile.PE(path, fast_load=True)
-        self.preferred_base = pe.OPTIONAL_HEADER.ImageBase
-        self.base = self.preferred_base if base is None else base
+        self.path = path
+        self.base = self.preferred_base = pe.OPTIONAL_HEADER.ImageBase
         self.size = pe.OPTIONAL_HEADER.SizeOfImage
         data = pe.get_memory_mapped_image()
         # get_memory_mapped_image() stops at the last section's raw end, which
@@ -951,14 +874,9 @@ class Image(object):
         self.end = self.base + self.size
         rel = pe.OPTIONAL_HEADER.DATA_DIRECTORY[5]      # IMAGE_DIRECTORY_BASERELOC
         self.reloc_dir = (rel.VirtualAddress, rel.Size)
-        #: (preferred site VA, preferred stored address) of every HIGHLOW
-        #: relocation, filled when the image is moved.
-        self.reloc_sites = []
-        if self.base != self.preferred_base:
-            if pe.FILE_HEADER.Characteristics & 0x0001:
-                raise TranslateError("%s prefers %08x, has no relocations and cannot be "
-                                     "translated for %08x" % (path, self.preferred_base, self.base))
-            self.data = self.relocate(self.base - self.preferred_base)
+        #: Addresses (at self.base) of every dword the loader relocates.
+        self.reloc_sites = frozenset(self.base + rva for rva in
+                                     highlow_sites(self.data, self.reloc_dir, self.size))
         #: Import address table slots by address, as the imported name.
         #: noreturn_callees_from reads it to see that a function ending in
         #: RaiseException - MSVC's _CxxThrowException - does not return, and
@@ -971,8 +889,7 @@ class Image(object):
             for entry in getattr(pe, "DIRECTORY_ENTRY_IMPORT", []):
                 for imp in entry.imports:
                     if imp.name:
-                        self.iat_names[imp.address - self.preferred_base + self.base] = \
-                            imp.name.decode("ascii", "replace")
+                        self.iat_names[imp.address] = imp.name.decode("ascii", "replace")
         except Exception:                 # a malformed table only loses names
             pass
         pe.close()
@@ -1006,39 +923,44 @@ class Image(object):
             self.md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
         except ImportError:            # length checking is optional
             self.md = None
+        self.relocate(base)
 
-    def relocate(self, delta):
-        """The image bytes moved by `delta`, from its own .reloc table; records
-        every HIGHLOW site and its original value in reloc_sites. Types other
-        than ABSOLUTE padding and HIGHLOW (HIGH, LOW) are applied too; anything
-        else cannot be in a 32-bit image and is refused."""
-        rva, size = self.reloc_dir
-        data = bytearray(self.data)
-        off, end = rva, rva + (size if rva else 0)
-        while off + 8 <= end:
-            page = int.from_bytes(data[off:off + 4], "little")
-            blk = int.from_bytes(data[off + 4:off + 8], "little")
-            if blk == 0:
-                break
-            if blk < 8 or off + blk > end:
-                raise TranslateError("relocation block at rva %x runs past its table" % off)
-            for k in range(off + 8, off + blk, 2):
-                e = int.from_bytes(data[k:k + 2], "little")
-                kind, site = e >> 12, page + (e & 0xfff)
-                if kind == 0:
-                    continue
-                if kind == 3:
-                    v = int.from_bytes(data[site:site + 4], "little")
-                    self.reloc_sites.append((self.preferred_base + site, v))
-                    data[site:site + 4] = ((v + delta) & 0xffffffff).to_bytes(4, "little")
-                elif kind in (1, 2):
-                    v = int.from_bytes(data[site:site + 2], "little")
-                    add = (delta >> 16) if kind == 1 else (delta & 0xffff)
-                    data[site:site + 2] = ((v + add) & 0xffff).to_bytes(2, "little")
-                else:
-                    raise TranslateError("relocation type %d at rva %x" % (kind, site))
-            off += blk
-        return bytes(data)
+    def relocate(self, base):
+        """Map the image at `base` instead, as the loader does. A DLL that
+        shares its preferred base with another module is translated - and
+        loaded - somewhere else: its base relocations are applied here, so
+        every byte the translator reads (jump tables, stored pointers,
+        constants) is what the guest sees. Call before anything reads it."""
+        if base is None or base == self.base:
+            return
+        delta = (base - self.base) & 0xffffffff
+        if not self.reloc_sites:
+            raise TranslateError("%s has no base relocations, so it can only be translated at "
+                                 "its preferred base %08x, not %08x" % (self.path, self.base, base))
+        image = bytearray(self.data)
+        for site in self.reloc_sites:
+            o = site - self.base
+            v = int.from_bytes(image[o:o + 4], "little")
+            image[o:o + 4] = ((v + delta) & 0xffffffff).to_bytes(4, "little")
+        self.data = bytes(image)
+
+        def move(va):
+            return (va + delta) & 0xffffffff
+
+        self.base, self.end = base, base + self.size
+        self.reloc_sites = frozenset(move(a) for a in self.reloc_sites)
+        self.iat_names = {move(a): n for a, n in self.iat_names.items()}
+        self.exec_ranges = [(move(lo), move(hi), n) for lo, hi, n in self.exec_ranges]
+        self.data_ranges = [(move(lo), move(hi), n) for lo, hi, n in self.data_ranges]
+
+    def use_function_db(self, db):
+        """Classify code by the database instead of section flags: an EXE
+        whose sections are all flagged data still has code where the
+        database says, and protection residue that is flagged code has none."""
+        self.exec_ranges = db.exec_ranges()
+        claimed = [(lo, hi) for lo, hi, _ in db.code_ranges + db.excluded_ranges]
+        self.data_ranges = [(lo, hi, name) for lo, hi, name in self.data_ranges
+                            if not any(a < hi and lo < b for a, b in claimed)]
 
     def relocated_pointers(self):
         """Every address named by a dword the loader rewrites, and where.
@@ -1053,26 +975,10 @@ class Image(object):
         HIGHLOW (type 3) is the only relocation a 32-bit x86 image uses for a
         full address; ABSOLUTE (type 0) is block padding and names nothing.
         """
-        rva, size = self.reloc_dir
         out = {}
-        if not rva or not size:
-            return out
-        off, end = rva, rva + size
-        while off + 8 <= end:
-            page = int.from_bytes(self.data[off:off + 4], "little")
-            blk = int.from_bytes(self.data[off + 4:off + 8], "little")
-            if blk < 8 or off + blk > end:
-                break
-            for k in range(off + 8, off + blk, 2):
-                e = int.from_bytes(self.data[k:k + 2], "little")
-                if e >> 12 != 3:
-                    continue
-                site = page + (e & 0xfff)
-                if site + 4 > self.size:
-                    continue
-                va = int.from_bytes(self.data[site:site + 4], "little")
-                out.setdefault(va, self.base + site)
-            off += blk
+        for site in highlow_sites(self.data, self.reloc_dir, self.size):
+            va = int.from_bytes(self.data[site:site + 4], "little")
+            out.setdefault(va, self.base + site)
         return out
 
     def is_exec(self, va):
@@ -1675,6 +1581,155 @@ class Image(object):
             return self.to_insn(ci) if ci is not None else None
         finally:
             self.md.detail = detail
+
+
+# ------------------------------------------------------- function database --
+
+class FunctionDB(object):
+    """An authoritative list of what is code in one image: game.toml
+    [translate] function_db (or [modules.aux.<key>] function_db).
+
+    A game that has classified its binaries - every function start, the data
+    inside its code sections, the regions that are never translated - hands
+    the result over as JSON (schema "recomp-funcdb/1"), all addresses as hex
+    strings at `image_base`:
+
+      code_ranges         [[lo, hi, name]]   where code lives (replaces section flags)
+      excluded_ranges     [[lo, hi, name]]   never code (protection residue, headers)
+      entry_points        [[va, kind, [evidence]]]   every function start
+      alternate_entries   [[va, [evidence]]]  interior instruction boundaries
+                                              something names (EH continuations,
+                                              stored pointers)
+      data_in_code        [[va, size, type]]  jump/index tables, constants
+      jump_tables         [[function, table, entries, resolved_by]]
+      excluded_functions  [va]                functions never translated
+
+    With one, the translator classifies code by `code_ranges` minus
+    `excluded_ranges`, seeds every entry point and alternate entry, keeps
+    `data_in_code` out of every scan, and runs no speculative discovery: no
+    data-pointer scan, no relocation or immediate candidates. Branch
+    following and __initterm stay (they are exact); an address they adopt
+    that the database lacks is reported, since it means the database is
+    incomplete.
+    """
+    SCHEMA = "recomp-funcdb/1"
+
+    def __init__(self, path, delta=0):
+        doc = json.loads(Path(path).read_text())
+        if doc.get("schema") != self.SCHEMA:
+            raise TranslateError("%s: schema %r, expected %r" % (path, doc.get("schema"), self.SCHEMA))
+        self.path = str(path)
+        self.module = doc.get("module")
+        self.sha256 = doc.get("sha256")
+        self.image_base = int(doc["image_base"], 16)
+
+        def va(text):
+            return (int(text, 16) + delta) & 0xffffffff
+
+        def ranges(key):
+            return [(va(lo), va(hi), name) for lo, hi, name in doc.get(key, ())]
+
+        self.code_ranges = ranges("code_ranges")
+        self.excluded_ranges = ranges("excluded_ranges")
+        self.entry_points = {va(e[0]): e[1] for e in doc.get("entry_points", ())}
+        self.alternate_entries = {va(e[0]): tuple(e[1]) for e in doc.get("alternate_entries", ())}
+        self.data_in_code = [(va(e[0]), va(e[0]) + int(e[1])) for e in doc.get("data_in_code", ())]
+        self.jump_tables = [(va(f), va(t), int(n)) for f, t, n, *_ in doc.get("jump_tables", ())]
+        self.excluded_functions = frozenset(va(a) for a in doc.get("excluded_functions", ()))
+
+    @staticmethod
+    def base_of(path):
+        """The base a database's addresses are written at, before loading it."""
+        return int(json.loads(Path(path).read_text())["image_base"], 16)
+
+    def excluded(self, addr):
+        return addr in self.excluded_functions or any(
+            lo <= addr < hi for lo, hi, _ in self.excluded_ranges)
+
+    def exec_ranges(self):
+        """`code_ranges` with every excluded range cut out."""
+        out = []
+        for lo, hi, name in self.code_ranges:
+            pieces = [(lo, hi)]
+            for xlo, xhi, _ in self.excluded_ranges:
+                pieces = [q for a, b in pieces
+                          for q in ((a, min(b, xlo)), (max(a, xhi), b)) if q[0] < q[1]]
+            out.extend((a, b, name) for a, b in pieces)
+        return out
+
+
+#: A hex literal as Ghidra prints an operand: 0x, then digits, not followed by
+#: another hex digit or a word character.
+HEX_LITERAL_RE = re.compile(r"0x([0-9a-fA-F]+)\b")
+BRANCHES = frozenset(("CALL", "JMP", "LOOP", "LOOPE", "LOOPNE", "JECXZ")) | frozenset(JCC)
+
+
+def rebase_listing_text(text, image, delta):
+    """Move a listing exported at `image.base - delta` to `image.base`.
+
+    Ghidra exports a relocatable DLL at its preferred base; the translation
+    is for the base the module is loaded at. Every instruction moves by
+    `delta`, and so does every direct branch target (the encoding is
+    relative). Of the operands, exactly the ones the image's base relocations
+    cover change: the field (displacement or immediate) a relocation site
+    lands on is found by decoding the instruction, and its literal in the
+    operand text is rewritten from the preferred-base value to the relocated
+    one. Anything else that merely looks like an address is a constant and
+    stays. A relocated field whose literal is not in the text is an error,
+    not a guess."""
+    if not delta:
+        return text
+    import capstone
+    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
+    md.detail = True
+    out = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        m = LINE_RE.match(line)
+        if not m:
+            raise TranslateError("bad listing line %r" % line)
+        addr = (int(m.group(1), 16) + delta) & 0xffffffff
+        mnem, opstr = m.group(2), m.group(3) or ""
+        if opstr:
+            ops = opstr.split(",")
+            o = addr - image.base
+            ci = next(md.disasm(image.data[o:o + 16], addr, count=1), None) \
+                if 0 <= o < image.size else None
+            fields = {}
+            if ci is not None:
+                if ci.disp_offset:
+                    fields[addr + ci.disp_offset] = "disp"
+                if ci.imm_offset:
+                    fields[addr + ci.imm_offset] = "imm"
+            if ci is not None:
+                stray = [site for site in range(addr, addr + ci.size - 3)
+                         if site in image.reloc_sites and site not in fields]
+                if stray:
+                    raise TranslateError("%08x %s: a relocation at %08x is neither its displacement "
+                                         "nor its immediate" % (addr, mnem, stray[0]))
+            for site in sorted(fields):
+                if site not in image.reloc_sites:
+                    continue
+                new = image.rd32(site)
+                old = (new - delta) & 0xffffffff
+                want_memory = fields[site] == "disp"
+                hits = [k for k, op in enumerate(ops) if ("[" in op) == want_memory and any(
+                    int(h, 16) == old for h in HEX_LITERAL_RE.findall(op))]
+                if len(hits) != 1:
+                    raise TranslateError("relocated %s %08x of %08x %s %s is not one operand of the "
+                                         "listing" % (fields[site], old, addr, mnem, opstr))
+                k = hits[0]
+                ops[k] = HEX_LITERAL_RE.sub(lambda h: "0x%x" % new if int(h.group(1), 16) == old
+                                            else h.group(0), ops[k])
+            base_mnem = mnem.split(".", 1)[0]
+            if base_mnem in BRANCHES and len(ops) == 1 and "[" not in ops[0]:
+                h = re.fullmatch(r"\s*0x([0-9a-fA-F]+)\s*", ops[0])
+                if h:
+                    ops[0] = "0x%x" % ((int(h.group(1), 16) + delta) & 0xffffffff)
+            opstr = ",".join(ops)
+        out.append("%08x  %s%s" % (addr, mnem, " " + opstr if opstr else ""))
+    return "\n".join(out) + "\n"
 
 
 # -------------------------------------------------------------- translator --
@@ -4137,17 +4192,47 @@ def retarget_withdrawn(body, pruned):
     return out
 
 
-def load_functions(only=None):
-    funcs = []
+def listing_index():
+    """functions.tsv as (address, name, bytes, listing path), with addresses
+    at the base the image is translated for (see LISTING_SHIFT)."""
+    delta = LISTING_SHIFT[1] if LISTING_SHIFT is not None else 0
+    out = []
     with open(FUNCS_TSV) as fh:
         rows = [l.rstrip("\n").split("\t") for l in fh][1:]
     for row in rows:
         listed = int(row[0], 16)
-        addr = listed_address(listed)
-        name, nbytes = row[1], int(row[2])
+        addr = (listed + delta) & 0xffffffff
+        name = row[1]
+        if delta and name == "fn_%08x" % listed:
+            name = "fn_%08x" % addr
+        out.append((addr, name, int(row[2]), os.path.join(LISTINGS, "%08x.asm" % listed)))
+    return out
+
+
+def listing_name(addr):
+    """The listing file stem of a translated address: the address it was
+    exported at."""
+    delta = LISTING_SHIFT[1] if LISTING_SHIFT is not None else 0
+    return "%08x" % ((addr - delta) & 0xffffffff)
+
+
+def listings_base(image, preferred_base):
+    """The base listings without a function database were exported at: the
+    image's preferred base (a plain Ghidra import's convention) unless every
+    listed function lies in the image as it is mapped and none in the
+    preferred range - a program Ghidra rebased before exporting."""
+    with open(FUNCS_TSV) as fh:
+        listed = [int(l.split("\t")[0], 16) for l in list(fh)[1:] if l.strip()]
+    at_preferred = any(preferred_base <= a < preferred_base + image.size for a in listed)
+    at_base = listed and all(image.base <= a < image.end for a in listed)
+    return image.base if at_base and not at_preferred else preferred_base
+
+
+def load_functions(only=None):
+    funcs = []
+    for addr, name, nbytes, path in listing_index():
         if only and "%08x" % addr not in only:
             continue
-        path = os.path.join(LISTINGS, "%08x.asm" % listed)
         if not os.path.exists(path) or os.path.getsize(path) == 0:
             continue
         funcs.append((addr, name, nbytes, path))
@@ -4204,18 +4289,35 @@ def main():
         SYMBOL_PREFIX = "recomp_%s_" % re.sub(r"[^A-Za-z0-9_]", "_", args.as_module)
         AUX_MODULE = {"name": args.as_module, "base": cfg["game"]["image_base"],
                       "size": 0}  # the image's extent, filled in once it is read
+    # A function database names its own base; plain listings are Ghidra's,
+    # exported at the PE's preferred base. Either way the listings move to
+    # the base this image is translated for.
+    global LISTING_SHIFT
+    db = None
     image = Image(BINARY)
-    if IMAGE_BASE is not None and image.base != IMAGE_BASE:
-        image = Image(BINARY, IMAGE_BASE)  # mapped elsewhere than it prefers: relocate
-    global REBASE
-    REBASE = None
-    if image.base != getattr(image, "preferred_base", image.base) and \
-            listings_base(image) == image.preferred_base:
-        REBASE = Rebase(image)
-    if REBASE is not None:
-        print("  rebase: %s prefers %08x, translated for %08x (%d relocations)"
-              % (os.path.basename(BINARY), image.preferred_base, image.base,
-                 len(image.reloc_sites)), file=sys.stderr)
+    preferred_base = image.base
+    image.relocate(LOAD_BASE)
+    listing_base = (FunctionDB.base_of(FUNCTION_DB) if FUNCTION_DB
+                    else listings_base(image, preferred_base) if image.base != preferred_base
+                    else preferred_base)
+    delta = (image.base - listing_base) & 0xffffffff
+    LISTING_SHIFT = (image, delta) if delta else None
+    if FUNCTION_DB:
+        db = FunctionDB(FUNCTION_DB, delta)
+        # A copy relocated ahead of time has other bytes; the original must match.
+        if preferred_base == listing_base:
+            import hashlib
+            digest = hashlib.sha256(open(BINARY, "rb").read()).hexdigest()
+            if db.sha256 and digest != db.sha256:
+                raise TranslateError("%s describes a binary with SHA-256 %s, not %s (%s)"
+                                     % (FUNCTION_DB, db.sha256, digest, BINARY))
+        image.use_function_db(db)
+        print("  function database %s: %d entry points, %d alternate entries, %d data ranges "
+              "in code, %d excluded functions; code at %s; listings moved by %+#x"
+              % (FUNCTION_DB, len(db.entry_points), len(db.alternate_entries),
+                 len(db.data_in_code), len(db.excluded_functions),
+                 ", ".join("%08x-%08x" % (lo, hi) for lo, hi, _ in image.exec_ranges),
+                 delta if delta < 0x80000000 else delta - (1 << 32)), file=sys.stderr)
     discovered = []
     if args.discovered:
         global EXTRA_ENTRY_POINTS
@@ -4243,16 +4345,19 @@ def main():
 
     t0 = time.time()
     entries = load_functions(set(args.only) if args.only else None)
+    db_dropped = []
+    if db is not None:
+        # Never translated, whatever a listing says (protection residue).
+        db_dropped = [e[0] for e in entries if db.excluded(e[0])]
+        entries = [e for e in entries if not db.excluded(e[0])]
     all_addrs = set()
     listed_starts = []
-    with open(FUNCS_TSV) as fh:
-        for l in list(fh)[1:]:
-            listed = int(l.split("\t")[0], 16)
-            a = listed_address(listed)
-            listed_starts.append(a)
-            p = os.path.join(LISTINGS, "%08x.asm" % listed)
-            if os.path.exists(p) and os.path.getsize(p) > 0:
-                all_addrs.add(a)
+    for a, _name, _nbytes, p in listing_index():
+        if db is not None and db.excluded(a):
+            continue
+        listed_starts.append(a)
+        if os.path.exists(p) and os.path.getsize(p) > 0:
+            all_addrs.add(a)
 
     if AUX_MODULE is not None and args.as_module:
         # A module of the image's own code covers the image's addresses; the
@@ -4260,6 +4365,13 @@ def main():
         # it carries.
         AUX_MODULE["size"] = image.size
     curated = read_curated(CURATED)
+    if args.module:
+        # One globals.toml serves the executable and every module: a module
+        # keeps the named entries inside itself, and no data globals.
+        curated = {section: ({k: v for k, v in body.items()
+                              if isinstance(v, int) and image.base <= v < image.end}
+                             if section in ("entries", "aliases", "alternates", "events") else body)
+                   for section, body in curated.items() if not section.startswith("globals.")}
     # Addresses named by a dword the loader relocates: a vtable slot, a
     # function-pointer table, a stored callback.  Read once, before discovery,
     # so the evidence does not depend on which pass reaches an address first.
@@ -4358,6 +4470,9 @@ def main():
     rejected = set()
     tr = Translator(image, all_addrs, args)
     tr.noreturn_callees = image.noreturn_callees
+    if db is not None:
+        # Tables and constants inside code: no scan or recovery reads them as code.
+        tr.table_ranges.update(db.data_in_code)
 
     if args.check_flags:
         for fn in parsed:
@@ -5007,7 +5122,17 @@ def main():
     # Seed before branch recovery can claim fragments of these functions.
     # The later __initterm pass uses the same resolver, but by then recovery
     # stops at owned instructions and cannot reconstruct a whole missing body.
-    for addr in sorted(EXTRA_ENTRY_POINTS):
+    seeds = set(EXTRA_ENTRY_POINTS)
+    db_unlisted = []
+    if db is not None:
+        # Every start the database knows has a listing; one that does not is
+        # an export gap, recovered from the PE and reported. Its alternate
+        # entries - catch continuations, pushed and stored code addresses -
+        # are what the speculative scans used to find.
+        db_unlisted = sorted(a for a in db.entry_points if a not in all_addrs and not db.excluded(a))
+        seeds |= set(db_unlisted)
+        seeds |= {a for a in db.alternate_entries if not db.excluded(a)}
+    for addr in sorted(seeds):
         if not image.is_exec(addr):
             raise TranslateError("[translate] entry_points: %08x is not in a code section" % addr)
         # Its whole body: fragments recovered elsewhere must not cut a named
@@ -5117,6 +5242,14 @@ def main():
                 if resolve(t, listed, why="initterm"):
                     changed = True
                     initterm_found[0] += 1
+            if db is not None:
+                # The function database is authoritative: no data-pointer
+                # scan, no relocation or immediate candidates. Branch
+                # following and __initterm above are exact and stay.
+                if not changed:
+                    converged = True
+                    break
+                continue
             # Addresses inside a decoded jump table are table storage, not
             # code: 0x4422c0 is 16-aligned and follows a RET, so it passes
             # every static signal there is.
@@ -6252,9 +6385,33 @@ void recomp_unknown_jump(X86 *c, uint32_t target)
             print("FAILED %d functions:" % len(failures))
             for a, why in failures[:40]:
                 print("  %08x  %s" % (a, why))
+    db_report = None
+    if db is not None:
+        # What the exact passes found that the database lacks: each is a
+        # database gap (or an export gap), and every count here should be 0.
+        db_known = set(db.entry_points) | set(db.alternate_entries)
+        db_report = {
+            "path": db.path, "module": db.module,
+            "listing_delta": "%08x" % delta,
+            "entry_points": len(db.entry_points),
+            "alternate_entries": len(db.alternate_entries),
+            "data_in_code": len(db.data_in_code),
+            "excluded_functions": len(db.excluded_functions),
+            "listed_but_excluded": ["%08x" % a for a in db_dropped],
+            "entry_points_without_listing": ["%08x" % a for a in db_unlisted],
+            "functions_not_in_db": ["%08x" % f.addr for f in parsed
+                                    if f.addr not in db.entry_points],
+            "alternate_entries_not_in_db": len([a for a in extra if a not in db_known
+                                                and provenance.get(a) != "table"]),
+        }
+        if not args.quiet:
+            print("  function database: %d functions not in it, %d of its entry points without a "
+                  "listing, %d listed functions it excludes; speculative scans off"
+                  % (len(db_report["functions_not_in_db"]), len(db_unlisted), len(db_dropped)))
     if args.report:
         with open(args.report, "w") as fh:
             json.dump({
+                "function_db": db_report,
                 "image_base": "%08x" % image.base,
                 "functions_total": len(parsed),
                 "functions_ok": len(ok),

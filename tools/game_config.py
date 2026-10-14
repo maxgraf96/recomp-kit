@@ -140,6 +140,17 @@ def load_controls(controls, touch, source):
     return controls
 
 
+def function_db_path(game_dir, value, where, source):
+    """A function database (tools/recomp/translate.py FunctionDB) named
+    relative to game.toml, or None. It lives with the listings in the ignored
+    analysis/ tree, so it need not exist until a translation reads it."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ValueError("%s: %s function_db must be a path, not %r" % (source, where, value))
+    return (Path(game_dir) / value).resolve()
+
+
 def load(game_dir):
     """Return the parsed config with `globals` merged in and `dir`/`source` recorded."""
     game_dir = Path(game_dir)
@@ -204,6 +215,7 @@ def load(game_dir):
     # ignored original/ and analysis/ directories.
     cfg["developer_exe_path"] = (game_dir / game["developer_exe"]).resolve()
     cfg["listings_path"] = (game_dir / translate.get("listings", "analysis")).resolve()
+    cfg["function_db_path"] = function_db_path(game_dir, translate.get("function_db"), "[translate]", source)
     # [translate] overrides: a header the generated sources include before they
     # define FN_<addr>, so a game can replace one translated function with a
     # native one (translate.py's RECOMP_OVERRIDE_HEADER). Absent by default,
@@ -247,12 +259,13 @@ def load_aux_modules(cfg, game_dir, source):
     import) that the kit translates as a second image and maps at `base`, so
     its code runs as translated code and its exports answer GetProcAddress.
     Keys: name (the file name the guest asks for), path (developer copy,
-    relative to game.toml), sha256, base and size (where it is mapped - the
-    loader and the translator relocate a DLL that prefers another base - and
-    at least its SizeOfImage), listings (Ghidra export directory at the
-    PE's preferred base, relative), and
-    function_alignment (default 4). [game] guest_size must reach past every
-    module; the default arena is 0x10000000."""
+    relative to game.toml), sha256, base and size (where it is translated for
+    and mapped - the loader and the translator both apply the module's base
+    relocations when it prefers another base - and at least its SizeOfImage),
+    listings (Ghidra export directory, relative), function_db (an
+    authoritative function database, relative; see translate.py FunctionDB)
+    and function_alignment (default 4). [game] guest_size must reach past
+    every module; the default arena is 0x10000000."""
     game = cfg["game"]
     guest_size = int(game.setdefault("guest_size", GUEST_SIZE_DEFAULT))
     if guest_size % 0x1000 or guest_size < GUEST_SIZE_DEFAULT:
@@ -282,5 +295,7 @@ def load_aux_modules(cfg, game_dir, source):
             "listings_path": (game_dir / entry.get("listings", "analysis/" + entry["name"])).resolve(),
             "function_alignment": alignment,
             "entry_points": entries,
+            "function_db_path": function_db_path(game_dir, entry.get("function_db"),
+                                                 "[modules.aux.%s]" % key, source),
         })
     return modules
