@@ -266,6 +266,57 @@ static int harness_ftag_sweep(void) {
     return 1;
 }
 
+/* One x87 instruction on one fresh value, the way translated code runs it:
+ * the control word through x87_set_cw, the operand through fpush. */
+static void h_load(X86 *c, uint16_t cw, double v) {
+    x87_finit(c);
+    x87_set_cw(c, cw);
+    fpush(c, v);
+}
+static double h_frndint(X86 *c, uint16_t cw, double v) {
+    h_load(c, cw, v);
+    x87_frndint(c);
+    double r = ST(c, 0);
+    fdrop(c);
+    return r;
+}
+static int64_t h_fist64(X86 *c, uint16_t cw, double v) {
+    h_load(c, cw, v);
+    int64_t r = x87_fist64(c);
+    fdrop(c);
+    return r;
+}
+static int32_t h_fist32(X86 *c, uint16_t cw, double v) {
+    h_load(c, cw, v);
+    int32_t r = x87_fist32(c);
+    fdrop(c);
+    return r;
+}
+static float h_fst32(X86 *c, uint16_t cw, double v) {
+    h_load(c, cw, v);
+    float r = x87_fst_f32(c);
+    fdrop(c);
+    return r;
+}
+/* ST(0) = a op b, returned as the double it is (callers pick double results). */
+static double h_arith(X86 *c, uint16_t cw, int op, double a, double b) {
+    h_load(c, cw, a);
+    x87_arith_m(c, op, b);
+    double r = ST(c, 0);
+    fdrop(c);
+    return r;
+}
+/* ST(0) = a, ST(1) = b; FPREM or FPREM1; the result, with the status word left in c. */
+static double h_fprem(X86 *c, double a, double b, int ieee) {
+    h_load(c, 0x037f, b);
+    fpush(c, a);
+    x87_fprem(c, ieee);
+    double r = ST(c, 0);
+    fdrop(c);
+    fdrop(c);
+    return r;
+}
+
 uint32_t harness_header_selftest(void) {
     X86 c;
     unsigned n = 0;
@@ -289,21 +340,21 @@ uint32_t harness_header_selftest(void) {
     CHECK(rol16(0x8001, 1) == 0x0003);
     CHECK(ror8(0x01, 1) == 0x80);
     /* nearest/even must not perturb an integer that is already exact */
-    CHECK(fround_cw(&c, 4503599627370497.0) == 4503599627370497.0);
-    CHECK(fto_i64(&c, 4503599627370497.0) == 4503599627370497LL);
-    CHECK(fround_cw(&c, 2.5) == 2.0);
-    CHECK(fround_cw(&c, 3.5) == 4.0);
-    CHECK(fround_cw(&c, -2.5) == -2.0);
-    c.fpu_cw = 0x077f;
-    CHECK(fround_cw(&c, 2.7) == 2.0); /* RC=01 down */
-    c.fpu_cw = 0x0b7f;
-    CHECK(fround_cw(&c, 2.7) == 3.0); /* RC=10 up */
-    c.fpu_cw = 0x0f7f;
-    CHECK(fround_cw(&c, 2.7) == 2.0); /* RC=11 truncate */
+    CHECK(h_frndint(&c, 0x037f, 4503599627370497.0) == 4503599627370497.0);
+    CHECK(h_fist64(&c, 0x027f, 4503599627370497.0) == 4503599627370497LL);
+    CHECK(h_frndint(&c, 0x037f, 2.5) == 2.0);
+    CHECK(h_frndint(&c, 0x037f, 3.5) == 4.0);
+    CHECK(h_frndint(&c, 0x037f, -2.5) == -2.0);
+    CHECK(h_frndint(&c, 0x077f, 2.7) == 2.0); /* RC=01 down */
+    CHECK(h_frndint(&c, 0x0b7f, 2.7) == 3.0); /* RC=10 up */
+    CHECK(h_frndint(&c, 0x0f7f, 2.7) == 2.0); /* RC=11 truncate */
+    CHECK(h_fist32(&c, 0x0f7f, -2.7) == -2); /* FIST under RC too */
+    CHECK(h_fist32(&c, 0x027f, 2.5) == 2 && h_fist32(&c, 0x027f, 3.5) == 4);
     c.fpu_cw = 0x037f;
     /* FIST of something that does not fit stores the integer indefinite */
-    CHECK(fto_i32(&c, (double)INFINITY) == INT32_MIN);
-    CHECK(fto_i32(&c, (double)NAN) == INT32_MIN);
+    CHECK(h_fist32(&c, 0x027f, (double)INFINITY) == INT32_MIN);
+    CHECK(h_fist32(&c, 0x027f, (double)NAN) == INT32_MIN);
+    CHECK(h_fist32(&c, 0x027f, 2147483647.5) == INT32_MIN);
     /* IDIV overflow reaches the callback instead of dividing */
     before = last_div_error_count;
     c.r[R_EAX] = 0;
@@ -370,33 +421,35 @@ uint32_t harness_header_selftest(void) {
 
     /* Precision control applies to arithmetic but never to FRNDINT: with
      * PC=00 an exact 16777217 must survive a round-to-integer. */
-    c.fpu_cw = 0x0000 | 0x003f; /* PC = 00 (single) */
-    CHECK(fx87_exact(&c, fround_cw(&c, 16777217.0)) == 16777217.0);
-    CHECK(fx87(&c, 16777217.0) == 16777216.0); /* arithmetic does round */
-    c.fpu_cw = 0x037f;
-    CHECK(fx87(&c, 16777217.0) == 16777217.0); /* PC = 11: no rounding */
+    CHECK(h_frndint(&c, 0x003f, 16777217.0) == 16777217.0);
+    CHECK(h_arith(&c, 0x003f, X87_ADD, 16777216.0, 1.0) == 16777216.0); /* arithmetic does round */
+    CHECK(h_arith(&c, 0x037f, X87_ADD, 16777216.0, 1.0) == 16777217.0); /* PC = 11: no rounding */
+    /* PC=24 rounds once, from the exact sum: 1 + 2^-24 + 2^-60 is just above
+     * a float midpoint, which rounding the double sum again would lose. */
+    CHECK(h_arith(&c, 0x007f, X87_ADD, 1.0 + 0x1p-24, 0x1p-60) == 1.0 + 0x1p-23);
+    CHECK(h_arith(&c, 0x007f, X87_ADD, 1.0, 0x1p-24) == 1.0); /* a true tie: to even */
+    /* PC=53 keeps the 15-bit exponent: DBL_MAX * 2 / 4 is DBL_MAX / 2, not infinity */
+    h_load(&c, 0x027f, 1.7976931348623157e308);
+    x87_arith_m(&c, X87_MUL, 2.0);
+    CHECK(c.ext_live == 1 && c.fp_mode == X87_MODE_EXACT); /* now an extended register */
+    x87_arith_m(&c, X87_DIV, 4.0);
+    CHECK(c.ext_live == 0 && c.fp_mode == X87_MODE_FAST && ST(&c, 0) == 1.7976931348623157e308 / 2);
+    fdrop(&c);
 
     /* Rounding reads fpu_cw directly, so it cannot drift with the host mode.
      * Prove it by rounding under each RC after deliberately setting the host
      * mode the other way. */
     fesetround(FE_TOWARDZERO);
-    x87_set_cw(&c, 0x037f);
-    CHECK(fround_cw(&c, 2.5) == 2.0); /* nearest */
-    x87_set_cw(&c, 0x077f);
-    CHECK(fround_cw(&c, 2.7) == 2.0); /* down */
-    x87_set_cw(&c, 0x0b7f);
-    CHECK(fround_cw(&c, 2.3) == 3.0); /* up */
+    CHECK(h_frndint(&c, 0x037f, 2.5) == 2.0); /* nearest */
+    CHECK(h_frndint(&c, 0x077f, 2.7) == 2.0); /* down */
+    CHECK(h_frndint(&c, 0x0b7f, 2.3) == 3.0); /* up */
     fesetround(FE_UPWARD);
-    x87_set_cw(&c, 0x0f7f);
-    CHECK(fround_cw(&c, 2.7) == 2.0); /* truncate */
-    x87_set_cw(&c, 0x037f);
-    CHECK(fround_cw(&c, 4503599627370497.0) == 4503599627370497.0);
+    CHECK(h_frndint(&c, 0x0f7f, 2.7) == 2.0); /* truncate */
+    CHECK(h_frndint(&c, 0x037f, 4503599627370497.0) == 4503599627370497.0);
     fesetround(FE_TONEAREST);
     /* FST to float honours RC explicitly too */
-    x87_set_cw(&c, 0x077f);
-    CHECK(fto_float(&c, 1.0000001) == 1.0f);
-    x87_set_cw(&c, 0x0b7f);
-    CHECK(fto_float(&c, 1.0000001) > 1.0f);
+    CHECK(h_fst32(&c, 0x077f, 1.0000001) == 1.0f);
+    CHECK(h_fst32(&c, 0x0b7f, 1.0000001) > 1.0f);
     x87_set_cw(&c, 0x037f);
     /* FUCOM is quiet for a quiet NaN; FCOM is not */
     c.fpu_sw = 0;
@@ -430,53 +483,64 @@ uint32_t harness_header_selftest(void) {
     fdrop(&c);
     fdrop(&c);
     /* FIST out of range raises IE */
-    c.fpu_sw = 0;
-    (void)fto_i32(&c, (double)INFINITY);
+    (void)h_fist32(&c, 0x027f, (double)INFINITY);
     CHECK((c.fpu_sw & 1u) == 1u);
 
-    /* An invalid operation raises IE in the status word */
-    c.fpu_sw = 0;
-    (void)fx87(&c, (double)NAN);
-    CHECK((c.fpu_sw & 1u) == 1u);
+    /* An invalid operation raises IE in the status word and gives the
+     * negative QNaN indefinite */
+    {
+        double r = h_arith(&c, 0x027f, X87_SUB, (double)INFINITY, (double)INFINITY);
+        uint64_t bits;
+        memcpy(&bits, &r, 8);
+        CHECK((c.fpu_sw & 1u) == 1u && bits == 0xfff8000000000000ull);
+    }
 
-    /* FPREM quotient bits, recovered without ever forming Q.  2^56 / 3 is
-     * 24019198012642645, whose low three bits are 5. */
-    CHECK(fprem_low_bits(ldexp(1.0, 56), 3.0) == 5u);
-    CHECK(fprem_low_bits(37.0, 5.0) == 7u);  /* 37/5 = 7 */
-    CHECK(fprem_low_bits(100.0, 3.0) == 1u); /* 33 & 7 = 1 */
-    c.fpu_sw = 0;
-    CHECK(fprem_common(&c, 37.0, 5.0, 0) == 2.0);
+    /* FPREM quotient bits.  2^56 / 3 is 24019198012642645, whose low three
+     * bits are 5: C0 (bit 2) and C1 (bit 0). */
+    CHECK(h_fprem(&c, ldexp(1.0, 56), 3.0, 0) == 1.0);
+    CHECK((c.fpu_sw & 0x4700u) == (0x0100u | 0x0200u));
+    CHECK(h_fprem(&c, 100.0, 3.0, 0) == 1.0); /* 33 & 7 = 1 */
+    CHECK((c.fpu_sw & 0x4700u) == 0x0200u);
+    CHECK(h_fprem(&c, 37.0, 5.0, 0) == 2.0);
     CHECK((c.fpu_sw & 0x0400u) == 0u);                            /* complete: C2 clear */
     CHECK((c.fpu_sw & 0x4700u) == (0x0100u | 0x4000u | 0x0200u)); /* 7 */
     /* Exponents 64 apart: a partial reduction, and C2 says come back. */
-    c.fpu_sw = 0;
     {
-        double part = fprem_common(&c, ldexp(1.0, 70), 3.0, 0);
+        double part = h_fprem(&c, ldexp(1.0, 70), 3.0, 0);
         CHECK((c.fpu_sw & 0x0400u) == 0x0400u);
         CHECK(fabs(part) < ldexp(1.0, 70));
         /* Iterating to completion terminates and lands on the true remainder. */
         {
             int guard = 0;
             while ((c.fpu_sw & 0x0400u) && guard++ < 8)
-                part = fprem_common(&c, part, 3.0, 0);
+                part = h_fprem(&c, part, 3.0, 0);
             CHECK(guard < 8);
             CHECK(part == fmod(ldexp(1.0, 70), 3.0));
         }
     }
     /* FPREM1 rounds the quotient to nearest, so its remainder can go negative */
-    c.fpu_sw = 0;
     /* IEEE: 37/5 rounds to 7, so the remainder is 37 - 35 = 2. */
-    CHECK(fprem_common(&c, 37.0, 5.0, 1) == 2.0);
-    /* The smallest subnormal, where B/2 underflows to zero.  x rem x is 0,
-     * with quotient bit 0 set; it used to come back as -x. */
-    CHECK(fprem_common(&c, 0x1p-1074, 0x1p-1074, 1) == 0.0);
+    CHECK(h_fprem(&c, 37.0, 5.0, 1) == 2.0);
+    CHECK(h_fprem(&c, 38.0, 5.0, 1) == -2.0); /* 7.6 rounds to 8 */
+    /* The smallest subnormal double, a normal extended.  x rem x is 0, with
+     * quotient bit 0 set. */
+    CHECK(h_fprem(&c, 0x1p-1074, 0x1p-1074, 1) == 0.0);
     CHECK((c.fpu_sw & 0x4700u) == 0x0200u); /* C1 = Q0 = 1 */
-    CHECK(fprem_common(&c, 0x1p-1074, 0x1p-1074, 0) == 0.0);
+    CHECK(h_fprem(&c, 0x1p-1074, 0x1p-1074, 0) == 0.0);
     /* One step up, where the tie is real: 6/4 rounds to even, giving -2. */
-    CHECK(fprem_common(&c, 0x6p-1074, 0x4p-1074, 1) == -0x2p-1074);
-    CHECK(fprem_common(&c, 0x6p-1074, 0x4p-1074, 0) == 0x2p-1074);
-    c.fpu_sw = 0;
-    CHECK(fprem_common(&c, 0.0, 3.0, 0) == 0.0);
+    CHECK(h_fprem(&c, 0x6p-1074, 0x4p-1074, 1) == -0x2p-1074);
+    CHECK(h_fprem(&c, 0x6p-1074, 0x4p-1074, 0) == 0x2p-1074);
+    CHECK(h_fprem(&c, 0.0, 3.0, 0) == 0.0);
+
+    /* _controlfp: Windows' thread default 0x027f is 0x9001f, the render
+     * thread's 0x007f is 0xa001f, and setting _PC_53 on a fresh 0x037f gives
+     * 0x027f. */
+    x87_set_cw(&c, 0x037f);
+    CHECK(x87_controlfp(&c, 0x10000u, 0x30000u) == 0x9001fu && c.fpu_cw == 0x027f);
+    CHECK(c.fp_mode == X87_MODE_FAST);
+    CHECK(x87_controlfp(&c, 0x20000u, 0x30000u) == 0xa001fu && c.fpu_cw == 0x007f);
+    CHECK(x87_controlfp(&c, 0, 0) == 0xa001fu && c.fp_mode == X87_MODE_PC24);
+    x87_set_cw(&c, 0x037f);
 
     /* 2^x - 1 and y*log2(x+1) keep their significant bits near zero */
     {
@@ -517,39 +581,13 @@ uint32_t harness_header_check_count(void) {
  * image unicorn produces, which covers the control word, every exception bit,
  * the whole tag word and all eight registers in one go. */
 void harness_fnsave(const X86 *c, uint8_t *out) {
-    unsigned i;
-    memset(out, 0, 108);
-    out[0] = (uint8_t)c->fpu_cw;
-    out[1] = (uint8_t)(c->fpu_cw >> 8);
-    uint16_t sw = fstsw(c);
-    out[4] = (uint8_t)sw;
-    out[5] = (uint8_t)(sw >> 8);
-    out[8] = (uint8_t)c->fpu_tag;
-    out[9] = (uint8_t)(c->fpu_tag >> 8);
-    for (i = 0; i < 8; i++) {
-        double v = c->st[(c->fpu_top + i) & 7];
-        uint64_t m;
-        uint16_t se;
-        if (isnan(v)) {
-            m = 0xc000000000000000ull;
-            se = 0x7fffu;
-        } else if (isinf(v)) {
-            m = 0x8000000000000000ull;
-            se = v < 0 ? 0xffffu : 0x7fffu;
-        } else if (v == 0.0) {
-            m = 0;
-            se = signbit(v) ? 0x8000u : 0u;
-        } else {
-            int e, sign = signbit(v);
-            double f = frexp(sign ? -v : v, &e);
-            m = (uint64_t)ldexp(f, 64);
-            se = (uint16_t)((e - 1 + 16383) & 0x7fff);
-            if (sign)
-                se |= 0x8000u;
-        }
-        memcpy(out + 28 + 10 * i, &m, 8);
-        memcpy(out + 28 + 10 * i + 8, &se, 2);
-    }
+    /* x87_fnsave's own image, written from a copy into the top page of the
+     * harness's 4 GB arena, which no case uses. */
+    const uint32_t scratch = 0xfffff000u;
+    X86 copy = *c;
+    harness_mem();
+    x87_fnsave(&copy, scratch);
+    memcpy(out, g_mem + scratch, 108);
 }
 
 /* ST(0) as a double, for x87 return values. */

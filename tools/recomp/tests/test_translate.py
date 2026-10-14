@@ -192,6 +192,10 @@ UC_REGS = [UC_X86_REG_EAX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EBX,
 REG_NAMES = ["EAX", "ECX", "EDX", "EBX", "ESP", "EBP", "ESI", "EDI"]
 
 
+class X87Ext(C.Structure):
+    _fields_ = [("signif", C.c_uint64), ("signExp", C.c_uint16)]
+
+
 class X86(C.Structure):
     _fields_ = [
         ("r", C.c_uint32 * 8), ("eip", C.c_uint32),
@@ -199,11 +203,13 @@ class X86(C.Structure):
         ("eflags_sf", C.c_uint32), ("eflags_of", C.c_uint32),
         ("eflags_pf", C.c_uint32), ("eflags_af", C.c_uint32),
         ("eflags_df", C.c_uint32), ("eflags_misc", C.c_uint32),
-        ("st", C.c_double * 8), ("st_bits", C.c_uint64 * 8),
-        ("st_exact", C.c_uint8 * 8), ("fpu_top", C.c_uint32),
+        ("st", C.c_double * 8), ("stx", X87Ext * 8),
+        ("st_kind", C.c_uint8 * 8), ("ext_live", C.c_uint8),
+        ("fp_mode", C.c_uint8), ("fpu_top", C.c_uint32),
         ("fpu_cw", C.c_uint16), ("fpu_sw", C.c_uint16),
         ("fpu_tag", C.c_uint16),
         ("fs_base", C.c_uint32),
+        ("xmm", (C.c_uint32 * 4) * 8),
         ("mm", C.c_uint64 * 8),
     ]
 
@@ -222,7 +228,10 @@ def build(verbose=True):
         "xcrun", "clang", "-O1", "-g", "-std=c11", "-Wall", "-Wextra",
         "-Wno-unused", "-I", GEN, "-I", ROOT,
         "-I", os.path.join(ROOT, "runtime"), "-dynamiclib",
+        "-ffp-contract=off",
         os.path.join(ROOT, "tools/recomp/tests/harness.c"), synth,
+        os.path.join(ROOT, "runtime/x87.c"),
+        os.path.join(ROOT, "third_party/softfloat/softfloat_x87.c"),
         "-Wl,-force_load," + LIB_A, "-o", DYLIB])
 
 
@@ -1377,7 +1386,10 @@ uint32_t probe_dispatch(X86 *c)
         "-Wno-unused", "-I", GEN, "-I", ROOT,
         "-I", os.path.join(ROOT, "runtime"), "-dynamiclib",
         "-DRECOMP_OVERRIDE_HEADER=\"%s\"" % hdr,
+        "-ffp-contract=off",
         os.path.join(ROOT, "tools/recomp/tests/harness.c"), chunk, src,
+        os.path.join(ROOT, "runtime/x87.c"),
+        os.path.join(ROOT, "third_party/softfloat/softfloat_x87.c"),
         "-o", PROBE_DYLIB])
     if verbose:
         print("    dispatcher probe: %s with %d call sites redirected"

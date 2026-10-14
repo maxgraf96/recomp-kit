@@ -3689,7 +3689,7 @@ class Translator(object):
         if m == "EMMS":
             # Every x87 register empty; TOP and the values are left alone.
             # Codecs call a bare `emms; ret` whatever CPUID said.
-            return ["c->fpu_tag = 0xffffu;"]
+            return ["x87_emms(c);"]
         if m == "STMXCSR":
             # No translated SSE arithmetic changes MXCSR, so expose its reset value.
             return ["wr32(%s, 0x1f80u);" % addr_expr(ops[0])]
@@ -3843,13 +3843,12 @@ class Translator(object):
                    "FIMUL", "FIDIV", "FIDIVR", "FICOM", "FICOMP"}
 
     def x87_mem_value(self, op):
-        """Value of an x87 memory source as a C double expression."""
+        """Value of an m32/m64 x87 operand as a C double expression. Both widen
+        exactly; an m80 operand is never an arithmetic or compare source."""
         if op.size == 32:
             return "(double)rdf32(%s)" % addr_expr(op)
         if op.size == 64:
             return "rdf64(%s)" % addr_expr(op)
-        if op.size == 80:
-            return "rdf80(%s)" % addr_expr(op)
         raise TranslateError("bad x87 memory size %r" % op.size)
 
     def x87_int_value(self, op):
@@ -3901,35 +3900,40 @@ class Translator(object):
         return ["c->mm[%d] = %s(c->mm[%d], %s);" % (dst.reg, fn, dst.reg, src(ops[1]))]
 
     def emit_x87(self, fn, ins, m, ops):
+        """x87 instructions, as calls into runtime/x86.h's exact x87 model.
+
+        Registers are read and written only through its helpers, which keep
+        a register's value exact whether it is a double or an extended;
+        nothing here does arithmetic on ST() itself."""
         L = []
-        st = lambda n: "ST(c, %d)" % n
-        # Writing a register goes through fset so its tag follows the value.
-        setst = lambda n, v: "fset(c, %d, %s);" % (n, v)
 
         if m == "FLD":
             if ops[0].kind == "st":
                 L.append("fpush_st(c, %d);" % ops[0].sti)
+            elif ops[0].size == 32:
+                L.append("fpush(c, (double)rdf32(%s));" % addr_expr(ops[0]))
+            elif ops[0].size == 64:
+                L.append("x87_fld_f64(c, rdf64(%s));" % addr_expr(ops[0]))
+            elif ops[0].size == 80:
+                L.append("x87_fld_f80(c, %s);" % addr_expr(ops[0]))
             else:
-                L.append("fpush(c, %s);" % self.x87_mem_value(ops[0]))
+                raise TranslateError("bad FLD size %r" % ops[0].size)
             return L
         if m == "FLD1":
             return ["fpush(c, 1.0);"]
         if m == "FLDZ":
             return ["fpush(c, 0.0);"]
-        if m == "FLDPI":
-            return ["fpush(c, 3.14159265358979323846);"]
-        if m == "FLDLN2":
-            return ["fpush(c, 0.69314718055994530942);"]
-        if m == "FLDL2E":
-            return ["fpush(c, 1.44269504088896340736);"]
-        if m == "FLDLG2":
-            return ["fpush(c, 0.30102999566398119521);"]
-        if m == "FLDL2T":
-            return ["fpush(c, 3.32192809488736234787);"]
+        X87_CONST = {"FLDL2T": "X87_CONST_L2T", "FLDL2E": "X87_CONST_L2E",
+                     "FLDPI": "X87_CONST_PI", "FLDLG2": "X87_CONST_LG2",
+                     "FLDLN2": "X87_CONST_LN2"}
+        if m in X87_CONST:
+            return ["x87_fldconst(c, %s);" % X87_CONST[m]]
         if m == "FBSTP":
-            return ["wrbcd80(%s, fpop(c));" % addr_expr(ops[0])]
+            return ["x87_fbstp(c, %s);" % addr_expr(ops[0])]
         if m == "FILD":
-            return ["fpush_int(c, %s);" % self.x87_signed_value(ops[0])]
+            if ops[0].size == 64:
+                return ["x87_fild64(c, (int64_t)rd64(%s));" % addr_expr(ops[0])]
+            return ["fpush(c, (double)%s);" % self.x87_signed_value(ops[0])]
 
         if m in ("FST", "FSTP"):
             if ops and ops[0].kind == "st":
@@ -3938,11 +3942,11 @@ class Translator(object):
             elif ops:
                 op = ops[0]
                 if op.size == 32:
-                    L.append("wrf32(%s, fto_float(c, %s));" % (addr_expr(op), st(0)))
+                    L.append("wrf32(%s, x87_fst_f32(c));" % addr_expr(op))
                 elif op.size == 64:
-                    L.append("wrf64(%s, %s);" % (addr_expr(op), st(0)))
+                    L.append("wrf64(%s, x87_fst_f64(c));" % addr_expr(op))
                 elif op.size == 80:
-                    L.append("wrf80(%s, %s);" % (addr_expr(op), st(0)))
+                    L.append("x87_fst_f80(c, %s);" % addr_expr(op))
                 else:
                     raise TranslateError("bad %s size" % m)
             if m == "FSTP":
@@ -3951,37 +3955,27 @@ class Translator(object):
 
         if m in ("FIST", "FISTP"):
             op = ops[0]
-            if op.size == 16:
-                L.append("wr16(%s, (uint16_t)fist_i16(c));" % addr_expr(op))
-            elif op.size == 32:
-                L.append("wr32(%s, (uint32_t)fist_i32(c));" % addr_expr(op))
-            elif op.size == 64:
-                L.append("wr64(%s, (uint64_t)fist_i64(c));" % addr_expr(op))
-            else:
+            if op.size not in (16, 32, 64):
                 raise TranslateError("bad %s size" % m)
+            L.append("wr%d(%s, (uint%d_t)x87_fist%d(c));"
+                     % (op.size, addr_expr(op), op.size, op.size))
             if m == "FISTP":
                 L.append("fdrop(c);")
             return L
 
         # arithmetic ------------------------------------------------------
-        ARITH = {"FADD": "+", "FSUB": "-", "FMUL": "*", "FDIV": "/",
-                 "FSUBR": "-", "FDIVR": "/"}
-
-        def combine(lhs, op, rhs):
-            """`lhs op rhs`, routing division through the #Z check."""
-            if op == "/":
-                return "fdivz(c, %s, %s)" % (lhs, rhs)
-            return "%s %s %s" % (lhs, op, rhs)
+        # ST(d) = ST(d) op ST(s), or for the reversed forms ST(s) op ST(d);
+        # x86.h's X87_SUBR and X87_DIVR are the reversed operations.
+        ARITH = {"FADD": "X87_ADD", "FSUB": "X87_SUB", "FMUL": "X87_MUL",
+                 "FDIV": "X87_DIV", "FSUBR": "X87_SUBR", "FDIVR": "X87_DIVR"}
         base = m[:-1] if m.endswith("P") and m[:-1] in ARITH else None
         if m in ARITH:                       # non-popping
-            rev = m in ("FSUBR", "FDIVR")
             o = ARITH[m]
             if not ops:
                 raise TranslateError("%s without operand" % m)
             if len(ops) == 2:
                 d, s = ops[0].sti, ops[1].sti
-                lhs, rhs = (st(s), st(d)) if rev else (st(d), st(s))
-                L.append(setst(d, "fx87(c, %s)" % combine(lhs, o, rhs)))
+                L.append("x87_arith_st(c, %s, %d, %d);" % (o, d, s))
             elif ops[0].kind == "st":
                 # Ghidra can print both D8 (ST0 destination) and DC (STi
                 # destination) as a single STi operand. Recover the direction
@@ -3992,123 +3986,73 @@ class Translator(object):
                                               0x65, 0x66, 0x67, 0x9b):
                     at += 1
                 d, s = (ops[0].sti, 0) if self.image.rd8(at) == 0xdc else (0, ops[0].sti)
-                lhs, rhs = (st(s), st(d)) if rev else (st(d), st(s))
-                L.append(setst(d, "fx87(c, %s)" % combine(lhs, o, rhs)))
+                L.append("x87_arith_st(c, %s, %d, %d);" % (o, d, s))
             else:
-                v = (self.x87_mem_value(ops[0]))
-                L.append("double v_ = %s;" % v)
-                lhs, rhs = ("v_", st(0)) if rev else (st(0), "v_")
-                L.append(setst(0, "fx87(c, %s)" % combine(lhs, o, rhs)))
+                L.append("x87_arith_m(c, %s, %s);" % (o, self.x87_mem_value(ops[0])))
             return L
 
         if base:                             # FADDP/FSUBP/FMULP/FDIVP/...
-            rev = base in ("FSUBR", "FDIVR")
-            o = ARITH[base]
             d = ops[0].sti if ops else 1
-            lhs, rhs = (st(0), st(d)) if rev else (st(d), st(0))
-            L.append(setst(d, "fx87(c, %s)" % combine(lhs, o, rhs)))
+            L.append("x87_arith_st(c, %s, %d, 0);" % (ARITH[base], d))
             L.append("fdrop(c);")
             return L
 
-        IARITH = {"FIADD": "+", "FISUB": "-", "FIMUL": "*", "FIDIV": "/",
-                  "FISUBR": "-", "FIDIVR": "/"}
+        IARITH = {"FIADD": "X87_ADD", "FISUB": "X87_SUB", "FIMUL": "X87_MUL",
+                  "FIDIV": "X87_DIV", "FISUBR": "X87_SUBR", "FIDIVR": "X87_DIVR"}
         if m in IARITH:
-            rev = m in ("FISUBR", "FIDIVR")
-            o = IARITH[m]
-            L.append("double v_ = %s;" % self.x87_int_value(ops[0]))
-            lhs, rhs = ("v_", st(0)) if rev else (st(0), "v_")
-            L.append(setst(0, "fx87(c, %s)" % combine(lhs, o, rhs)))
+            # m16 and m32 integers widen to double exactly.
+            L.append("x87_arith_m(c, %s, (double)%s);"
+                     % (IARITH[m], self.x87_signed_value(ops[0])))
             return L
 
         # comparison ------------------------------------------------------
         if m in ("FCOM", "FCOMP", "FUCOM", "FUCOMP"):
             # ops[-1] is the source: a two-operand form is `FCOM ST0,STi`, so
             # taking ops[0] would compare ST(0) with itself.
-            if not ops:
-                other = st(1)
-            elif ops[-1].kind == "st":
-                other = st(ops[-1].sti)
-            else:
-                other = self.x87_mem_value(ops[-1])
             # FUCOM raises the invalid exception only for a signalling NaN.
-            L.append("%s(c, %s, %s);" % ("fucom" if m.startswith("FU") else "fcom",
-                                         st(0), other))
+            quiet = 1 if m.startswith("FU") else 0
+            if not ops:
+                L.append("x87_fcom_st(c, 1, %d);" % quiet)
+            elif ops[-1].kind == "st":
+                L.append("x87_fcom_st(c, %d, %d);" % (ops[-1].sti, quiet))
+            else:
+                L.append("x87_fcom_m(c, %s, %d);" % (self.x87_mem_value(ops[-1]), quiet))
             if m.endswith("P"):
                 L.append("fdrop(c);")
             return L
         if m in ("FCOMPP", "FUCOMPP"):
-            L.append("%s(c, %s, %s);" % ("fucom" if m.startswith("FU") else "fcom",
-                                         st(0), st(1)))
+            L.append("x87_fcom_st(c, 1, %d);" % (1 if m.startswith("FU") else 0))
             L.append("fdrop(c); fdrop(c);")
             return L
         if m in ("FICOM", "FICOMP"):
-            L.append("fcom(c, %s, %s);" % (st(0), self.x87_int_value(ops[0])))
+            L.append("x87_fcom_m(c, (double)%s, 0);" % self.x87_signed_value(ops[0]))
             if m == "FICOMP":
                 L.append("fdrop(c);")
             return L
         if m in ("FCOMI", "FCOMIP", "FUCOMI", "FUCOMIP"):
-            other = st(ops[-1].sti) if ops else st(1)
-            L.append("%s(c, %s, %s);" % ("fucomi" if m.startswith("FU") else "fcomi",
-                                         st(0), other))
+            L.append("x87_fcomi_st(c, %d, %d);" % (ops[-1].sti if ops else 1,
+                                                   1 if m.startswith("FU") else 0))
             if m.endswith("IP"):
                 L.append("fdrop(c);")
             return L
         if m == "FTST":
-            return ["fcom(c, %s, 0.0);" % st(0)]
+            return ["x87_fcom_m(c, 0.0, 0);"]
         if m == "FXAM":
             return ["fxam(c);"]
 
-        # transcendental / misc --------------------------------------------
-        # Per the SDM, precision control affects only FADD/FSUB/FMUL/FDIV
-        # (with their integer and popping forms) and FSQRT.  FRNDINT and the
-        # transcendentals must keep the register's full precision, otherwise
-        # PC=00 turns an exact 16777217 into 16777216.
-        UNARY = {"FABS": "fabs(%s)", "FCHS": "-(%s)",
-                 "FSQRT": "fx87(c, sqrt(%s))",
-                 "FSIN": "fx87_exact(c, sin(%s))",
-                 "FCOS": "fx87_exact(c, cos(%s))",
-                 "FRNDINT": "fx87_exact(c, fround_cw(c, %s))"}
+        # unary, transcendental, misc ---------------------------------------
+        # Precision control applies only to FADD/FSUB/FMUL/FDIV (with their
+        # integer and popping forms) and FSQRT; the helpers below know which.
+        UNARY = {"FABS": "x87_fabs(c);", "FCHS": "x87_fchs(c);",
+                 "FSQRT": "x87_fsqrt(c);", "FRNDINT": "x87_frndint(c);",
+                 "FSIN": "x87_fsin(c);", "FCOS": "x87_fcos(c);",
+                 "FSINCOS": "x87_fsincos(c);", "FPTAN": "x87_fptan(c);",
+                 "FPATAN": "x87_fpatan(c);", "FYL2X": "x87_fyl2x(c);",
+                 "FYL2XP1": "x87_fyl2xp1(c);", "F2XM1": "x87_f2xm1(c);",
+                 "FSCALE": "x87_fscale(c);", "FXTRACT": "x87_fxtract(c);",
+                 "FPREM": "x87_fprem(c, 0);", "FPREM1": "x87_fprem(c, 1);"}
         if m in UNARY:
-            return [setst(0, UNARY[m] % st(0))]
-        if m == "FPTAN":
-            L.append("double v_ = %s;" % st(0))
-            L.append(setst(0, "fx87_exact(c, tan(v_))"))
-            L.append("fpush(c, 1.0);")
-            return L
-        if m == "FSINCOS":
-            L.append("double v_ = %s;" % st(0))
-            L.append(setst(0, "fx87_exact(c, sin(v_))"))
-            L.append("fpush(c, fx87_exact(c, cos(v_)));")
-            return L
-        if m == "FSCALE":
-            return [setst(0, "fx87_exact(c, fscale(%s, %s))" % (st(0), st(1)))]
-        if m == "FPATAN":
-            L.append(setst(1, "fx87_exact(c, atan2(%s, %s))" % (st(1), st(0))))
-            L.append("fdrop(c);")
-            return L
-        if m == "FYL2X":
-            L.append(setst(1, "fx87_exact(c, %s * log2(%s))" % (st(1), st(0))))
-            L.append("fdrop(c);")
-            return L
-        if m == "FYL2XP1":
-            # log2(x+1) loses every significant bit for small x; log1p keeps
-            # them.  With ST(0) = 2^-54 and ST(1) = 1 the naive form returns 0.
-            L.append(setst(1, "fx87_exact(c, %s * log1p(%s) / M_LN2)"
-                           % (st(1), st(0))))
-            L.append("fdrop(c);")
-            return L
-        if m == "F2XM1":
-            # Likewise 2^x - 1: expm1(x * ln 2) is the same value without the
-            # cancellation.
-            return [setst(0, "fx87_exact(c, expm1(%s * M_LN2))" % st(0))]
-        if m in ("FPREM", "FPREM1"):
-            return [setst(0, "fprem_common(c, %s, %s, %d)"
-                          % (st(0), st(1), 1 if m == "FPREM1" else 0))]
-        if m == "FXTRACT":
-            L.append("double v_ = %s;" % st(0))
-            L.append(setst(0, "fxtract_exponent(v_)"))
-            L.append("fpush(c, fxtract_significand(v_));")
-            return L
+            return [UNARY[m]]
         if m == "FDECSTP":
             # Both rotate TOP and clear C1.
             return ["c->fpu_top = (c->fpu_top - 1u) & 7u;",
@@ -4132,7 +4076,7 @@ class Translator(object):
         if m == "FLDCW":
             return ["x87_set_cw(c, rd16(%s));" % addr_expr(ops[0])]
         if m == "FFREE":
-            return [";"]
+            return ["x87_ffree(c, %d);" % (ops[-1].sti if ops else 0)]
         if m in ("FSAVE", "FNSAVE"):
             return ["x87_fnsave(c, %s);" % addr_expr(ops[0])]
         if m == "FRSTOR":

@@ -58,6 +58,10 @@ UC_REGS = [UC_X86_REG_EAX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EBX,
 REG_NAMES = ["EAX", "ECX", "EDX", "EBX", "ESP", "EBP", "ESI", "EDI"]
 
 
+class X87Ext(C.Structure):
+    _fields_ = [("signif", C.c_uint64), ("signExp", C.c_uint16)]
+
+
 class X86(C.Structure):
     _fields_ = [
         ("r", C.c_uint32 * 8), ("eip", C.c_uint32),
@@ -65,8 +69,9 @@ class X86(C.Structure):
         ("eflags_sf", C.c_uint32), ("eflags_of", C.c_uint32),
         ("eflags_pf", C.c_uint32), ("eflags_af", C.c_uint32),
         ("eflags_df", C.c_uint32), ("eflags_misc", C.c_uint32),
-        ("st", C.c_double * 8), ("st_bits", C.c_uint64 * 8),
-        ("st_exact", C.c_uint8 * 8), ("fpu_top", C.c_uint32),
+        ("st", C.c_double * 8), ("stx", X87Ext * 8),
+        ("st_kind", C.c_uint8 * 8), ("ext_live", C.c_uint8),
+        ("fp_mode", C.c_uint8), ("fpu_top", C.c_uint32),
         ("fpu_cw", C.c_uint16), ("fpu_sw", C.c_uint16),
         ("fpu_tag", C.c_uint16),
         ("fs_base", C.c_uint32),
@@ -755,8 +760,10 @@ def built():
                  "    recomp_call(c, target);\n}\n" % MAGIC_RET)
     lib = os.path.join(work, "libinsns" + (".dylib" if platform.system() == "Darwin" else ".so"))
     subprocess.check_call([clang, "-O1", "-g", "-std=c11", "-Wall", "-Wextra", "-Wno-unused",
-                           "-fPIC", "-shared", "-I", os.path.join(ROOT, "runtime"),
+                           "-ffp-contract=off", "-fPIC", "-shared", "-I", os.path.join(ROOT, "runtime"),
                            os.path.join(HERE, "harness.c"), os.path.join(work, "synth.c"),
+                           os.path.join(ROOT, "runtime/x87.c"),
+                           os.path.join(ROOT, "third_party/softfloat/softfloat_x87.c"),
                            os.path.join(work, "table.c"), "-o", lib])
     return Native(lib), errors
 
@@ -889,7 +896,7 @@ def test_mmx_goes_to_the_mm_registers_and_xmm_forms_still_go_to_sse():
     assert "c->mm[0] = rd64(" in text
     assert "c->mm[7] = mmx_pxor(c->mm[7], c->mm[7]);" in text
     assert "c->mm[0] = mmx_padd(c->mm[0], c->mm[7], 16u);" in text
-    assert "c->fpu_tag = 0xffffu;" in text
+    assert "x87_emms(c);" in text
     # The XMM spelling of MOVQ keeps the SSE2 lanes, and zeroes the upper half.
     assert "c->xmm[0][0] = s0_;" in text and "c->xmm[0][2] = 0u;" in text
     # MMX must not touch the SSE2 register file, nor the reverse.
@@ -909,3 +916,34 @@ def test_segment_register_loads_do_not_reach_the_flat_model():
     text = "\n".join(tr.translate(fn))
     assert "recomp_int(c, 6u);" in text
     assert "0x23u" not in text and "wr" not in text.split("MOV DS,AX")[1].split("\n")[0]
+
+
+def test_harness_header_checks(built):
+    """harness.c's header self-test: the x87 helpers' rounding, precision,
+    exponent range, indefinites, FPREM and _controlfp, and the other header
+    contracts no synthetic case reaches. test_translate.py runs it too, but
+    only with a game; it needs none."""
+    native, _ = built
+    lib = native.lib
+    lib.harness_header_selftest.restype = C.c_uint32
+    lib.harness_header_failure.restype = C.c_uint32
+    lib.harness_header_failure.argtypes = [C.c_uint32]
+    failures = lib.harness_header_selftest()
+    src = open(os.path.join(HERE, "harness.c")).read()
+    src = src[src.index("{", src.index("harness_header_selftest(void)")):]
+    labels, i = [], 0
+    while True:   # every CHECK(...) in order, its expression as the label
+        i = src.find("CHECK(", i)
+        if i < 0:
+            break
+        if src.startswith("#define CHECK(", max(0, i - 8)):
+            i += 6
+            continue
+        j, depth = i + 6, 1
+        while depth:
+            depth += {"(": 1, ")": -1}.get(src[j], 0)
+            j += 1
+        labels.append(" ".join(src[i + 6:j - 1].split()))
+        i = j
+    failed = [lib.harness_header_failure(i) for i in range(failures)]
+    assert not failed, ["#%d %s" % (i, labels[i] if i < len(labels) else "?") for i in failed]

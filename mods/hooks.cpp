@@ -250,19 +250,21 @@ void x86_from_cpu(X86 *c, const pop_cpu_v1 *in, uint32_t bound) {
         c->eflags_df = in->df;
     if (FIT(st))
         for (int i = 0; i < 8; ++i) {
-            // The v1 mod ABI exposes doubles. A no-op hook preserves the
-            // runtime's exact integer; an edited value invalidates it.
+            // The v1 mod ABI exposes doubles. A no-op hook preserves an
+            // extended register's exact value; an edited value replaces it.
             if (memcmp(&c->st[i], &in->st[i], sizeof c->st[i]))
                 fset(c, (i - c->fpu_top) & 7u, in->st[i]);
         }
     if (FIT(fpu_top))
         c->fpu_top = in->fpu_top;
     if (FIT(fpu_cw))
-        c->fpu_cw = in->fpu_cw;
+        x87_set_cw(c, in->fpu_cw);
     if (FIT(fpu_sw))
         c->fpu_sw = in->fpu_sw;
-    if (FIT(fpu_tag))
+    if (FIT(fpu_tag)) {
         c->fpu_tag = in->fpu_tag;
+        x87_kind_sync_tags(c);
+    }
 #undef FIT
 }
 

@@ -39,7 +39,9 @@ if(POP_HAVE_GEN)
   # -I<runtime> for intrinsics.h: the same three the shell script passed.
   target_include_directories(recomp_gen PRIVATE ${POP_GEN_DIR} ${POP_ROOT} ${POP_ROOT}/runtime)
   target_include_directories(recomp_gen INTERFACE ${POP_GEN_DIR})
-  target_compile_options(recomp_gen PRIVATE ${POP_WARN_GEN})
+  # x87 arithmetic rounds every operation on its own; a fused multiply-add
+  # would round twice as one (runtime/x86.h, x87 section).
+  target_compile_options(recomp_gen PRIVATE ${POP_WARN_GEN} -ffp-contract=off)
   # A game's native replacements. funcs.h includes this header before it
   # defines FN_<addr>, so every call site, tail call and jump-table case for a
   # replaced address goes to the native function instead.
@@ -77,7 +79,7 @@ if(POP_HAVE_GEN)
         RECOMP_OVERRIDE_HEADER="${RECOMP_OVERRIDE_HEADER}")
       target_include_directories(${aux_target} PRIVATE ${_override_dir})
     endif()
-    target_compile_options(${aux_target} PRIVATE ${POP_WARN_GEN})
+    target_compile_options(${aux_target} PRIVATE ${POP_WARN_GEN} -ffp-contract=off)
     pop_optimize(${aux_target} 2)
     list(APPEND POP_GEN_AUX_TARGETS ${aux_target})
     message(STATUS "Auxiliary module translation: ${dir}")

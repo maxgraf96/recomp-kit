@@ -6,7 +6,17 @@ set(POP_RUNTIME_SOURCES
   misc.cpp misc_dlls.cpp comctl32.cpp gdi32.cpp gdi32_draw.cpp gdi32_text.cpp gdi32_truetype.cpp msimg32.cpp
   media_foundation.cpp layout.cpp interp.cpp discovery.cpp dispatch.cpp
   msvcrt.cpp msvcrt_heap.cpp msvcrt_locale.cpp msvcrt_string.cpp msvcrt_format.cpp msvcrt_stdio.cpp
-  msvcrt_math.cpp msvcrt_time.cpp msvcp60.cpp)
+  msvcrt_math.cpp msvcrt_time.cpp msvcp60.cpp
+  x87.c ${POP_ROOT}/third_party/softfloat/softfloat_x87.c)
+
+# The exact x87's out-of-line half and the part of SoftFloat 3e it uses
+# (third_party/softfloat/README.md). Floating-point contraction would fuse a
+# multiply and an add into one rounding, which x87 never does, so it is off
+# here as in the generated code (cmake/Translate.cmake); SoftFloat itself is
+# integer code and builds freestanding.
+set_source_files_properties(x87.c PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+set_source_files_properties(${POP_ROOT}/third_party/softfloat/softfloat_x87.c
+  PROPERTIES COMPILE_OPTIONS "-ffreestanding;-ffp-contract=off")
 
 # The faces the runtime's GDI draws Windows' own UI fonts with
 # (third_party/fonts/opensans/README.md), embedded as byte arrays.

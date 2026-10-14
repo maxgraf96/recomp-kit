@@ -10,7 +10,8 @@
  *   - Flag fields hold 0 or 1.  The translator only stores a flag when a
  *     later instruction may read it (per-function liveness), so a flag field
  *     is only meaningful where the original x86 flag was live.
- *   - x87 registers are `double` (plan ruling; not 80-bit).
+ *   - x87 registers are exact: a double while the value is one, an 80-bit
+ *     extended otherwise (see the x87 section and runtime/x87.c).
  */
 #ifndef RECOMP_X86_H
 #define RECOMP_X86_H
@@ -37,9 +38,11 @@ extern "C" {
 #if defined(__GNUC__) || defined(__clang__)
 #define RECOMP_HOT_INLINE static inline __attribute__((always_inline))
 #define RECOMP_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#define RECOMP_LIKELY(x) __builtin_expect(!!(x), 1)
 #else
 #define RECOMP_HOT_INLINE static inline
 #define RECOMP_UNLIKELY(x) (x)
+#define RECOMP_LIKELY(x) (x)
 #endif
 
 /* ---------------------------------------------------------------- memory */
@@ -212,79 +215,18 @@ RECOMP_HOT_INLINE void wrf64(uint32_t a, double v) {
         recomp_dirty(a, 8);
 }
 
-/* 80-bit x87 extended precision.  x87 registers are `double` here (plan
- * ruling), so a tbyte load rounds to 64-bit and a store re-expands. */
-static inline double rdf80(uint32_t a) {
-    uint64_t m = rd64(a);
-    uint16_t se = rd16(a + 8);
-    int exp = se & 0x7fffu;
-    double v;
-    if (exp == 0x7fff)
-        v = (m << 1) ? (double)NAN : (double)INFINITY;
-    else if (!exp && !m)
-        v = 0.0;
-    else
-        v = ldexp((double)m, exp - 16383 - 63);
-    return (se & 0x8000u) ? -v : v;
-}
-
-static inline void wrf80(uint32_t a, double v) {
-    uint64_t m;
-    uint16_t se;
-    if (isnan(v)) {
-        m = 0xc000000000000000ull;
-        se = 0x7fffu;
-    } else if (isinf(v)) {
-        m = 0x8000000000000000ull;
-        se = v < 0 ? 0xffffu : 0x7fffu;
-    } else if (v == 0.0) {
-        m = 0;
-        se = signbit(v) ? 0x8000u : 0u;
-    } else {
-        int e, sign = signbit(v);
-        double f = frexp(sign ? -v : v, &e); /* 0.5 <= f < 1 */
-        m = (uint64_t)ldexp(f, 64);
-        se = (uint16_t)((e - 1 + 16383) & 0x7fff);
-        if (sign)
-            se |= 0x8000u;
-    }
-    wr64(a, m);
-    wr16(a + 8, se);
-}
-
-/* FBSTP: 18 packed BCD digits, little-endian, sign in bit 7 of byte 9. Rounds
- * to nearest even as the default control word does. Out-of-range values store
- * the BCD indefinite (0xffff c000 0000 0000 0000), as the hardware does. */
-static inline void wrbcd80(uint32_t a, double v) {
-    uint8_t out[10];
-    memset(out, 0, sizeof out);
-    double r = nearbyint(v);
-    if (!(fabs(r) < 1e18)) {
-        static const uint8_t indefinite[10] = {0, 0, 0, 0, 0, 0, 0, 0xc0, 0xff, 0xff};
-        memcpy(g_mem + a, indefinite, 10);
-        if (g_dirty_count != 0)
-            recomp_dirty(a, 10);
-        return;
-    }
-    uint64_t m = (uint64_t)fabs(r);
-    for (int i = 0; i < 9; ++i) {
-        uint8_t lo = (uint8_t)(m % 10);
-        m /= 10;
-        uint8_t hi = (uint8_t)(m % 10);
-        m /= 10;
-        out[i] = (uint8_t)(hi << 4 | lo);
-    }
-    if (r < 0 || (r == 0 && signbit(v)))
-        out[9] = 0x80;
-    memcpy(g_mem + a, out, 10);
-    if (g_dirty_count != 0)
-        recomp_dirty(a, 10);
-}
-
 /* ------------------------------------------------------------- cpu state */
 
 /* Register indices into X86.r */
 enum { R_EAX = 0, R_ECX, R_EDX, R_EBX, R_ESP, R_EBP, R_ESI, R_EDI };
+
+/* An x87 register's 80-bit image: the 64-bit significand with its explicit
+ * integer bit, then sign and 15-bit exponent. The layout is SoftFloat's
+ * extFloat80_t on a little-endian host, which runtime/x87.c relies on. */
+typedef struct X87Ext {
+    uint64_t signif;
+    uint16_t signExp;
+} X87Ext;
 
 struct X86 {
     uint32_t r[8]; /* EAX ECX EDX EBX ESP EBP ESI EDI */
@@ -294,10 +236,15 @@ struct X86 {
      * round-trip (the CPUID probe toggles the ID bit).  Initialise to 0x202. */
     uint32_t eflags_misc;
     double st[8]; /* x87 stack, physical slots */
-    /* FILD integers retain all 64 mantissa bits until arithmetic replaces
-     * them. The double alone cannot preserve qword copies above 2^53. */
-    uint64_t st_bits[8];
-    uint8_t st_exact[8];
+    /* A slot whose value is not exactly a double (st_kind 1) holds it here,
+     * and st[] holds it rounded to double for readers outside the x87.
+     * ext_live counts those slots; every one of them is in use. fp_mode is
+     * the arithmetic path, X87_MODE_*, derived from fpu_cw and ext_live;
+     * zero means not derived yet. */
+    X87Ext stx[8];
+    uint8_t st_kind[8];
+    uint8_t ext_live;
+    uint8_t fp_mode;
     uint32_t fpu_top; /* ST(i) == st[(fpu_top + i) & 7] */
     uint16_t fpu_cw, fpu_sw;
     /* x87 tag word, 2 bits per PHYSICAL register st[i]: 3 = empty, else in
@@ -1120,8 +1067,35 @@ X86_CMPS_SCAS(d, 32, 0xffffffffu)
 #undef X86_CMPS_SCAS
 
 /* -------------------------------------------------------------- x87 -----
- * st[] holds doubles.  ST(i) is st[(fpu_top + i) & 7]; a push predecrements
- * fpu_top.  Status-word bits: C0=8 C1=9 C2=10 TOP=11..13 C3=14.
+ * Exact x87. Results equal real x87 hardware bit for bit for every control
+ * word, register value and memory operand, except the transcendental
+ * instructions (FSIN ... FYL2XP1), which are within an ulp or so; the
+ * exception flags and C1 are best effort. tests/x87/ and
+ * tools/recomp/tests/test_x87_conformance.py hold the evidence.
+ *
+ * A register holds a double while its value is exactly a double, which is
+ * every value a program running at 53-bit precision normally makes, and an
+ * 80-bit extended (stx[], st_kind 1) otherwise. Every extended slot is in
+ * use, and ext_live counts them, so a free slot always has kind 0.
+ *
+ * Arithmetic takes one of three paths, chosen by fp_mode:
+ *   X87_MODE_FAST  PC=53, RC=nearest, no extended register: the host's own
+ *                  double operation, which is the x87 result unless the
+ *                  result leaves the double's normal range (where the x87's
+ *                  15-bit exponent keeps 53 bits a double cannot) or is a NaN
+ *                  (whose payload x87 picks by its own rules). A test of the
+ *                  result's exponent sends those to the exact path;
+ *   X87_MODE_PC24  PC=24, RC=nearest, no extended register: the double result
+ *                  rounded again to 24 bits, out of line (runtime/x87.c);
+ *   X87_MODE_EXACT anything else: SoftFloat's 80-bit arithmetic at the
+ *                  control word's precision and rounding, out of line.
+ * x87_set_cw and every change of ext_live keep fp_mode current. Zero means
+ * not derived yet: a context the runtime zeroes and gives a control word
+ * directly takes the out-of-line path once, which derives it.
+ *
+ * ST(i) is st[(fpu_top + i) & 7]; a push predecrements fpu_top. Status-word
+ * bits: C0=8 C1=9 C2=10 TOP=11..13 C3=14. ST() reads the double, which for
+ * an extended register is its value rounded; the translator never uses it.
  */
 #define ST(c, i) ((c)->st[((c)->fpu_top + (unsigned)(i)) & 7u])
 
@@ -1130,13 +1104,23 @@ X86_CMPS_SCAS(d, 32, 0xffffffffu)
 #define FTAG_SPECIAL 2u /* NaN, infinity, denormal, unsupported */
 #define FTAG_EMPTY 3u
 
-/* The tag describes the register as x87 sees it, which is the 80-bit value.
- * A subnormal double is a NORMAL extended - the extended exponent range
- * reaches 2^-16382, far below 2^-1074 - so it tags valid, not special.  An
- * 80-bit subnormal cannot occur at all while the registers are doubles. */
+#define X87_MODE_UNSET 0u
+#define X87_MODE_FAST 1u
+#define X87_MODE_PC24 2u
+#define X87_MODE_EXACT 3u
+
+/* Arithmetic operations, a = the destination register, b = the source.
+ * The R forms are the reversed instructions: FSUBR computes b - a. */
+enum { X87_ADD, X87_SUB, X87_SUBR, X87_MUL, X87_DIV, X87_DIVR, X87_SQRT };
+
+/* FLD constants, in x87_fldconst's table order. */
+enum { X87_CONST_L2T, X87_CONST_L2E, X87_CONST_PI, X87_CONST_LG2, X87_CONST_LN2 };
+
+/* The tag of a double register, as x87 sees the 80-bit value. A subnormal
+ * double is a NORMAL extended - the extended exponent range reaches
+ * 2^-16382, far below 2^-1074 - so it tags valid, not special. */
 RECOMP_HOT_INLINE unsigned ftag_classify(double v) {
-    /* The runtime already represents x87 registers as IEEE binary64. Read
-     * the representation without aliasing or floating-point operations:
+    /* Read the representation without aliasing or floating-point operations:
      * tagging every FPU write must not call libm or quiet a signaling NaN. */
     uint64_t bits;
     memcpy(&bits, &v, sizeof bits);
@@ -1160,127 +1144,214 @@ RECOMP_HOT_INLINE unsigned fempty(const X86 *c, unsigned i) {
     return ftag_of(c, (c->fpu_top + i) & 7u) == FTAG_EMPTY;
 }
 
+/* The arithmetic path for a control word and extended-register count. */
+RECOMP_HOT_INLINE uint8_t x87_mode_of(uint16_t cw, unsigned ext_live) {
+    unsigned pcrc = cw & 0x0f00u; /* RC (11:10) and PC (9:8) */
+    if (ext_live)
+        return X87_MODE_EXACT;
+    return pcrc == 0x0200u ? X87_MODE_FAST : pcrc == 0x0000u ? X87_MODE_PC24 : X87_MODE_EXACT;
+}
+RECOMP_HOT_INLINE void x87_mode_refresh(X86 *c) {
+    c->fp_mode = x87_mode_of(c->fpu_cw, c->ext_live);
+}
+
+/* FLDCW, and every other write of the control word: the path follows it. */
+static inline void x87_set_cw(X86 *c, uint16_t cw) {
+    c->fpu_cw = cw;
+    x87_mode_refresh(c);
+}
+
+/* A slot stops being extended: its value was popped, freed or overwritten.
+ * st[] keeps the rounded value, which is what a popped slot then reads as. */
+static inline void x87_kind_clear(X86 *c, unsigned phys) {
+    c->st_kind[phys] = 0;
+    c->ext_live--;
+    x87_mode_refresh(c);
+}
+static inline void x87_kind_set(X86 *c, unsigned phys, X87Ext v) {
+    if (!c->st_kind[phys]) {
+        c->st_kind[phys] = 1;
+        c->ext_live++;
+        x87_mode_refresh(c);
+    }
+    c->stx[phys] = v;
+}
+/* Every register free (FINIT, EMMS): no slot can stay extended. */
+static inline void x87_kind_reset(X86 *c) {
+    memset(c->st_kind, 0, sizeof c->st_kind);
+    c->ext_live = 0;
+    x87_mode_refresh(c);
+}
+/* After the tag word is loaded wholesale (FLDENV, FRSTOR, FFREE): a slot
+ * marked empty gives up its extended value. */
+static inline void x87_kind_sync_tags(X86 *c) {
+    unsigned i;
+    for (i = 0; i < 8; i++)
+        if (c->st_kind[i] && ftag_of(c, i) == FTAG_EMPTY)
+            x87_kind_clear(c, i);
+}
+
+/* ---- out-of-line half, runtime/x87.c ---- */
+
+/* Arithmetic the fast path does not settle: any mode, any operands. The _st
+ * form is ST(pd) = ST(pd) op ST(ps) on physical slots; the _m form is ST(0)
+ * = ST(0) op m for a memory operand already widened to double (FLD m32,
+ * FILD m16/m32 and FLD m64 widen exactly; a signalling NaN in an m64 operand
+ * is quietened here, as x87 loads it). */
+void x87_arith_slow_st(X86 *c, int op, unsigned pd, unsigned ps);
+void x87_arith_slow_m(X86 *c, int op, double m);
+void x87_fsqrt_slow(X86 *c);
+/* FIST/FISTP of ST(0) to a bits-wide integer under any RC, or the integer
+ * indefinite (with IE) when it does not fit. */
+int64_t x87_fist_slow(X86 *c, unsigned bits);
+float x87_fst_f32_slow(X86 *c);
+double x87_fst_f64_slow(X86 *c);
+void x87_fild64_slow(X86 *c, int64_t v);
+/* FCOM/FUCOM of ST(0) with physical slot pb, or with a memory operand. */
+void x87_fcom_slow(X86 *c, unsigned pb, double m, int mem, int quiet);
+void x87_fcomi_slow(X86 *c, unsigned pb, int quiet);
+void x87_fxam_ext(X86 *c);
+void x87_fld_f80(X86 *c, uint32_t a);
+void x87_fst_f80(X86 *c, uint32_t a);
+void x87_fldconst(X86 *c, unsigned which);
+void x87_frndint(X86 *c);
+void x87_fscale(X86 *c);
+void x87_fxtract(X86 *c);
+void x87_fprem(X86 *c, int ieee);
+void x87_fbstp(X86 *c, uint32_t a);
+void x87_fnsave(X86 *c, uint32_t a);
+void x87_frstor(X86 *c, uint32_t a);
+/* The transcendental instructions: near the hardware's results, not equal
+ * to them (see runtime/x87.c). */
+void x87_fsin(X86 *c);
+void x87_fcos(X86 *c);
+void x87_fsincos(X86 *c);
+void x87_fptan(X86 *c);
+void x87_fpatan(X86 *c);
+void x87_f2xm1(X86 *c);
+void x87_fyl2x(X86 *c);
+void x87_fyl2xp1(X86 *c);
+/* msvcrt's floating-point control, as an HLE needs it: _control87,
+ * _controlfp, _statusfp, _clearfp and _fpreset on the guest thread's own x87
+ * state, mapping Microsoft's abstract bits (_MCW_EM, _MCW_RC, _MCW_PC,
+ * _MCW_IC) to and from the control and status words. No system call. */
+uint32_t x87_cw_to_abstract(uint16_t cw);
+uint16_t x87_cw_from_abstract(uint32_t abstract, uint16_t cw);
+uint32_t x87_control87(X86 *c, uint32_t value, uint32_t mask);
+uint32_t x87_controlfp(X86 *c, uint32_t value, uint32_t mask);
+uint32_t x87_statusfp(const X86 *c);
+uint32_t x87_clearfp(X86 *c);
+void x87_fpreset(X86 *c);
+/* Whether the host's floating-point environment is the one the fast path
+ * assumes (round to nearest, no flush-to-zero, no default NaN; on arm64 also
+ * FPCR.AH = 0). Checked by the first out-of-line call on each thread too,
+ * which reports a wrong environment once and restores the right one. */
+int x87_host_env_ok(void);
+
+/* ---- registers ---- */
+
 RECOMP_HOT_INLINE void fpush(X86 *c, double v) {
     c->fpu_top = (c->fpu_top - 1u) & 7u;
+    if (RECOMP_UNLIKELY(c->st_kind[c->fpu_top])) /* a push onto a full stack */
+        x87_kind_clear(c, c->fpu_top);
     c->st[c->fpu_top] = v;
-    c->st_bits[c->fpu_top] = 0;
-    c->st_exact[c->fpu_top] = 0;
     ftag_put(c, c->fpu_top, ftag_classify(v));
-}
-static inline void fpush_int(X86 *c, int64_t v) {
-    fpush(c, (double)v);
-    c->st_bits[c->fpu_top] = (uint64_t)v;
-    c->st_exact[c->fpu_top] = 1;
 }
 /* FLD ST(i) captures the source before pushing, including the wraparound
  * case where the destination is the same physical slot. */
 static inline void fpush_st(X86 *c, unsigned i) {
     unsigned src = (c->fpu_top + i) & 7u;
-    uint64_t bits = c->st_bits[src];
-    uint8_t exact = c->st_exact[src];
     unsigned tag = ftag_of(c, src);
+    uint8_t kind = c->st_kind[src];
+    X87Ext x = c->stx[src];
     fpush(c, c->st[src]);
-    c->st_bits[c->fpu_top] = bits;
-    c->st_exact[c->fpu_top] = exact;
     ftag_put(c, c->fpu_top, tag);
+    if (RECOMP_UNLIKELY(kind))
+        x87_kind_set(c, c->fpu_top, x);
 }
 RECOMP_HOT_INLINE double fpop(X86 *c) {
     double v = c->st[c->fpu_top];
-    c->st_exact[c->fpu_top] = 0;
+    if (RECOMP_UNLIKELY(c->st_kind[c->fpu_top]))
+        x87_kind_clear(c, c->fpu_top);
     ftag_put(c, c->fpu_top, FTAG_EMPTY);
     c->fpu_top = (c->fpu_top + 1u) & 7u;
     return v;
 }
 RECOMP_HOT_INLINE void fdrop(X86 *c) {
-    c->st_exact[c->fpu_top] = 0;
+    if (RECOMP_UNLIKELY(c->st_kind[c->fpu_top]))
+        x87_kind_clear(c, c->fpu_top);
     ftag_put(c, c->fpu_top, FTAG_EMPTY);
     c->fpu_top = (c->fpu_top + 1u) & 7u;
 }
 
-/* Assign ST(i) and retag it.  Every write to an x87 register goes through
- * this, so an arithmetic result that turns out to be zero, a NaN, an infinity
- * or a denormal leaves the tag word describing what the register now holds
- * rather than what it held before. */
+/* Assign ST(i) a double and retag it. Every double write to an x87 register
+ * goes through this, so an arithmetic result that turns out to be zero, a
+ * NaN, an infinity or a denormal leaves the tag word describing what the
+ * register now holds rather than what it held before. */
 RECOMP_HOT_INLINE void fset(X86 *c, unsigned i, double v) {
     unsigned phys = (c->fpu_top + i) & 7u;
+    if (RECOMP_UNLIKELY(c->st_kind[phys]))
+        x87_kind_clear(c, phys);
     c->st[phys] = v;
-    c->st_bits[phys] = 0;
-    c->st_exact[phys] = 0;
     ftag_put(c, phys, ftag_classify(v));
 }
 
-/* Register moves preserve the integer representation as well as the tag. */
+/* FST ST(i): the value, its representation and its tag. */
 static inline void fcopy(X86 *c, unsigned dst, unsigned src) {
     unsigned a = (c->fpu_top + dst) & 7u, b = (c->fpu_top + src) & 7u;
+    if (RECOMP_UNLIKELY(c->st_kind[a] | c->st_kind[b])) {
+        if (c->st_kind[b])
+            x87_kind_set(c, a, c->stx[b]);
+        else
+            x87_kind_clear(c, a);
+    }
     c->st[a] = c->st[b];
-    c->st_bits[a] = c->st_bits[b];
-    c->st_exact[a] = c->st_exact[b];
     ftag_put(c, a, ftag_of(c, b));
 }
 
-/* FXCH: the tags and exact integers travel with the values. */
+/* FXCH: the tags and representations travel with the values. */
 RECOMP_HOT_INLINE void fxch(X86 *c, unsigned i) {
     unsigned a = c->fpu_top & 7u, b = (c->fpu_top + i) & 7u;
     double v = c->st[a];
     unsigned t = ftag_of(c, a);
-    uint64_t bits = c->st_bits[a];
-    uint8_t exact = c->st_exact[a];
     c->st[a] = c->st[b];
-    c->st_bits[a] = c->st_bits[b];
-    c->st_exact[a] = c->st_exact[b];
     ftag_put(c, a, ftag_of(c, b));
     c->st[b] = v;
-    c->st_bits[b] = bits;
-    c->st_exact[b] = exact;
     ftag_put(c, b, t);
+    if (RECOMP_UNLIKELY(c->ext_live)) {
+        uint8_t k = c->st_kind[a];
+        X87Ext x = c->stx[a];
+        c->st_kind[a] = c->st_kind[b];
+        c->stx[a] = c->stx[b];
+        c->st_kind[b] = k;
+        c->stx[b] = x;
+    }
 }
 
-/* Game code compares stored float bits, so the NaN a masked invalid x87
- * operation produces has to be one fixed pattern rather than whatever the
- * host happened to carry in.  x87 silicon yields the negative QNaN
- * "indefinite" (0xfff8000000000000, or 0xffc00000 stored as a float) and
- * ARM64 yields a positive one, so normalise to the x86 pattern.  Unicorn's
- * softfloat is not self-consistent about this sign, which is why two of the
- * sweep functions are reported as known NaN-payload divergences. */
+/* FFREE ST(i): the register becomes empty; TOP does not move. */
+static inline void x87_ffree(X86 *c, unsigned i) {
+    unsigned phys = (c->fpu_top + i) & 7u;
+    if (c->st_kind[phys])
+        x87_kind_clear(c, phys);
+    ftag_put(c, phys, FTAG_EMPTY);
+}
+
+/* EMMS: every x87 register empty; TOP and the values are left alone. */
+static inline void x87_emms(X86 *c) {
+    c->fpu_tag = 0xffffu;
+    if (c->ext_live)
+        x87_kind_reset(c);
+}
+
+/* ---- the fast path ---- */
+
+/* The x87 indefinite: the negative QNaN a masked invalid operation yields
+ * (0xfff8000000000000 as a double, 0xffc00000 as a float). */
 static inline double x87_indefinite(void) {
     uint64_t bits = 0xfff8000000000000ull;
     double d;
     memcpy(&d, &bits, 8);
     return d;
-}
-/* An x87 result that is not affected by precision control: the invalid
- * -operation NaN is still canonicalised, and the invalid flag is raised, but
- * the value keeps the register's full precision.  FRNDINT, the transcendental
- * instructions and FXCH all land here; per the SDM, PC applies only to
- * FADD/FSUB/FMUL/FDIV (and their integer and popping forms) and FSQRT. */
-/* x87 raises #Z when a finite non-zero dividend meets a zero divisor.  This
- * is the one exception besides IE that the parity oracle also reports, so
- * modelling it keeps the exemption down to IE alone. */
-RECOMP_HOT_INLINE double fdivz(X86 *c, double a, double b) {
-    if (b == 0.0 && a == a && !isinf(a) && a != 0.0)
-        c->fpu_sw |= 0x0004u;
-    return a / b;
-}
-
-RECOMP_HOT_INLINE double fx87_exact(X86 *c, double r) {
-    if (r == r)
-        return r;
-    c->fpu_sw |= 0x0001u; /* IE: invalid operation */
-    return x87_indefinite();
-}
-
-/* An x87 result from one of the basic arithmetic instructions, which do
- * observe the precision-control field.  PC=00 rounds to single; PC=10
- * (53-bit) and PC=11 (64-bit) both land on the double we store, 64-bit
- * approximated by 53 per the plan ruling. */
-RECOMP_HOT_INLINE double fx87(X86 *c, double r) {
-    if (r != r) {
-        c->fpu_sw |= 0x0001u;
-        return x87_indefinite();
-    }
-    if (((c->fpu_cw >> 8) & 3u) == 0u)
-        return (double)(float)r;
-    return r;
 }
 
 /* A signalling NaN has the quiet bit (mantissa MSB) clear. */
@@ -1291,9 +1362,194 @@ RECOMP_HOT_INLINE int is_snan(double v) {
            ((b >> 51) & 1u) == 0;
 }
 
+RECOMP_HOT_INLINE double x87_host_op(int op, double a, double b) {
+    switch (op) {
+    case X87_ADD:
+        return a + b;
+    case X87_SUB:
+        return a - b;
+    case X87_SUBR:
+        return b - a;
+    case X87_MUL:
+        return a * b;
+    case X87_DIV:
+        return a / b;
+    case X87_DIVR:
+        return b / a;
+    default:
+        return __builtin_sqrt(a);
+    }
+}
+
+/* Whether r, the host's double result of a op b, is the x87 result at PC=53
+ * and RC=nearest: an IEEE double operation rounds the exact result to 53 bits
+ * once, as x87 does, wherever the result is a normal double. Outside that:
+ *   - an infinity or a NaN may be one x87 keeps finite, or a NaN x87 picks
+ *     differently, so both go to the exact path;
+ *   - a sum or difference in the subnormal range is exact (no rounding), and
+ *     a square root never lands there;
+ *   - a product or quotient there was rounded at the double's subnormal
+ *     quantum instead of at 53 bits. That includes one that rounded up to
+ *     DBL_MIN itself, so |r| must exceed it. A zero is right only when an
+ *     operand that forces it is zero. */
+RECOMP_HOT_INLINE int x87_fast_ok(int op, double r, double a, double b) {
+    uint64_t m;
+    memcpy(&m, &r, 8);
+    m &= UINT64_C(0x7fffffffffffffff);
+    if (op == X87_ADD || op == X87_SUB || op == X87_SUBR || op == X87_SQRT)
+        return m < UINT64_C(0x7ff0000000000000);
+    if (RECOMP_LIKELY(m - UINT64_C(0x0010000000000001) < UINT64_C(0x7fdfffffffffffff)))
+        return 1;
+    if (m != 0)
+        return 0;
+    if (op == X87_MUL)
+        return a == 0.0 || b == 0.0;
+    return op == X87_DIV ? a == 0.0 : b == 0.0;
+}
+
+/* FADD/FSUB/FSUBR/FMUL/FDIV/FDIVR ST(d), ST(s): ST(d) = ST(d) op ST(s). */
+RECOMP_HOT_INLINE void x87_arith_st(X86 *c, int op, unsigned d, unsigned s) {
+    unsigned pd = (c->fpu_top + d) & 7u, ps = (c->fpu_top + s) & 7u;
+    if (RECOMP_LIKELY(c->fp_mode == X87_MODE_FAST)) {
+        double a = c->st[pd], b = c->st[ps];
+        double r = x87_host_op(op, a, b);
+        if (RECOMP_LIKELY(x87_fast_ok(op, r, a, b))) {
+            c->st[pd] = r;
+            ftag_put(c, pd, ftag_classify(r));
+            return;
+        }
+    }
+    x87_arith_slow_st(c, op, pd, ps);
+}
+
+/* The memory and integer forms: ST(0) = ST(0) op m. m is the operand widened
+ * to double, which is exact for every x87 memory operand that has these forms. */
+RECOMP_HOT_INLINE void x87_arith_m(X86 *c, int op, double m) {
+    unsigned p = c->fpu_top & 7u;
+    if (RECOMP_LIKELY(c->fp_mode == X87_MODE_FAST)) {
+        double a = c->st[p];
+        double r = x87_host_op(op, a, m);
+        if (RECOMP_LIKELY(x87_fast_ok(op, r, a, m))) {
+            c->st[p] = r;
+            ftag_put(c, p, ftag_classify(r));
+            return;
+        }
+    }
+    x87_arith_slow_m(c, op, m);
+}
+
+/* FSQRT. */
+RECOMP_HOT_INLINE void x87_fsqrt(X86 *c) {
+    unsigned p = c->fpu_top & 7u;
+    if (RECOMP_LIKELY(c->fp_mode == X87_MODE_FAST)) {
+        double a = c->st[p];
+        double r = __builtin_sqrt(a);
+        if (RECOMP_LIKELY(x87_fast_ok(X87_SQRT, r, a, a))) {
+            c->st[p] = r;
+            ftag_put(c, p, ftag_classify(r));
+            return;
+        }
+    }
+    x87_fsqrt_slow(c);
+}
+
+/* RC = nearest and ST(0) a double: the conversions below are the host's. */
+RECOMP_HOT_INLINE int x87_st0_plain(const X86 *c) {
+    return ((c->fpu_cw & 0x0c00u) | c->st_kind[c->fpu_top & 7u]) == 0;
+}
+
+/* FST/FSTP m32: the register rounded once to float. At RC = nearest the
+ * host's conversion is exactly x87's, overflow, gradual underflow and NaN
+ * payload included. */
+RECOMP_HOT_INLINE float x87_fst_f32(X86 *c) {
+    if (RECOMP_LIKELY(x87_st0_plain(c)))
+        return (float)c->st[c->fpu_top & 7u];
+    return x87_fst_f32_slow(c);
+}
+
+/* FST/FSTP m64: a double register stores as it is, under any RC, except that
+ * a signalling NaN is quietened (raising IE). */
+RECOMP_HOT_INLINE double x87_fst_f64(X86 *c) {
+    unsigned p = c->fpu_top & 7u;
+    double v = c->st[p];
+    uint64_t b;
+    if (RECOMP_UNLIKELY(c->st_kind[p]))
+        return x87_fst_f64_slow(c);
+    memcpy(&b, &v, 8);
+    if (RECOMP_UNLIKELY(is_snan(v))) {
+        b |= UINT64_C(0x0008000000000000);
+        c->fpu_sw |= 0x0001u;
+        memcpy(&v, &b, 8);
+    }
+    return v;
+}
+
+/* FIST/FISTP: round per RC, and store the integer indefinite (raising IE)
+ * when the value does not fit, as x87 does with the exception masked. The
+ * fast path is RC = nearest on a double, ties to even. */
+RECOMP_HOT_INLINE int16_t x87_fist16(X86 *c) {
+    if (RECOMP_LIKELY(x87_st0_plain(c))) {
+        double r = __builtin_roundeven(c->st[c->fpu_top & 7u]);
+        if (RECOMP_LIKELY(r >= -32768.0 && r <= 32767.0))
+            return (int16_t)r;
+    }
+    return (int16_t)x87_fist_slow(c, 16);
+}
+RECOMP_HOT_INLINE int32_t x87_fist32(X86 *c) {
+    if (RECOMP_LIKELY(x87_st0_plain(c))) {
+        double r = __builtin_roundeven(c->st[c->fpu_top & 7u]);
+        if (RECOMP_LIKELY(r >= -2147483648.0 && r <= 2147483647.0))
+            return (int32_t)r;
+    }
+    return (int32_t)x87_fist_slow(c, 32);
+}
+RECOMP_HOT_INLINE int64_t x87_fist64(X86 *c) {
+    if (RECOMP_LIKELY(x87_st0_plain(c))) {
+        double r = __builtin_roundeven(c->st[c->fpu_top & 7u]);
+        if (RECOMP_LIKELY(r >= -9223372036854775808.0 && r < 9223372036854775808.0))
+            return (int64_t)r;
+    }
+    return x87_fist_slow(c, 64);
+}
+
+/* FLD m64: an exact load, except that a signalling NaN is quietened. */
+RECOMP_HOT_INLINE void x87_fld_f64(X86 *c, double v) {
+    if (RECOMP_UNLIKELY(is_snan(v))) {
+        uint64_t b;
+        memcpy(&b, &v, 8);
+        b |= UINT64_C(0x0008000000000000);
+        memcpy(&v, &b, 8);
+        c->fpu_sw |= 0x0001u;
+    }
+    fpush(c, v);
+}
+
+/* FILD m64: exact. Beyond 2^53 a value may not be a double, so it goes in as
+ * an extended - all 64 bits, which a FISTP m64 copy loop relies on. */
+RECOMP_HOT_INLINE void x87_fild64(X86 *c, int64_t v) {
+    if (RECOMP_LIKELY(v >= -(INT64_C(1) << 53) && v <= (INT64_C(1) << 53)))
+        fpush(c, (double)v);
+    else
+        x87_fild64_slow(c, v);
+}
+
+/* FABS/FCHS change only the sign bit, of a NaN too. */
+RECOMP_HOT_INLINE void x87_fabs(X86 *c) {
+    unsigned p = c->fpu_top & 7u;
+    c->st[p] = __builtin_fabs(c->st[p]);
+    if (RECOMP_UNLIKELY(c->st_kind[p]))
+        c->stx[p].signExp &= 0x7fffu;
+}
+RECOMP_HOT_INLINE void x87_fchs(X86 *c) {
+    unsigned p = c->fpu_top & 7u;
+    c->st[p] = -c->st[p];
+    if (RECOMP_UNLIKELY(c->st_kind[p]))
+        c->stx[p].signExp ^= 0x8000u;
+}
+
 /* FCOM/FUCOM: C3 C2 C0 = ZF PF CF of the comparison.  They differ only in
  * which NaNs raise the invalid-operation exception: FCOM raises on any NaN,
- * FUCOM only on a signalling one. */
+ * FUCOM only on a signalling one. C1 is cleared. */
 RECOMP_HOT_INLINE void fcom_common(X86 *c, double a, double b, int quiet) {
     uint16_t sw = (uint16_t)(c->fpu_sw & (uint16_t)~0x4700u);
     if (isnan(a) || isnan(b)) {
@@ -1312,6 +1568,22 @@ RECOMP_HOT_INLINE void fcom(X86 *c, double a, double b) {
 RECOMP_HOT_INLINE void fucom(X86 *c, double a, double b) {
     fcom_common(c, a, b, 1);
 }
+/* FCOM ST(i) / FUCOM ST(i): ST(0) against a register. */
+RECOMP_HOT_INLINE void x87_fcom_st(X86 *c, unsigned i, int quiet) {
+    unsigned a = c->fpu_top & 7u, b = (c->fpu_top + i) & 7u;
+    if (RECOMP_UNLIKELY(c->st_kind[a] | c->st_kind[b]))
+        x87_fcom_slow(c, b, 0.0, 0, quiet);
+    else
+        fcom_common(c, c->st[a], c->st[b], quiet);
+}
+/* FCOM m32/m64, FICOM, FTST: ST(0) against a value widened exactly to double. */
+RECOMP_HOT_INLINE void x87_fcom_m(X86 *c, double m, int quiet) {
+    unsigned a = c->fpu_top & 7u;
+    if (RECOMP_UNLIKELY(c->st_kind[a]))
+        x87_fcom_slow(c, 0, m, 1, quiet);
+    else
+        fcom_common(c, c->st[a], m, quiet);
+}
 /* FCOMI/FUCOMI report into EFLAGS instead of the status word, with the same
  * split over which NaNs are quiet. */
 static inline void fcomi_common(X86 *c, double a, double b, int quiet) {
@@ -1326,11 +1598,12 @@ static inline void fcomi_common(X86 *c, double a, double b, int quiet) {
         c->eflags_cf = (a < b);
     }
 }
-static inline void fcomi(X86 *c, double a, double b) {
-    fcomi_common(c, a, b, 0);
-}
-static inline void fucomi(X86 *c, double a, double b) {
-    fcomi_common(c, a, b, 1);
+static inline void x87_fcomi_st(X86 *c, unsigned i, int quiet) {
+    unsigned a = c->fpu_top & 7u, b = (c->fpu_top + i) & 7u;
+    if (RECOMP_UNLIKELY(c->st_kind[a] | c->st_kind[b]))
+        x87_fcomi_slow(c, b, quiet);
+    else
+        fcomi_common(c, c->st[a], c->st[b], quiet);
 }
 
 /* FNSTSW/FSTSW: the architectural status word, with TOP injected. */
@@ -1338,17 +1611,20 @@ static inline uint16_t fstsw(const X86 *c) {
     return (uint16_t)((c->fpu_sw & (uint16_t)~0x3800u) | (uint16_t)(c->fpu_top << 11));
 }
 /* FXAM.  C1 is the sign bit (of a NaN too), and C3 C2 C0 encode the class:
- *   NaN 001, infinity 011, normal 010, zero 100, empty 101, denormal 110. */
+ *   unsupported 000, NaN 001, normal 010, infinity 011, zero 100, empty 101,
+ *   denormal 110. A subnormal double is a normal extended, so a double
+ *   register is never denormal; an extended one is classified out of line. */
 static inline void fxam(X86 *c) {
     uint16_t sw = (uint16_t)(c->fpu_sw & (uint16_t)~0x4700u);
     double v = ST(c, 0);
+    if (!fempty(c, 0) && c->st_kind[c->fpu_top & 7u]) {
+        x87_fxam_ext(c);
+        return;
+    }
     if (signbit(v))
         sw |= 0x0200u; /* C1 = sign */
     if (fempty(c, 0))
         sw |= 0x4100u; /* C3 C0 */
-    /* Classified as the 80-bit register would be: a subnormal double is a
-     * normal extended, so the denormal encoding C3 C2 = 1 1 is unreachable
-     * while the registers are doubles. */
     else
         switch (fpclassify(v)) {
         case FP_NAN:
@@ -1367,67 +1643,18 @@ static inline void fxam(X86 *c) {
     c->fpu_sw = sw;
 }
 
-/* Round per the control word's RC field (bits 10..11).
- *
- * Every mode is computed explicitly, so the result depends only on fpu_cw and
- * never on the host's ambient rounding mode.  That matters because the guest
- * control word can be restored by paths this header does not control (a
- * _longjmp reinstating a saved X86, for one), which would silently leave an
- * fesetround-based implementation rounding the wrong way.
- *
- * Nearest is ties-to-even, computed from floor and ceil rather than
- * `floor(v + 0.5)`: that addition itself rounds, and turns the exactly
- * representable 4503599627370497 into ...498.  For |v| >= 2^52 floor and ceil
- * are both v, so the tie branch returns v unchanged.
- */
-static inline double fround_cw(const X86 *c, double v) {
-    double lo, hi, dlo, dhi;
-    switch ((c->fpu_cw >> 10) & 3u) {
-    case 1:
-        return floor(v);
-    case 2:
-        return ceil(v);
-    case 3:
-        return trunc(v);
-    default:
-        lo = floor(v);
-        hi = ceil(v);
-        dlo = v - lo;
-        dhi = hi - v;
-        if (dlo < dhi)
-            return lo;
-        if (dlo > dhi)
-            return hi;
-        return fmod(lo, 2.0) == 0.0 ? lo : hi; /* tie: to even */
-    }
-}
-
-/* FLDCW.  Nothing outside fpu_cw has to change: rounding reads the field
- * directly.  Arithmetic and float stores are the one place the host's own
- * nearest-even rounding is used for the significand, which is exact whenever
- * RC = 00; this binary only ever leaves RC = 00 across the CRT's ftol, whose
- * window between the two FLDCWs contains a single FISTP and no arithmetic. */
-static inline void x87_set_cw(X86 *c, uint16_t cw) {
-    c->fpu_cw = cw;
-}
-
 /* FINIT/FNINIT: the post-reset state - control word 0x037f (round to nearest,
  * extended precision, every exception masked), status clear, TOP = 0, every
  * register tagged empty.  The register values themselves are left alone, as
  * on hardware; the tags make them unreadable. */
 static inline void x87_finit(X86 *c) {
-    x87_set_cw(c, 0x037fu);
+    c->fpu_cw = 0x037fu;
     c->fpu_sw = 0;
     c->fpu_top = 0;
     c->fpu_tag = 0xffffu;
-    memset(c->st_exact, 0, sizeof c->st_exact);
+    x87_kind_reset(c);
 }
 
-/* FNSAVE m108: the 32-bit protected-mode layout.  Control, status and tag
- * words each in their own dword, then the four exception pointers (FIP, FCS
- * with the opcode, FDP, FDS), which this model does not track and writes as
- * zero, then ST(0) through ST(7) as 80-bit values in stack order.  FNSAVE
- * then reinitialises the FPU, which is why the CRT pairs it with FRSTOR. */
 /* FNSTENV m28: the control, status and tag words, then the exception
  * pointers this model does not track, written as zero. Every exception is
  * masked afterwards, as on hardware; the register stack is untouched. */
@@ -1450,187 +1677,7 @@ static inline void x87_fldenv(X86 *c, uint32_t a) {
     c->fpu_top = (sw >> 11) & 7u;
     c->fpu_sw = (uint16_t)(sw & (uint16_t)~0x3800u);
     c->fpu_tag = rd16(a + 8);
-}
-
-static inline void x87_fnsave(X86 *c, uint32_t a) {
-    unsigned i;
-    wr32(a, c->fpu_cw);
-    wr32(a + 4, fstsw(c));
-    wr32(a + 8, c->fpu_tag);
-    wr32(a + 12, 0);
-    wr32(a + 16, 0);
-    wr32(a + 20, 0);
-    wr32(a + 24, 0);
-    for (i = 0; i < 8; i++)
-        wrf80(a + 28 + 10 * i, ST(c, i));
-    x87_finit(c);
-}
-
-/* FRSTOR m108: the inverse.  TOP comes out of the saved status word and the
- * eight registers go back into the physical slots that TOP implies, so a
- * later ST(i) reads what FNSAVE wrote as ST(i). */
-static inline void x87_frstor(X86 *c, uint32_t a) {
-    unsigned i;
-    uint16_t sw = rd16(a + 4);
-    x87_set_cw(c, rd16(a));
-    c->fpu_top = (sw >> 11) & 7u;
-    c->fpu_sw = (uint16_t)(sw & (uint16_t)~0x3800u);
-    for (i = 0; i < 8; i++)
-        fset(c, i, rdf80(a + 28 + 10 * i));
-    c->fpu_tag = rd16(a + 8);
-}
-
-/* FST/FSTP to a float, rounded per RC.  The host conversion rounds to
- * nearest; for the directed modes, step one ULP if it went the wrong way. */
-static inline float fto_float(const X86 *c, double v) {
-    unsigned rc = (c->fpu_cw >> 10) & 3u;
-    float f = (float)v;
-    double back;
-    if (rc == 0 || v != v || isinf(v) || (double)f == v)
-        return f;
-    back = (double)f;
-    if (rc == 1 && back > v)
-        return nextafterf(f, -(float)INFINITY); /* down */
-    if (rc == 2 && back < v)
-        return nextafterf(f, (float)INFINITY); /* up */
-    if (rc == 3 && ((v > 0 && back > v) || (v < 0 && back < v)))
-        return nextafterf(f, 0.0f); /* truncate */
-    return f;
-}
-
-/* FIST/FISTP: round per the control word, and store the "integer indefinite"
- * when the value does not fit (NaN, infinity, out of range) exactly as x87
- * does with the invalid-operation exception masked, raising IE. */
-static inline int16_t fto_i16(X86 *c, double v) {
-    double r = fround_cw(c, v);
-    if (r >= -32768.0 && r <= 32767.0)
-        return (int16_t)r;
-    c->fpu_sw |= 0x0001u;
-    return INT16_MIN;
-}
-static inline int32_t fto_i32(X86 *c, double v) {
-    double r = fround_cw(c, v);
-    if (r >= -2147483648.0 && r <= 2147483647.0)
-        return (int32_t)r;
-    c->fpu_sw |= 0x0001u;
-    return INT32_MIN;
-}
-static inline int64_t fto_i64(X86 *c, double v) {
-    double r = fround_cw(c, v);
-    if (r >= -9223372036854775808.0 && r < 9223372036854775808.0)
-        return (int64_t)r;
-    c->fpu_sw |= 0x0001u;
-    return INT64_MIN;
-}
-
-/* Integer stores use FILD's exact signed value until an arithmetic write.
- * Narrowing falls back to the ordinary conversion for masked overflow. */
-static inline int16_t fist_i16(X86 *c) {
-    int64_t v = (int64_t)c->st_bits[c->fpu_top];
-    if (c->st_exact[c->fpu_top] && v >= INT16_MIN && v <= INT16_MAX)
-        return (int16_t)v;
-    return fto_i16(c, ST(c, 0));
-}
-static inline int32_t fist_i32(X86 *c) {
-    int64_t v = (int64_t)c->st_bits[c->fpu_top];
-    if (c->st_exact[c->fpu_top] && v >= INT32_MIN && v <= INT32_MAX)
-        return (int32_t)v;
-    return fto_i32(c, ST(c, 0));
-}
-static inline int64_t fist_i64(X86 *c) {
-    if (c->st_exact[c->fpu_top])
-        return (int64_t)c->st_bits[c->fpu_top];
-    return fto_i64(c, ST(c, 0));
-}
-
-/* FPREM / FPREM1.
- *
- * Two things the obvious implementation gets wrong.
- *
- * When the operands' exponents differ by 64 or more, x87 does not finish: it
- * performs a PARTIAL reduction, sets C2, and expects the guest to execute the
- * instruction again.  Clearing C2 unconditionally turns that loop into a
- * single pass with a different answer.
- *
- * The quotient bits C0, C3 and C1 are bits 2, 1 and 0 of |Q|, and Q does not
- * fit anywhere: for a = 2^56, b = 3 it is 24019198012642645, and forming it
- * as a double rounds it, so the low bits are lost before they can be read.
- * They are recovered instead from two remainders - `fmod(A, B)` and
- * `fmod(A, 8B)` differ by exactly (Q mod 8) * B - which never builds a large
- * quotient at all.
- */
-static inline unsigned fprem_low_bits(double A, double B) {
-    double r = fmod(A, B);
-    double r8 = fmod(A, 8.0 * B);
-    double q = (r8 - r) / B;
-    long n = lround(q);
-    return (unsigned)(n & 7);
-}
-
-static inline void fprem_flags(X86 *c, unsigned bits, int incomplete) {
-    uint16_t sw = (uint16_t)(c->fpu_sw & (uint16_t)~0x4700u);
-    if (incomplete) {
-        sw |= 0x0400u; /* C2: reduction not finished */
-    } else {
-        if (bits & 4)
-            sw |= 0x0100u; /* C0 = quotient bit 2 */
-        if (bits & 2)
-            sw |= 0x4000u; /* C3 = quotient bit 1 */
-        if (bits & 1)
-            sw |= 0x0200u; /* C1 = quotient bit 0 */
-    }
-    c->fpu_sw = sw;
-}
-
-static inline double fprem_common(X86 *c, double a, double b, int ieee) {
-    double A, B, r;
-    int ea, eb;
-    if (b == 0.0 || isnan(a) || isnan(b) || isinf(a)) {
-        c->fpu_sw = (uint16_t)((c->fpu_sw & (uint16_t)~0x4700u) | 0x0001u);
-        return x87_indefinite();
-    }
-    if (a == 0.0 || isinf(b)) { /* already reduced */
-        fprem_flags(c, 0, 0);
-        return a;
-    }
-    A = fabs(a);
-    B = fabs(b);
-    ea = ilogb(A);
-    eb = ilogb(B);
-    if (ea - eb >= 64) {
-        /* Partial reduction: take out the top of the quotient only, leaving
-         * the exponent difference smaller, and tell the guest to come back. */
-        double scale = scalbn(B, ea - eb - 32);
-        double part = trunc(A / scale);
-        r = A - part * scale;
-        fprem_flags(c, 0, 1);
-        return a < 0 ? -r : r;
-    }
-    r = fmod(A, B);
-    if (ieee) {
-        /* Round the quotient to nearest instead of truncating: shift the
-         * remainder into (-B/2, B/2]. */
-        /* Compare 2r against B rather than r against B/2.  Halving is not
-         * exact at the bottom of the range: for B = 2**-1074 it underflows to
-         * zero, every r then reads as a tie, and FPREM1(x, x) came back as -x
-         * instead of 0.  Doubling r is safe: r < B, so 2r only overflows when
-         * r already exceeds B/2, which is the case that adjusts anyway. */
-        double r2 = scalbn(r, 1);
-        unsigned bits = fprem_low_bits(A, B);
-        if (r2 > B || (r2 == B && (bits & 1))) {
-            r -= B;
-            bits = (bits + 1) & 7;
-        }
-        fprem_flags(c, bits, 0);
-        return a < 0 ? -r : r;
-    }
-    fprem_flags(c, fprem_low_bits(A, B), 0);
-    return a < 0 ? -r : r;
-}
-
-/* FSCALE: ST(0) *= 2 ** trunc(ST(1)) */
-static inline double fscale(double a, double b) {
-    return ldexp(a, (int)trunc(b));
+    x87_kind_sync_tags(c);
 }
 
 /* ----------------------------------------------------------------- MMX ---
@@ -1810,18 +1857,6 @@ static inline uint64_t mmx_psra(uint64_t a, uint64_t count, unsigned bits) {
 }
 
 /* ----------------------------------------------------------------- misc */
-
-/* FXTRACT: ST(0) becomes its exponent, and its significand is pushed. */
-static inline double fxtract_exponent(double v) {
-    if (v == 0.0 || isnan(v) || isinf(v))
-        return v == 0.0 ? -(double)INFINITY : v;
-    return (double)ilogb(v);
-}
-static inline double fxtract_significand(double v) {
-    if (v == 0.0 || isnan(v) || isinf(v))
-        return v;
-    return scalbn(v, -ilogb(v)); /* in [1, 2) */
-}
 
 static inline void xlat(X86 *c) {
     c->r[R_EAX] = (c->r[R_EAX] & 0xffffff00u) | rd8(c->r[R_EBX] + (c->r[R_EAX] & 0xffu));
