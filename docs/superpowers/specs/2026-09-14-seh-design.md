@@ -416,10 +416,19 @@ inputs. Formatting, game-literal and staged repository checks also pass.
 
 ## Out of scope
 
-MSVC `__CxxThrowException` handling remains unsupported and keeps its current
-abort diagnostics. A later implementation could reuse safe guest exception
-dispatch and host checkpoint infrastructure, but compiler-specific frame
-decoding is separate work. Hardware-fault delivery, debugger integration,
+MSVC exception handling is no longer out of scope: `runtime/msvc_eh.cpp`
+implements `_CxxThrowException`, `__CxxFrameHandler`, `_except_handler3`,
+`_setjmp3`/`longjmp` and `__CxxLongjmpUnwind` on this dispatch, and its
+header comment describes the frames it reads. It reuses the checkpoint
+records with a different landing: an MSVC frame that can be resumed gets
+`recomp_eh_frame_enter` at its `MOV FS:[0],ESP` and `recomp_eh_frame_unlink`
+after each unlink store (retiring every MSVC record below the new head,
+because MSVC unlinks with ESP still below its registration). A catch or
+`__except` handler that accepts runs its block on the dispatcher's stack, as
+Windows does, then `recomp_seh_resume` longjmps to the checkpoint first and
+the establishing activation runs the continuation as a tail call: the host
+stack after a caught exception is no deeper than before it. Integer divide
+errors are now raised as guest exceptions too. Debugger integration,
 vectored handlers and a complete Windows exception subsystem are also outside
 this task. No game progress log, changelog, assets or parent-repository
 submodule update is committed by this task; the orchestrator records

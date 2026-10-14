@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Run MSVC exception handling: `_CxxThrowException`, `__CxxFrameHandler`
+  (catch by type, reference, pointer and base class, `catch(...)`, copy
+  constructors, unwinding, rethrow, try blocks inside catch blocks),
+  `_except_handler3` (`__except` filters and blocks, `__finally`),
+  `_setjmp3`/`longjmp`/`__CxxLongjmpUnwind`, and `terminate`/`set_terminate`
+  (`runtime/msvc_eh.cpp`). The translator gives each MSVC frame the runtime
+  can resume a checkpoint where it links itself in, makes every funclet and
+  continuation its tables name a translated entry, and takes the host
+  `setjmp` at `_setjmp3` call sites; the translation report's `msvc_eh`
+  section counts them and lists any that is missing. A caught exception
+  resumes the establishing function without deepening the host stack. A
+  failed `dynamic_cast` to a reference throws `bad_cast`, and an integer
+  divide error is raised as `EXCEPTION_INT_DIVIDE_BY_ZERO` for the guest's
+  handlers.
+
 - Make the x87 exact. A register is a double while its value is one and an
   80-bit extended otherwise; arithmetic at 53-bit precision and
   round-to-nearest stays the host's double operation, behind a test of the

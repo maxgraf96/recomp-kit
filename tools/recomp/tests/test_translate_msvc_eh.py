@@ -223,3 +223,16 @@ def test_frames_are_read_from_the_tables_alone():
     fn.measure(img)
     assert list(T.msvc_frames(fn, img).values()) == [("seh3", SCOPE, True, THUNK)]
     assert T.msvc_frame_entries(img, "seh3", SCOPE) == [("filter", FILTER), ("except", handler)]
+
+
+def test_a_continuation_split_from_its_frame_retires_the_checkpoint(tmp_path, monkeypatch):
+    """MSVC 6 often places a catch block's continuation after the catch block,
+    where a function database makes it an entry of its own; the frame's
+    unlink is in it, and so must the checkpoint's retirement be."""
+    img, blocks, cont = cxx_image()
+    body = blocks[F]
+    head, tail = body[:cont - F], body[cont - F:]
+    listed = {F: head, cont: tail, CALLEE: blocks[CALLEE], STUB: blocks[STUB], THUNK: blocks[THUNK]}
+    text = translate(tmp_path, monkeypatch, img, listed)
+    assert "recomp_eh_frame_enter(c)" in emitted_body(text, F)
+    assert "recomp_eh_frame_unlink(c);" in emitted_body(text, cont)

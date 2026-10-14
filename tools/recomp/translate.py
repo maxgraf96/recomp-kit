@@ -1902,6 +1902,12 @@ MSVC_SEH3_HANDLERS = frozenset(("_except_handler3",))
 #: _setjmp3 is substituted at its call sites, as _setjmp is (intrinsics.h).
 MSVC_SETJMP_IMPORTS = frozenset(("_setjmp3",))
 MSVC_FUNCINFO_MAGIC = frozenset((0x19930520, 0x19930521, 0x19930522))
+#: What the compiler schedules between a frame's PUSHes and its link store:
+#: register work that leaves ESP alone (the load of the old head, `this`
+#: adjustments, argument loads).
+MSVC_PROLOGUE_INTERLEAVED = frozenset(("MOV", "LEA", "XOR", "ADD", "SUB", "AND", "OR", "INC",
+                                       "DEC", "MOVZX", "MOVSX", "SHL", "SHR", "SAR", "NEG",
+                                       "NOT", "TEST", "CMP"))
 
 
 def s32(v):
@@ -1997,6 +2003,13 @@ def msvc_frames(fn, image):
     frames = {}
     if image is None or getattr(image, "rd8", None) is None:
         return frames
+    # Asked of every function in every discovery round: remember the answer
+    # for this body (recovery replaces the instruction list when it grows).
+    cached = getattr(fn, "_msvc_frames", None)
+    if (cached is not None and cached[0] is image and cached[1] is fn.insns
+            and cached[2] == len(fn.insns)):
+        return dict(cached[3])
+    fn._msvc_frames = (image, fn.insns, len(fn.insns), frames)
     for i, ins in enumerate(fn.insns):
         if ins.mnem != "MOV" or len(ins.ops) != 2 or "FS:" not in ins.ops[0]:
             continue
@@ -2020,7 +2033,7 @@ def msvc_frames(fn, image):
                 except TranslateError:
                     break
                 continue
-            if p.mnem in ("MOV", "LEA", "XOR") and p.ops:
+            if p.mnem in MSVC_PROLOGUE_INTERLEAVED and p.ops:
                 try:
                     if (parse_operand(p.ops[0]).kind == "reg"
                             and not Translator.writes_reg32(p, R_ESP)):
@@ -3025,7 +3038,9 @@ class Translator(object):
         fn.pushed_continuations = self.live_continuations(fn)
         fn.seh_sites = seh_frame_sites(fn, self.image)
         fn.seh_restores = seh_restore_sites(fn)
-        fn.msvc_sites = {i for i, f in msvc_frames(fn, self.image).items() if f[2]}
+        frames = msvc_frames(fn, self.image)
+        fn.msvc_sites = {i for i, f in frames.items() if f[2]}
+        fn.msvc_any = bool(frames)
         self.strict = strict
         for i, ins in enumerate(fn.insns):
             if ins.mnem == "JMP" and ins.ops and not ins.ops[0].startswith("0x"):
@@ -3060,7 +3075,9 @@ class Translator(object):
             entries = [e for e in entries if e in fn.index]
         fn.return_jumps = self.popped_return_jumps(fn, entries)
         fn.seh_escapes = self.seh_escaping_returns(fn)
-        fn.msvc_sites = {i for i, f in msvc_frames(fn, self.image).items() if f[2]}
+        frames = msvc_frames(fn, self.image)
+        fn.msvc_sites = {i for i, f in frames.items() if f[2]}
+        fn.msvc_any = bool(frames)
         if fn.msvc_sites:
             self.stats["_msvc_frame_checkpoint"] += len(fn.msvc_sites)
         if self.opts.eager_flags:
@@ -3301,10 +3318,16 @@ class Translator(object):
                 # These come from data Ghidra decoded as code.
                 return ["recomp_int(c, 6u);"] if dst.imm == SEGMENT_SELECTOR["CS"] else [";"]
             L.append(write_op(dst, size, read_op(src, size)))
-            if (getattr(fn, "msvc_sites", None) and seh_chain_operand(dst)
+            # An MSVC frame the runtime may resume: its checkpoint where it
+            # links itself in, its retirement wherever it unlinks - in its
+            # own body, or in a tail of it that is an entry of its own (a
+            # catch continuation placed after the catch block). A function
+            # that links only a frame nothing resumes retires nothing.
+            unlink_only = (not getattr(fn, "msvc_any", True) and not fn.seh_sites
+                           and dst.kind == "mem" and dst.base is None
+                           and src.kind == "reg" and src.reg != R_ESP)
+            if ((getattr(fn, "msvc_sites", None) or unlink_only) and seh_chain_operand(dst)
                     and src.kind == "reg" and src.size == 32):
-                # An MSVC frame the runtime may resume: its checkpoint where
-                # it links itself in, its retirement wherever it unlinks.
                 L.append("c->eip = %s;" % hexlit(ins.addr))
                 if i in fn.msvc_sites:
                     L.append("{ jmp_buf *b_ = recomp_eh_frame_enter(c); "
@@ -5402,6 +5425,10 @@ def main():
         # Each is code the runtime calls or resumes, however nothing branches
         # to it. A function database lists them already; then this changes
         # nothing, and anything it does adopt is reported as a gap.
+        # The listed set is rebuilt only after a resolve changed something:
+        # a database names thousands of these, and copying `owner` for each
+        # was most of a translation's time.
+        msvc_listed = None
         for fn in list(parsed):
             if fn in retired_finally_bodies:
                 continue
@@ -5409,11 +5436,17 @@ def main():
                 if (kind, table) in msvc_tables:
                     continue
                 msvc_tables.add((kind, table))
+                named = msvc_frame_entries(image, kind, table)
                 if kind == "cxx":
-                    changed |= resolve(handler, set(owner), why="immediate")
-                for _what, t in msvc_frame_entries(image, kind, table):
-                    if image.is_exec(t):
-                        changed |= resolve(t, set(owner), why="seh")
+                    named.insert(0, ("stub", handler))
+                for what, t in named:
+                    if not image.is_exec(t):
+                        continue
+                    if msvc_listed is None:
+                        msvc_listed = set(owner)
+                    if resolve(t, msvc_listed, why="immediate" if what == "stub" else "seh"):
+                        changed = True
+                        msvc_listed = None
         for fn in list(parsed):
             if fn in retired_finally_bodies:
                 continue

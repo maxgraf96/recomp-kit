@@ -68,8 +68,22 @@ translator's authority and translating a module at another base;
 `test_freestanding.py` compiles the instruction vocabulary with no C library,
 links a translation into a bundle with `ld64.lld` and loads it into a stand-in
 host (it needs an LLVM clang and lld, and says so when they are missing).
+`test_translate_msvc_eh.py` covers MSVC exception frames: which frames get a
+checkpoint, the funclets and continuations their tables name, and `_setjmp3`
+call sites.
 Add a case there first when the translator meets an instruction or table
 shape it does not handle.
+
+The native `eh_tests` suite (`nogame`) runs MSVC C++ and structured exception
+handling (`runtime/msvc_eh.cpp`) over synthetic guest frames written the way
+the translator emits them: catch matching and catch objects, unwinding,
+rethrow, a throw from a catch block, a try block inside a catch block, a
+throwing loop whose host stack must not grow, `__except`/`__finally`, a
+divide error, `_setjmp3`/`longjmp` and `bad_cast`, plus the terminate and
+abort paths in child processes. Like `seh_tests`, it spawns itself; where the
+macOS crash reporter is unreliable, run native suites with
+`DYLD_INSERT_LIBRARIES` naming a universal (arm64 and x86_64) library that
+maps SIGABRT to `_exit(134)`.
 
 The differential harness compares translated routines with original instructions
 under Unicorn. Unicorn is a development tool, not part of the playable app.
