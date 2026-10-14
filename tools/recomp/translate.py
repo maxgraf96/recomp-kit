@@ -68,6 +68,14 @@ def patch_instructions(insns):
     return insns
 
 
+#: The base the image is translated for - game.toml [game] image_base, or a
+#: module's [modules.aux.KEY] base - which is where the runtime loader maps it.
+#: None keeps the PE's own ImageBase. When the two differ the image is
+#: relocated (Image) and its listings, exported at the preferred base by Ghidra
+#: and the function DB, are moved with it (Rebase).
+IMAGE_BASE = None
+REBASE = None
+
 #: Every global the generated tables define starts with this; a module
 #: translation (--module) uses recomp_<key>_ so its tables link beside the
 #: main image's and register themselves with the runtime (x86.h RecompModule).
@@ -81,12 +89,13 @@ def configure_module(cfg, key):
     reads, no curated symbols (those describe the executable)."""
     global LISTINGS, FUNCS_TSV, BINARY, CURATED, ANIMATION_COUNTER, VISUAL_ANIMATION_READS
     global EXTRA_ENTRY_POINTS, FUNCTION_ALIGNMENT, SYMBOL_PREFIX, AUX_MODULE
-    global RESUMABLE_STACKS
+    global RESUMABLE_STACKS, IMAGE_BASE
     RESUMABLE_STACKS = cfg["translate"].get("resumable_stacks", False)
     mods = {m["key"]: m for m in cfg.get("aux_modules", [])}
     if key not in mods:
         raise SystemExit("game.toml has no [modules.aux.%s]" % key)
     mod = mods[key]
+    IMAGE_BASE = mod.get("base")
     listings = str(mod["listings_path"])
     LISTINGS = os.path.join(listings, "functions")
     FUNCS_TSV = os.path.join(listings, "functions.tsv")
@@ -125,6 +134,8 @@ def configure(cfg):
     FUNCS_TSV = os.path.join(listings, "functions.tsv")
     BINARY = str(cfg["developer_exe_path"])
     CURATED = os.path.join(str(cfg["dir"]), cfg["translate"].get("globals", "globals.toml"))
+    global IMAGE_BASE
+    IMAGE_BASE = int(cfg["game"]["image_base"])
     ANIMATION_COUNTER = cfg["translate"]["animation_counter"]
     VISUAL_ANIMATION_READS = frozenset(cfg["translate"].get("volatile_reads", ()))
     global EXTRA_ENTRY_POINTS, FUNCTION_ALIGNMENT
@@ -651,7 +662,89 @@ class Insn(object):
 
 def parse_listing(path):
     with open(path) as fh:
-        return parse_listing_text(fh.read())
+        text = fh.read()
+    return parse_listing_text(REBASE.listing(text) if REBASE is not None else text)
+
+
+def listed_address(addr):
+    """A functions.tsv address as the translation sees it."""
+    return REBASE.address(addr) if REBASE is not None else addr
+
+
+def listing_name(addr):
+    """The listing file stem of a translated address: the address it was
+    exported at."""
+    return "%08x" % (addr - REBASE.delta if REBASE is not None else addr)
+
+
+#: Relative branches: absolute in Ghidra's text, relative in the encoding, so a
+#: rebase moves them although no relocation names them.
+DIRECT_BRANCHES = frozenset(("CALL", "JMP", "LOOP", "LOOPE", "LOOPZ", "LOOPNE", "LOOPNZ",
+                             "JCXZ", "JECXZ"))
+HEX_RE = re.compile(r"^0x[0-9a-fA-F]+$")
+
+
+class Rebase(object):
+    """Listings exported at the PE's preferred base, for an image translated at
+    another (IMAGE_BASE). Every listed address moves by `delta`. So does every
+    operand that the image's base relocations mark as an address - the loader
+    rewrites those bytes, so the translation must bake in the moved value - and
+    every direct branch target. Anything else is a constant and stays."""
+
+    def __init__(self, image):
+        self.delta = image.base - image.preferred_base
+        self.lo = image.preferred_base
+        self.hi = image.preferred_base + image.size
+        self.image = image
+        #: preferred VA of every HIGHLOW site -> the address stored there.
+        self.values = dict(image.reloc_sites)
+        self.sites = sorted(self.values)
+
+    def address(self, a):
+        return a + self.delta if self.lo <= a < self.hi else a
+
+    def length(self, va):
+        """The length of the instruction at translated address va."""
+        img = self.image
+        o = va - img.base
+        if img.md is not None and 0 <= o < len(img.data):
+            got = list(img.md.disasm(img.data[o:o + 16], va, count=1))
+            if got:
+                return got[0].size
+        return 15
+
+    def listing(self, text):
+        import bisect
+        out = []
+        for line in text.splitlines():
+            m = LINE_RE.match(line.rstrip("\n"))
+            if not m:
+                out.append(line)
+                continue
+            a = int(m.group(1), 16)
+            mnem, ops = m.group(2), m.group(3) or ""
+            if not self.lo <= a < self.hi:
+                raise TranslateError("listing line %r lies outside the image (%08x-%08x)"
+                                     % (line, self.lo, self.hi))
+            new = a + self.delta
+            end = a + self.length(new)
+            k = bisect.bisect_left(self.sites, a)
+            while k < len(self.sites) and self.sites[k] < end:
+                v = self.values[self.sites[k]]
+                pat = re.compile(r"(?<![0-9A-Za-z_])0x0*%x(?![0-9A-Fa-f])" % v, re.I)
+                ops, n = pat.subn("0x%x" % ((v + self.delta) & 0xffffffff), ops)
+                if not n:
+                    raise TranslateError("%08x: relocated address %08x is not an operand of %r"
+                                         % (a, v, line))
+                k += 1
+            base_mnem = mnem.split(".")[-1]
+            if ((base_mnem in DIRECT_BRANCHES or base_mnem.startswith("J"))
+                    and HEX_RE.match(ops.strip())):
+                t = int(ops.strip(), 16)
+                if self.lo <= t < self.hi:
+                    ops = "0x%x" % (t + self.delta)
+            out.append("%08x  %s%s" % (new, mnem, " " + ops if ops else ""))
+        return "\n".join(out) + "\n"
 
 
 def parse_listing_text(text):
@@ -819,10 +912,14 @@ def flag_effect(insn):
 # ------------------------------------------------------------------- image --
 
 class Image(object):
-    def __init__(self, path):
+    def __init__(self, path, base=None):
+        """The image as the runtime maps it: at `base` (default: its preferred
+        ImageBase), with its base relocations applied when the two differ, as
+        runtime/loader.cpp applies them."""
         import pefile
         pe = pefile.PE(path, fast_load=True)
-        self.base = pe.OPTIONAL_HEADER.ImageBase
+        self.preferred_base = pe.OPTIONAL_HEADER.ImageBase
+        self.base = self.preferred_base if base is None else base
         self.size = pe.OPTIONAL_HEADER.SizeOfImage
         data = pe.get_memory_mapped_image()
         # get_memory_mapped_image() stops at the last section's raw end, which
@@ -834,6 +931,14 @@ class Image(object):
         self.end = self.base + self.size
         rel = pe.OPTIONAL_HEADER.DATA_DIRECTORY[5]      # IMAGE_DIRECTORY_BASERELOC
         self.reloc_dir = (rel.VirtualAddress, rel.Size)
+        #: (preferred site VA, preferred stored address) of every HIGHLOW
+        #: relocation, filled when the image is moved.
+        self.reloc_sites = []
+        if self.base != self.preferred_base:
+            if pe.FILE_HEADER.Characteristics & 0x0001:
+                raise TranslateError("%s prefers %08x, has no relocations and cannot be "
+                                     "translated for %08x" % (path, self.preferred_base, self.base))
+            self.data = self.relocate(self.base - self.preferred_base)
         #: Import address table slots by address, as the imported name.
         #: noreturn_callees_from reads it to see that a function ending in
         #: RaiseException - MSVC's _CxxThrowException - does not return, and
@@ -846,7 +951,8 @@ class Image(object):
             for entry in getattr(pe, "DIRECTORY_ENTRY_IMPORT", []):
                 for imp in entry.imports:
                     if imp.name:
-                        self.iat_names[imp.address] = imp.name.decode("ascii", "replace")
+                        self.iat_names[imp.address - self.preferred_base + self.base] = \
+                            imp.name.decode("ascii", "replace")
         except Exception:                 # a malformed table only loses names
             pass
         pe.close()
@@ -880,6 +986,39 @@ class Image(object):
             self.md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
         except ImportError:            # length checking is optional
             self.md = None
+
+    def relocate(self, delta):
+        """The image bytes moved by `delta`, from its own .reloc table; records
+        every HIGHLOW site and its original value in reloc_sites. Types other
+        than ABSOLUTE padding and HIGHLOW (HIGH, LOW) are applied too; anything
+        else cannot be in a 32-bit image and is refused."""
+        rva, size = self.reloc_dir
+        data = bytearray(self.data)
+        off, end = rva, rva + (size if rva else 0)
+        while off + 8 <= end:
+            page = int.from_bytes(data[off:off + 4], "little")
+            blk = int.from_bytes(data[off + 4:off + 8], "little")
+            if blk == 0:
+                break
+            if blk < 8 or off + blk > end:
+                raise TranslateError("relocation block at rva %x runs past its table" % off)
+            for k in range(off + 8, off + blk, 2):
+                e = int.from_bytes(data[k:k + 2], "little")
+                kind, site = e >> 12, page + (e & 0xfff)
+                if kind == 0:
+                    continue
+                if kind == 3:
+                    v = int.from_bytes(data[site:site + 4], "little")
+                    self.reloc_sites.append((self.preferred_base + site, v))
+                    data[site:site + 4] = ((v + delta) & 0xffffffff).to_bytes(4, "little")
+                elif kind in (1, 2):
+                    v = int.from_bytes(data[site:site + 2], "little")
+                    add = (delta >> 16) if kind == 1 else (delta & 0xffff)
+                    data[site:site + 2] = ((v + add) & 0xffff).to_bytes(2, "little")
+                else:
+                    raise TranslateError("relocation type %d at rva %x" % (kind, site))
+            off += blk
+        return bytes(data)
 
     def relocated_pointers(self):
         """Every address named by a dword the loader rewrites, and where.
@@ -3585,7 +3724,7 @@ class Translator(object):
         for fn in funcs:
             if fn.addr not in by_fn:
                 continue
-            path = os.path.join(LISTINGS, "%08x.c" % fn.addr)
+            path = os.path.join(LISTINGS, "%s.c" % listing_name(fn.addr))
             if not os.path.exists(path):
                 continue
             try:
@@ -3983,11 +4122,12 @@ def load_functions(only=None):
     with open(FUNCS_TSV) as fh:
         rows = [l.rstrip("\n").split("\t") for l in fh][1:]
     for row in rows:
-        addr = int(row[0], 16)
+        listed = int(row[0], 16)
+        addr = listed_address(listed)
         name, nbytes = row[1], int(row[2])
         if only and "%08x" % addr not in only:
             continue
-        path = os.path.join(LISTINGS, "%08x.asm" % addr)
+        path = os.path.join(LISTINGS, "%08x.asm" % listed)
         if not os.path.exists(path) or os.path.getsize(path) == 0:
             continue
         funcs.append((addr, name, nbytes, path))
@@ -4045,6 +4185,14 @@ def main():
         AUX_MODULE = {"name": args.as_module, "base": cfg["game"]["image_base"],
                       "size": 0}  # the image's extent, filled in once it is read
     image = Image(BINARY)
+    if IMAGE_BASE is not None and image.base != IMAGE_BASE:
+        image = Image(BINARY, IMAGE_BASE)  # mapped elsewhere than it prefers: relocate
+    global REBASE
+    REBASE = Rebase(image) if image.base != getattr(image, "preferred_base", image.base) else None
+    if REBASE is not None:
+        print("  rebase: %s prefers %08x, translated for %08x (%d relocations)"
+              % (os.path.basename(BINARY), image.preferred_base, image.base,
+                 len(image.reloc_sites)), file=sys.stderr)
     discovered = []
     if args.discovered:
         global EXTRA_ENTRY_POINTS
@@ -4076,9 +4224,10 @@ def main():
     listed_starts = []
     with open(FUNCS_TSV) as fh:
         for l in list(fh)[1:]:
-            a = int(l.split("\t")[0], 16)
+            listed = int(l.split("\t")[0], 16)
+            a = listed_address(listed)
             listed_starts.append(a)
-            p = os.path.join(LISTINGS, "%08x.asm" % a)
+            p = os.path.join(LISTINGS, "%08x.asm" % listed)
             if os.path.exists(p) and os.path.getsize(p) > 0:
                 all_addrs.add(a)
 
