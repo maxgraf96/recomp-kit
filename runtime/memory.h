@@ -31,6 +31,10 @@ void mem_reserve_range(uint32_t addr, uint32_t size);
 // mem_init under strict mode (recomp_strict()) or RECOMP_NULL_GUARD=1, and off
 // with RECOMP_NULL_GUARD=0; only a guarded arena can do it.
 bool mem_null_guard();
+// Registers a callback mem_init runs after it has reset the arena, so a layer
+// that keeps guest addresses on the host side (the C runtime's allocator and
+// its streams) forgets them with the memory they named. Idempotent per fn.
+void mem_add_reset_hook(void (*fn)());
 
 // First-fit free-list allocator over HEAP_BASE..HEAP_LIMIT, which grows, once
 // that is full, into [GUEST_SHIM_END, GUEST_SIZE) around the reserved module

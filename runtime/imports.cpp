@@ -62,6 +62,7 @@ struct DataImport {
     uint32_t size = 0;
     uint32_t addr = 0;
     std::string desc;
+    void (*init)(uint32_t addr) = nullptr;
 };
 std::map<std::string, DataImport> &data_imports() {
     static auto *m = new std::map<std::string, DataImport>();
@@ -193,6 +194,12 @@ void imports_register_data(const char *dll, const char *name, uint32_t size) {
         d.desc = std::string(dll) + "!" + name;
 }
 
+void imports_register_data_init(const char *dll, const char *name, uint32_t size,
+                                void (*init)(uint32_t addr)) {
+    imports_register_data(dll, name, size);
+    data_imports()[key_of(dll, name)].init = init;
+}
+
 static void register_default_data_imports() {
     static bool done = false;
     if (done)
@@ -217,6 +224,8 @@ uint32_t imports_alloc_data(const char *dll, const char *name) {
             LOGW("imports: cannot allocate %u bytes for data import %s", d.size, d.desc.c_str());
         else
             LOGV("data import %s -> %u zeroed bytes at %08x", d.desc.c_str(), d.size, d.addr);
+        if (d.addr && d.init)
+            d.init(d.addr);
     }
     return d.addr;
 }

@@ -89,6 +89,11 @@ uint32_t imports_alloc_trampoline(const char *dll, const char *name, void (*fn)(
 // guest memory the first time, and 0 when dll!name is not a known data import.
 // ---------------------------------------------------------------------------
 void imports_register_data(const char *dll, const char *name, uint32_t size);
+// The same for a variable whose contents matter before the guest writes it
+// (a runtime library's FILE table, its command line pointer): `init` fills the
+// zeroed storage each time it is allocated, which after mem_init is anew.
+void imports_register_data_init(const char *dll, const char *name, uint32_t size,
+                                void (*init)(uint32_t addr));
 uint32_t imports_alloc_data(const char *dll, const char *name);
 uint32_t imports_data_address(const char *dll, const char *name);
 uint32_t imports_data_count();

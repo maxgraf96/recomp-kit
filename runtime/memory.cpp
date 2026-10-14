@@ -506,6 +506,13 @@ bool heap_grow(uint32_t need, uint32_t align) {
     return false;
 }
 
+// Deliberately leaked, like the import tables: registration happens from
+// static initialisers in other translation units.
+std::vector<void (*)()> &reset_hooks() {
+    static auto *v = new std::vector<void (*)()>();
+    return *v;
+}
+
 } // namespace
 
 void mem_init() {
@@ -553,6 +560,14 @@ void mem_init() {
             g_null_guard = os_vm_protect_none(g_mem, GUEST_NULL_LIMIT) == 0;
     }
     heap_reset();
+    for (void (*fn)() : reset_hooks())
+        fn();
+}
+
+void mem_add_reset_hook(void (*fn)()) {
+    auto &hooks = reset_hooks();
+    if (fn && std::find(hooks.begin(), hooks.end(), fn) == hooks.end())
+        hooks.push_back(fn);
 }
 
 void mem_shutdown() {
