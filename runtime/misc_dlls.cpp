@@ -175,18 +175,6 @@ void workstation_info(X86 *c) {
     zero_out(arg(c, 2));
     set_eax(c, 50);
 }
-void crt_memcpy(X86 *c) {
-    uint32_t dst = arg(c, 0), src = arg(c, 1), size = arg(c, 2);
-    if (gm_valid(dst, size) && gm_valid(src, size) && size)
-        memcpy(g_mem + dst, g_mem + src, size);
-    set_eax(c, dst);
-}
-void crt_memset(X86 *c) {
-    uint32_t dst = arg(c, 0), size = arg(c, 2);
-    if (gm_valid(dst, size) && size)
-        memset(g_mem + dst, int(arg(c, 1)), size);
-    set_eax(c, dst);
-}
 // All supported per-user settings locations use the same Documents guest path;
 // the file overlay decides where that path resides in the writable profile.
 void folder_path(X86 *c) {
@@ -278,8 +266,6 @@ const ImportShim shims[] = {
     {"WINSPOOL.DRV", "DocumentPropertiesW", 6, document_properties},
     {"NETAPI32.dll", "NetWkstaGetInfo", 3, workstation_info},
     {"NETAPI32.dll", "NetApiBufferFree", 1, zero},
-    {"msvcrt.dll", "memcpy", ARGC_CDECL, crt_memcpy},
-    {"msvcrt.dll", "memset", ARGC_CDECL, crt_memset},
     {"SHFOLDER.dll", "SHGetFolderPathW", 5, folder_path},
     {"SHELL32.dll", "Shell_NotifyIconW", 2, yes},
     {"SHELL32.dll", "SHAppBarMessage", 2, zero},

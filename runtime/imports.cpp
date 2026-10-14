@@ -612,6 +612,8 @@ void imports_init() {
     misc_dlls_register();
     comctl32_register();
     media_foundation_register();
+    msvcrt_register();
+    msvcp60_register();
     imports_register(g_user32_shims, g_user32_shim_count);
     user32_wide_register();
     user32_vcl_register();
