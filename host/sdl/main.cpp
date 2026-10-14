@@ -96,7 +96,11 @@ SDL_Window *g_window = nullptr;
 void *g_surface = nullptr; // the native surface the presenter draws into
 std::unique_ptr<gpu::Device> g_gpu;
 bool g_close_requested = false; // the user asked to close
-bool g_focus_noted = false;     // the focus has been reported to the runtime at least once
+// The guest holds an exclusive DirectInput mouse: sampled under the baton in
+// pump(), read on the main thread.
+std::atomic<bool> g_guest_mouse_exclusive{false};
+std::atomic<bool> g_relative{false}; // SDL relative mode is on (relative_mouse)
+bool g_focus_noted = false;          // the focus has been reported to the runtime at least once
 bool g_focused = false;
 bool g_minimized = false; // minimised or hidden, as last reported
 int g_mode_w = 640, g_mode_h = 480;
@@ -265,7 +269,17 @@ PointRect game_rect_points() {
 // below and applied from pump(), which runs on a thread that holds the baton.
 // ---------------------------------------------------------------------------
 struct PendingInput {
-    enum Kind { MOTION, BUTTON, WHEEL, KEY, MODIFIERS, FOCUS, RELEASE_CAPTURE, PLACE } kind;
+    enum Kind {
+        MOTION,
+        BUTTON,
+        WHEEL,
+        KEY,
+        MODIFIERS,
+        FOCUS,
+        RELEASE_CAPTURE,
+        PLACE,
+        RAW_MOTION
+    } kind;
     int32_t x = 0, y = 0, dz = 0;
     double dx = 0, dy = 0; // Drawable deltas preserve subpixel motion in the queue.
     int drawable_w = 0, drawable_h = 0;
@@ -276,6 +290,7 @@ struct PendingInput {
     uint32_t character = 0;
     uint32_t flags = 0;
     bool minimized = false; // FOCUS: the window is minimised or hidden
+    bool raw = false;       // BUTTON, WHEEL: the pointer was the game's (relative mode)
 };
 std::vector<PendingInput> g_pending_input;
 // The queue is FILLED on the host thread inside an idle slice, with the
@@ -395,6 +410,9 @@ bool window_fullscreen() {
 // what the guest is doing: an FMV reads the mouse exactly as gameplay does.
 bool pointer_capture_wanted() {
     if (!platform_ui_pointer_capture_supported())
+        return false;
+    // Relative mode already owns the pointer: hidden, and no edge to stop at.
+    if (g_relative)
         return false;
     // Nothing to stand in for the system pointer until the guest has a display
     // surface of its own: while it is still showing plain windows - a launcher,
@@ -554,7 +572,60 @@ void system_strip_insets(double *top, double *bottom) {
     *bottom = below > 0 ? below : 0;
 }
 
+// ---------------------------------------------------------------------------
+// Relative mouse. A Windows game that acquires its DirectInput mouse
+// exclusively owns the pointer: the system cursor disappears, the window gets
+// no mouse messages, and the device reports raw motion that no screen edge
+// stops. Such a game draws its own cursor from those deltas. With
+// [runtime] relative_mouse the host does the same - SDL's relative mode
+// while the guest holds an exclusive mouse and the window has the focus - so
+// the game's cursor can reach every edge however far it has drifted from
+// where the system pointer would have been. Otherwise motion is derived from
+// window positions, as before.
+// ---------------------------------------------------------------------------
+bool relative_mouse_configured() {
+    static const bool on = [] {
+        const char *e = recomp_env("RELATIVE_MOUSE");
+        return e && *e ? atoi(e) != 0 : RECOMP_RELATIVE_MOUSE_DEFAULT != 0;
+    }();
+    return on;
+}
+HostMouseAccumulator g_raw_motion = {0, 0};
+
+bool relative_mouse_wanted() {
+    return relative_mouse_configured() && g_guest_mouse_exclusive && g_window && g_focused &&
+           window_focused() && !window_minimized_or_hidden() && !mods_page_visible() &&
+           !mods_controls_editing() && !g_close_requested;
+}
+// Main thread only: SDL's window state.
+void update_relative_mouse() {
+    const bool want = relative_mouse_wanted();
+    if (want == g_relative)
+        return;
+    g_relative = want;
+    SDL_SetWindowRelativeMouseMode(g_window, want);
+    g_raw_motion = {0, 0};
+    trace_state(want ? "relative mouse ON: the guest holds the mouse exclusively"
+                     : "relative mouse OFF");
+}
+// Raw motion in window points becomes whole DirectInput counts, one per point,
+// with the fraction carried to the next event.
+void apply_raw_motion(double dx, double dy) {
+    int32_t ix = 0, iy = 0;
+    host_input_scale_delta(&g_raw_motion, dx, dy, 1.0, &ix, &iy);
+    if (ix || iy)
+        host_input_motion(g_cursor_x, g_cursor_y, ix, iy);
+}
+
 void handle_mouse_move(const SDL_MouseMotionEvent &motion) {
+    if (g_relative) {
+        PendingInput e;
+        e.kind = PendingInput::RAW_MOTION;
+        e.dx = motion.xrel;
+        e.dy = motion.yrel;
+        queue_or_apply(e);
+        return;
+    }
     // A real pointer move (not one the touch path or the binding itself
     // synthesized, which both arrive as SDL_TOUCH_MOUSEID): feed the mapped
     // binding's Cursor stick mode. A touch's own placement reaches it through
@@ -590,7 +661,18 @@ void handle_mouse_move(const SDL_MouseMotionEvent &motion) {
         queue_or_apply(e);
 }
 
-void apply_button(int button, bool down, int32_t x, int32_t y, bool inside, bool edge) {
+void apply_button(int button, bool down, int32_t x, int32_t y, bool inside, bool edge,
+                  bool raw = false) {
+    if (raw) {
+        // The game's pointer: no hit test, no window message (the exclusive
+        // mouse has none), only the device state.
+        if (down)
+            g_buttons |= (uint8_t)(1u << button);
+        else
+            g_buttons &= (uint8_t)~(1u << button);
+        host_input_button(button, down);
+        return;
+    }
     if (down && (!inside || edge)) {
         apply_pointer_capture(false);
         return;
@@ -648,6 +730,7 @@ void handle_button(const SDL_MouseButtonEvent &event, int button, bool down) {
     e.kind = PendingInput::BUTTON;
     e.button = button;
     e.down = down;
+    e.raw = g_relative;
     int bw, bh, dw, dh;
     window_sizes(&bw, &bh, &dw, &dh);
     e.inside = event.x >= 0 && event.y >= 0 && event.x < bw && event.y < bh;
@@ -659,9 +742,14 @@ void handle_button(const SDL_MouseButtonEvent &event, int button, bool down) {
 // The key paths live in input_gate.cpp, which owns the decision, the delivery
 // and the two kinds of key state they need. What is left here is the SDL
 // event decoding.
-void apply_wheel(int32_t dz, int32_t x, int32_t y) {
+void apply_wheel(int32_t dz, int32_t x, int32_t y, bool raw = false) {
     if (host_gate_wheel(dz))
         return;
+    // An exclusive mouse has no window messages; its wheel is the device's.
+    if (raw || dinput_mouse_exclusive()) {
+        host_input_wheel(dz);
+        return;
+    }
     int32_t dx, dy;
     auto hit = host_gate_window_pointer(x, y, &dx, &dy);
     if (hit.kind == HitResult::HIT_NONE)
@@ -759,10 +847,13 @@ void apply_input(const PendingInput &e) {
         apply_motion(e.x, e.y, e.dx, e.dy);
         break;
     case PendingInput::BUTTON:
-        apply_button(e.button, e.down, e.x, e.y, e.inside, e.edge);
+        apply_button(e.button, e.down, e.x, e.y, e.inside, e.edge, e.raw);
         break;
     case PendingInput::WHEEL:
-        apply_wheel(e.dz, e.x, e.y);
+        apply_wheel(e.dz, e.x, e.y, e.raw);
+        break;
+    case PendingInput::RAW_MOTION:
+        apply_raw_motion(e.dx, e.dy);
         break;
     case PendingInput::KEY:
         apply_key(e.key, e.down, e.character, e.flags);
@@ -1086,11 +1177,18 @@ void handle_event(const SDL_Event &event) {
         break;
     case SDL_EVENT_MOUSE_WHEEL:
         if (event.wheel.windowID == ours) {
+            // Whole notches of WHEEL_DELTA, as a Windows wheel sends them: a
+            // trackpad's fractions accumulate in SDL until they make a tick,
+            // and a game dividing by its granularity sees whole steps.
+            const int32_t ticks = event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED
+                                      ? -event.wheel.integer_y
+                                      : event.wheel.integer_y;
+            if (!ticks)
+                break;
             PendingInput e;
             e.kind = PendingInput::WHEEL;
-            const double steps =
-                event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -event.wheel.y : event.wheel.y;
-            e.dz = (int32_t)lround(steps * 120.0);
+            e.raw = g_relative;
+            e.dz = ticks * 120;
             // WM_MOUSEWHEEL carries the position of the wheel event itself.
             view_point_to_drawable(event.wheel.mouse_x, event.wheel.mouse_y, &e.x, &e.y,
                                    &e.drawable_w, &e.drawable_h);
@@ -1289,6 +1387,7 @@ controls::Screen controls_screen() {
 
 // The housekeeping every turn does once the events are in.
 void after_events() {
+    update_relative_mouse();
     {
         // Time-based gestures (a long press) fire from the clock, not an event,
         // and deferred clicks go out once the game's cursor has caught up and
@@ -1454,6 +1553,9 @@ void pump() {
     // and a mod callback dispatched from here is serialised against every
     // other guest thread, which is the whole point.
     deliver_pending_input();
+    // The DirectInput devices belong to the baton holder, which this is.
+    g_guest_mouse_exclusive = dinput_mouse_exclusive();
+    update_relative_mouse();
     apply_window_mode();
     apply_mode_change();
     service(0.0);

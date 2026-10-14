@@ -315,6 +315,8 @@ static void test_scancodes() {
     CHECK_EQ(host_vk_from_mac(0x71), 0x13);  // VK_PAUSE
     CHECK_EQ(host_dik_from_mac(0x47), 0x45); // Clear -> Num Lock
     CHECK_EQ(host_dik_from_mac(0x6b), 0x46); // F14 -> Scroll Lock
+    CHECK_EQ(host_dik_from_mac(0x72), 0xd2); // Help -> DIK_INSERT
+    CHECK_EQ(host_vk_from_mac(0x72), 0x2d);  // VK_INSERT
 
     // A key with no PC equivalent maps to nothing rather than to key 0, which
     // is DIK_ESCAPE's neighbour and would be a real key going down.

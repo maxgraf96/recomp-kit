@@ -101,6 +101,7 @@ const Row kRows[] = {
     {SDL_SCANCODE_F10, 0x6D},
     {SDL_SCANCODE_F12, 0x6F},
     {SDL_SCANCODE_PAUSE, 0x71},
+    {SDL_SCANCODE_INSERT, 0x72}, // kVK_Help: the Help key, or Insert on a PC keyboard
     {SDL_SCANCODE_HOME, 0x73},
     {SDL_SCANCODE_PAGEUP, 0x74},
     {SDL_SCANCODE_DELETE, 0x75},

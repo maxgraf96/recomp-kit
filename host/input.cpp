@@ -102,6 +102,7 @@ enum : uint16_t {
     MK_F10 = 0x6D,
     MK_F12 = 0x6F,
     MK_F15 = 0x71,
+    MK_HELP = 0x72,
     MK_HOME = 0x73,
     MK_PAGEUP = 0x74,
     MK_FWDDELETE = 0x75,
@@ -230,6 +231,9 @@ const HostKeyMapping kKeys[] = {
     {MK_F13, 0xb7, 0x2c},      // DIK_SYSRQ, VK_SNAPSHOT
     {MK_F14, 0x46, 0x91},      // DIK_SCROLL, VK_SCROLL
     {MK_F15, 0xc5, 0x13},      // DIK_PAUSE, VK_PAUSE
+    // Help sits where Insert does on a full-size Apple keyboard, and is what
+    // a PC keyboard's Insert reports on a Mac.
+    {MK_HELP, 0xd2, 0x2d}, // DIK_INSERT, VK_INSERT
     // modifiers
     {MK_LSHIFT, 0x2a, 0xa0},
     {MK_RSHIFT, 0x36, 0xa1},
