@@ -132,6 +132,15 @@ if(APPLE AND EXISTS ${POP_GDI_WINDOWS_METRICS})
     WORKING_DIRECTORY ${POP_ROOT})
   set_tests_properties(gdi_metrics_reference PROPERTIES LABELS nogame)
 endif()
+# Winsock (WSOCK32, WS2_32), the IP helper API and Netbios through the guest
+# ABI, on real sockets on the loopback interface and on fake interface lists.
+add_executable(winsock_tests tests/winsock_tests.cpp tests/stub_recomp_call.cpp)
+target_link_libraries(winsock_tests PRIVATE recomp_platform recomp_runtime)
+target_compile_options(winsock_tests PRIVATE ${POP_WARN_HOST})
+pop_optimize(winsock_tests 1)
+pop_test_binary(winsock_tests)
+add_test(NAME winsock_tests COMMAND winsock_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(winsock_tests PROPERTIES LABELS nogame TIMEOUT 120)
 # The msvcrt.dll / msvcp60.dll HLE, against synthetic guest memory.
 add_executable(crt_tests tests/crt_tests.cpp tests/stub_recomp_call.cpp)
 target_link_libraries(crt_tests PRIVATE recomp_platform recomp_runtime)
