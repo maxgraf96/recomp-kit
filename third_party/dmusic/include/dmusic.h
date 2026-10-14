@@ -365,6 +365,16 @@ DMAPI double DmSegment_getLength(DmSegment const* slf);
 /// \return The number of times the segment repeats or `0` if \p slf is `NULL`.
 DMAPI uint32_t DmSegment_getRepeats(DmSegment const* slf);
 
+/// \brief Set the number of times the segment repeats.
+///
+/// Like DirectMusic's `IDirectMusicSegment::SetRepeats`, this replaces the count the segment file gave. A
+/// segment plays once and then repeats this many times. The count is read when a play of the segment starts,
+/// so set it before playing the segment.
+///
+/// \param slf[in] The segment to set the number of repeats of.
+/// \param repeats The number of times to repeat the segment after it first plays.
+DMAPI void DmSegment_setRepeats(DmSegment* slf, uint32_t repeats);
+
 /// \}
 
 /// \addtogroup DmLoaderGroup

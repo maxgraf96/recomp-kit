@@ -137,3 +137,12 @@ uint32_t DmSegment_getRepeats(DmSegment const* slf) {
 
 	return slf->repeats;
 }
+
+void DmSegment_setRepeats(DmSegment* slf, uint32_t repeats) {
+	if (slf == NULL) {
+		Dm_report(DmLogLevel_ERROR, "DmSegment: NULL passed to `DmSegment_setRepeats`");
+		return;
+	}
+
+	slf->repeats = repeats;
+}
