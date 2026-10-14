@@ -1017,7 +1017,9 @@ static void test_allocator() {
     HeapStats s = heap_stats();
     check(s.free_bytes > 0xc000000, "free bytes %llu after the churn",
           (unsigned long long)s.free_bytes);
-    check(heap_alloc(0x0f000000) == 0, "an allocation larger than the arena fails cleanly");
+    // Larger than the whole guest space, so it fails whatever [game] guest_size
+    // lets the heap grow into.
+    check(heap_alloc(GUEST_SIZE) == 0, "an allocation larger than the arena fails cleanly");
     check(heap_alloc(0xffffffffu) == 0, "a 0xffffffff request is refused, not rounded to zero");
     uint32_t keep = heap_alloc(64);
     memset(g_mem + keep, 0x5a, 64);
