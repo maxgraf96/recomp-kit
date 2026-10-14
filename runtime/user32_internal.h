@@ -90,7 +90,13 @@ bool deliver_sent_messages(X86 *c);
 // Queues a message the host SENDS to a window: delivered to its window
 // procedure (never returned by PeekMessage) when the window's thread next
 // retrieves messages, in order with the input queued around it.
-void notify_message(uint32_t hwnd, uint32_t msg, uint32_t wp, uint32_t lp);
+// `effect` (NOTIFY_*) is a change of window state the message announces,
+// made when the message is delivered rather than when it is queued, so the
+// window procedure sees the state change in order with the messages before it.
+void notify_message(uint32_t hwnd, uint32_t msg, uint32_t wp, uint32_t lp, uint32_t effect = 0);
+constexpr uint32_t NOTIFY_MINIMIZE = 1, NOTIFY_RESTORE = 2;
+// Applies a NOTIFY_* effect to a window now.
+void apply_window_effect(uint32_t hwnd, uint32_t effect);
 // The window manager's view of activation and keyboard focus
 // (GetActiveWindow, GetFocus, GetCapture), kept in user32_vcl.cpp.
 uint32_t active_window();

@@ -280,6 +280,85 @@ static void test_activation() {
     win32_reset_activation_for_test();
 }
 
+// A fullscreen game of the period on Command-Tab: its WM_ACTIVATEAPP(FALSE)
+// handler minimises its own window with CloseWindow, then posts a thread
+// message to its render thread and sleeps until that thread says it has
+// paused. Its WM_ACTIVATE handler asks GetWindowPlacement whether it is
+// minimised and does nothing if so. Coming back has to restore the window
+// (as the taskbar button would) and must not hang on the way out.
+static uint32_t g_reacquired = 0xffffffffu;
+static uint32_t g_render_thread = 0, g_render_paused = 0;
+static bool g_render_quit = false;
+static void render_body(X86 *c) {
+    g_render_thread = guest_current_thread_id();
+    const uint32_t msg = scratch(0x700);
+    while (!g_render_quit) {
+        while (user(c, "PeekMessageA", {msg, 0, 0, 0, 1}))
+            if (rd32(msg + 4) == 0x0402)
+                g_render_paused = 1; // acknowledged: the main thread may go on
+        call(c, "KERNEL32.dll", "Sleep", {1});
+    }
+    set_eax(c, 0);
+}
+static void fullscreen_game(X86 *c, const Seen &s) {
+    if (s.msg == 0x001c && s.wp == 0) {
+        user(c, "CloseWindow", {s.hwnd});
+        g_render_paused = 0;
+        user(c, "PostThreadMessageA", {g_render_thread, 0x0402, 0, 0});
+        for (int i = 0; i < 500 && !g_render_paused; ++i)
+            call(c, "KERNEL32.dll", "Sleep", {1});
+    }
+    if (s.msg == 0x0006 && (s.wp & 0xffff)) {
+        const uint32_t wp = scratch(0x740);
+        gm_zero(wp, 44);
+        wr32(wp, 44);
+        user(c, "GetWindowPlacement", {s.hwnd, wp});
+        g_reacquired = rd32(wp + 8); // the showCmd the handler saw
+    }
+}
+static void test_fullscreen_deactivation() {
+    X86 *c = &g_main;
+    win32_reset_activation_for_test();
+    const uint32_t body = imports_alloc_trampoline("test", "render_body", render_body, 1);
+    const uint32_t th = call(c, "KERNEL32.dll", "CreateThread", {0, 0, body, 0, 0, 0});
+    for (int i = 0; i < 100 && !g_render_thread; ++i)
+        call(c, "KERNEL32.dll", "Sleep", {1});
+    check(g_render_thread != 0, "the render thread runs");
+    host_app_state(true, false);
+    const uint32_t hwnd = make_window(c, true);
+    drain(c);
+    g_on_message = fullscreen_game;
+    g_seen.clear();
+    host_app_state(false, false);
+    drain(c);
+    check(g_render_paused == 1, "the render thread got the thread message and paused");
+    check(user(c, "IsIconic", {hwnd}) == 1, "CloseWindow minimised the window");
+    bool sized = false;
+    for (const Seen &e : g_seen)
+        sized |= e.msg == 0x0005 && e.wp == 1;
+    check(sized, "CloseWindow sent WM_SIZE(SIZE_MINIMIZED)");
+    g_seen.clear();
+    g_reacquired = 0;
+    host_app_state(true, false);
+    drain(c);
+    sequence_is(hwnd, {{0x1c, 1}, {0x86, 1}, {0x06, 0x10001}, {0x05, 0}, {0x07, 0}},
+                "coming back restores the window the game minimised");
+    check(g_reacquired == 2, "the game's WM_ACTIVATE saw it still minimised (showCmd %u)",
+          g_reacquired);
+    check(user(c, "IsIconic", {hwnd}) == 0, "and it is restored afterwards");
+    const uint32_t wp = scratch(0x740);
+    wr32(wp, 44);
+    user(c, "GetWindowPlacement", {hwnd, wp});
+    check(rd32(wp + 8) == 1, "GetWindowPlacement reports SW_SHOWNORMAL");
+    g_on_message = nullptr;
+    g_render_quit = true;
+    check(call(c, "KERNEL32.dll", "WaitForSingleObject", {th, 2000}) == 0,
+          "the render thread ends");
+    user(c, "DestroyWindow", {hwnd});
+    drain(c);
+    win32_reset_activation_for_test();
+}
+
 // SetFocus sends WM_KILLFOCUS and WM_SETFOCUS, and only on a change.
 static void test_set_focus() {
     X86 *c = &g_main;
@@ -636,8 +715,7 @@ static uint32_t make_device(X86 *c, uint32_t di, bool mouse, uint32_t buffer) {
     return dev;
 }
 
-// The game's WM_ACTIVATE handler: re-acquire on activation, as EE's does.
-static uint32_t g_reacquired = 0xffffffffu;
+// The game's WM_ACTIVATE handler: re-acquire on activation.
 static void reacquire_on_activate(X86 *c, const Seen &s) {
     if (s.msg == 0x0006 && (s.wp & 0xffff) != 0)
         g_reacquired = method(c, g_mouse, DID_Acquire, {}) | method(c, g_kb, DID_Acquire, {});
@@ -819,6 +897,7 @@ int main() {
     } tests[] = {
         {"activation and focus", test_activation},
         {"SetFocus", test_set_focus},
+        {"a fullscreen game's Command-Tab", test_fullscreen_deactivation},
         {"keyboard translation", test_translate},
         {"per-thread queues and cross-thread SendMessage", test_threads},
         {"timers and WM_SETCURSOR", test_timer_and_cursor},

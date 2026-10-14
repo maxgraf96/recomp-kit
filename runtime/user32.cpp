@@ -125,6 +125,7 @@ void store_msg(uint32_t p, const Msg &m) {
 // forgotten once delivered.
 struct SentCall {
     uint32_t hwnd = 0, msg = 0, wp = 0, lp = 0;
+    uint32_t effect = 0; // NOTIFY_*: a state change made at delivery
     bool wide = false;
     bool waited = false; // a guest sender is blocked on the result
     bool done = false;
@@ -152,6 +153,8 @@ void deliver_sent(X86 *c, uint32_t id) {
     if (it == sent_calls().end())
         return;
     const SentCall call = it->second;
+    if (call.effect)
+        apply_window_effect(call.hwnd, call.effect);
     const uint32_t result = find_window(call.hwnd) ? deliver_message(c, call.hwnd, call.msg,
                                                                      call.wp, call.lp, call.wide)
                                                    : 0;
@@ -180,7 +183,20 @@ bool deliver_sent_messages(X86 *c) {
     }
 }
 
-void notify_message(uint32_t hwnd, uint32_t msg, uint32_t wp, uint32_t lp) {
+void apply_window_effect(uint32_t hwnd, uint32_t effect) {
+    Window *w = find_window(hwnd);
+    if (!w)
+        return;
+    if (effect == NOTIFY_MINIMIZE) {
+        w->style = (w->style | 0x20000000u) & ~0x01000000u;
+        w->show_cmd = 2; // SW_SHOWMINIMIZED
+    } else if (effect == NOTIFY_RESTORE) {
+        w->style &= ~0x20000000u;
+        w->show_cmd = 1; // SW_SHOWNORMAL
+    }
+}
+
+void notify_message(uint32_t hwnd, uint32_t msg, uint32_t wp, uint32_t lp, uint32_t effect) {
     Window *w = find_window(hwnd);
     if (!w)
         return;
@@ -189,6 +205,7 @@ void notify_message(uint32_t hwnd, uint32_t msg, uint32_t wp, uint32_t lp) {
     call.msg = msg;
     call.wp = wp;
     call.lp = lp;
+    call.effect = effect;
     call.wide = w->unicode;
     Msg m{hwnd, msg, wp, lp, host_millis(), (uint32_t)g_cursor_x, (uint32_t)g_cursor_y};
     m.sent = new_sent_call(call);
@@ -559,6 +576,7 @@ void u_ShowWindow(X86 *c) {
         w->style |= WS_VISIBLE;
     else
         w->style &= ~WS_VISIBLE;
+    const bool was_minimized = (w->style & 0x20000000u) != 0;
     if (cmd == 2 || cmd == 6 || cmd == 7 || cmd == 11) {
         w->style |= 0x20000000u;
         w->style &= ~0x01000000u;
@@ -569,6 +587,16 @@ void u_ShowWindow(X86 *c) {
         w->style &= ~0x21000000u;
     set_eax(c, was ? 1 : 0);
     const uint32_t hwnd = w->hwnd;
+    // Minimising and restoring tell the window its new size, as Windows does.
+    const bool minimized = (w->style & 0x20000000u) != 0;
+    if (minimized != was_minimized) {
+        host_dispatch_to_wndproc(c, hwnd, 0x0005 /* WM_SIZE */, minimized ? 1u : 0u,
+                                 minimized ? 0u
+                                           : ((uint32_t)(uint16_t)w->h << 16) | (uint16_t)w->w);
+        w = find_window(hwnd);
+        if (!w)
+            return;
+    }
     // SW_SHOWNOACTIVATE, SW_SHOWMINNOACTIVE and SW_SHOWNA keep the stacking
     // and the activation; SW_MINIMIZE activates some other window instead.
     const bool activates = cmd != 0 && cmd != 4 && cmd != 6 && cmd != 7 && cmd != 8;
@@ -1899,8 +1927,14 @@ void u_CloseWindow(X86 *c) {
         set_eax(c, 0);
         return;
     }
+    // Minimised, which the window hears as WM_SIZE(SIZE_MINIMIZED). The host
+    // window stays: what restores it is the application being activated
+    // again, as a click on its taskbar button would (user32_activation.cpp).
+    const bool was = (w->style & 0x20000000u) != 0;
     w->show_cmd = 2;
     w->style = (w->style | 0x20000000u) & ~0x01000000u;
+    if (!was)
+        host_dispatch_to_wndproc(c, w->hwnd, 0x0005 /* WM_SIZE */, 1 /* SIZE_MINIMIZED */, 0);
     set_eax(c, 1);
 }
 void u_WaitMessage(X86 *c) {

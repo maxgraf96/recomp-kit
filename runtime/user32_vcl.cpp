@@ -464,7 +464,8 @@ void get_placement(X86 *c) {
         return;
     }
     memset(g_mem + p + 4, 0, 40);
-    wr32(p + 8, w->show_cmd);
+    // showCmd is the state the window is in, not the last command given.
+    wr32(p + 8, (w->style & 0x20000000u) ? 2u : (w->style & 0x01000000u) ? 3u : 1u);
     wr32(p + 28, w->x);
     wr32(p + 32, w->y);
     wr32(p + 36, w->x + w->w);

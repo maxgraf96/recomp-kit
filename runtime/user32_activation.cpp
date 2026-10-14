@@ -69,14 +69,16 @@ bool top_level(const Window *w) {
 // guest call, otherwise sent through that thread's queue.
 struct Sender {
     X86 *c = nullptr;
-    void send(uint32_t hwnd, uint32_t msg, uint32_t wp, uint32_t lp) const {
+    void send(uint32_t hwnd, uint32_t msg, uint32_t wp, uint32_t lp, uint32_t effect = 0) const {
         Window *w = find_window(hwnd);
         if (!w)
             return;
-        if (c && window_thread(hwnd) == guest_current_thread_id())
+        if (c && window_thread(hwnd) == guest_current_thread_id()) {
+            if (effect)
+                apply_window_effect(hwnd, effect);
             host_dispatch_to_wndproc(c, hwnd, msg, wp, lp);
-        else
-            notify_message(hwnd, msg, wp, lp);
+        } else
+            notify_message(hwnd, msg, wp, lp, effect);
     }
 };
 
@@ -142,25 +144,29 @@ void deactivate(const Sender &s, bool minimized) {
         s.send(focus, WM_KILLFOCUS_, 0, 0);
 }
 
+// The window's state changes when the WM_SIZE announcing it is delivered, so
+// a procedure handling the messages before it still sees the old state.
 void size_message(const Sender &s, uint32_t hwnd, bool minimized) {
     Window *w = find_window(hwnd);
     if (!w)
         return;
-    if (minimized) {
-        w->style = (w->style | WS_MINIMIZE_) & ~0x01000000u;
-        w->show_cmd = 2; // SW_SHOWMINIMIZED
-        s.send(hwnd, WM_SIZE_, 1 /* SIZE_MINIMIZED */, 0);
-    } else {
-        w->style &= ~WS_MINIMIZE_;
-        w->show_cmd = 1; // SW_SHOWNORMAL
+    if (minimized)
+        s.send(hwnd, WM_SIZE_, 1 /* SIZE_MINIMIZED */, 0, NOTIFY_MINIMIZE);
+    else
         s.send(hwnd, WM_SIZE_, 0 /* SIZE_RESTORED */,
-               ((uint32_t)(uint16_t)w->h << 16) | (uint16_t)w->w);
-    }
+               ((uint32_t)(uint16_t)w->h << 16) | (uint16_t)w->w, NOTIFY_RESTORE);
 }
 
 // Brings what the guest has been told in line with what the host reported.
+// A window the guest minimised itself (CloseWindow, SW_MINIMIZE) is restored
+// when the application is activated again, which is what clicking its
+// taskbar button does on Windows.
 void reconcile(const Sender &s, bool was_minimized) {
     const uint32_t target = activation_target();
+    Window *tw = find_window(target);
+    const bool guest_minimized = tw && (tw->style & WS_MINIMIZE_) && !was_minimized;
+    if (guest_minimized && g_host_focus && !g_active && !g_minimized)
+        was_minimized = true;
     const bool restore = was_minimized && !g_minimized;
     const bool minimize = !was_minimized && g_minimized;
     if (minimize && target)
