@@ -78,7 +78,6 @@ enum {
     WM_ACTIVATEAPP_ = 0x001c,
     WM_KEYDOWN_ = 0x0100,
     WM_KEYUP_ = 0x0101,
-    WM_CHAR_ = 0x0102,
     WM_SYSKEYDOWN_ = 0x0104,
     WM_SYSKEYUP_ = 0x0105,
     WM_MOUSEMOVE_ = 0x0200,
@@ -97,8 +96,9 @@ SDL_Window *g_window = nullptr;
 void *g_surface = nullptr; // the native surface the presenter draws into
 std::unique_ptr<gpu::Device> g_gpu;
 bool g_close_requested = false; // the user asked to close
-bool g_guest_activated = false; // WM_ACTIVATEAPP(1) has been delivered
+bool g_focus_noted = false;     // the focus has been reported to the runtime at least once
 bool g_focused = false;
+bool g_minimized = false; // minimised or hidden, as last reported
 int g_mode_w = 640, g_mode_h = 480;
 bool g_mode_dirty = false;
 int g_window_mode = 0, g_wanted_window_mode = 0;
@@ -275,6 +275,7 @@ struct PendingInput {
     uint16_t key = 0;
     uint32_t character = 0;
     uint32_t flags = 0;
+    bool minimized = false; // FOCUS: the window is minimised or hidden
 };
 std::vector<PendingInput> g_pending_input;
 // The queue is FILLED on the host thread inside an idle slice, with the
@@ -286,7 +287,7 @@ std::vector<PendingInput> g_pending_input;
 std::mutex g_pending_input_m;
 
 void apply_input(const PendingInput &e);
-void apply_focus(bool focused, uint32_t modifier_flags);
+void apply_focus(bool focused, uint32_t modifier_flags, bool minimized);
 
 // True when the event was held back rather than applied.
 bool queue_or_apply(const PendingInput &e) {
@@ -715,10 +716,16 @@ void handle_key(const SDL_KeyboardEvent &event, bool down) {
     e.kind = PendingInput::KEY;
     e.key = key;
     e.down = down;
-    // The character the key produces with no modifier held, which is what a
-    // WM_CHAR for it carries; keycodes above the Unicode range are not characters.
-    const SDL_Keycode plain = SDL_GetKeyFromScancode(event.scancode, SDL_KMOD_NONE, false);
-    e.character = plain < 0x40000000 && plain >= 0x20 ? (uint32_t)plain : 0u;
+    // The character the key makes on the user's layout with Shift and Caps
+    // Lock applied, which is what TranslateMessage would make of it on
+    // Windows and what the WM_CHAR behind the key message carries. Control
+    // and Option are left out: Windows makes no ordinary character of an
+    // Alt key, and the Control characters come from TranslateMessage.
+    // Keycodes above the Unicode range are not characters.
+    const SDL_Keycode text = SDL_GetKeyFromScancode(
+        event.scancode, SDL_Keymod(event.mod & (SDL_KMOD_SHIFT | SDL_KMOD_CAPS)), false);
+    e.character =
+        text < 0x40000000 && text >= 0x20 && !(event.mod & SDL_KMOD_CTRL) ? (uint32_t)text : 0u;
     e.flags = host_modifier_flags_from_sdl(event.mod);
     queue_or_apply(e);
 }
@@ -727,13 +734,16 @@ void handle_key(const SDL_KeyboardEvent &event, bool down) {
 // the focus changed and records WHEN, relative to the input around it; nothing
 // guest-visible happens here.
 void note_focus(bool focused) {
-    if (focused == g_focused && g_guest_activated)
+    const bool minimized = window_minimized_or_hidden();
+    if (focused == g_focused && minimized == g_minimized && g_focus_noted)
         return;
     g_focused = focused;
-    g_guest_activated = true;
+    g_minimized = minimized;
+    g_focus_noted = true;
     PendingInput e;
     e.kind = PendingInput::FOCUS;
     e.down = focused;
+    e.minimized = minimized;
     // Read now, not at apply time: what is held at the moment focus returns is
     // what the guest missed, and by the time the queue drains it may differ.
     e.flags = focused ? current_modifier_flags() : 0u;
@@ -761,7 +771,7 @@ void apply_input(const PendingInput &e) {
         host_modifier_event(e.flags);
         break;
     case PendingInput::FOCUS:
-        apply_focus(e.down, e.flags);
+        apply_focus(e.down, e.flags, e.minimized);
         break;
     case PendingInput::RELEASE_CAPTURE:
         apply_pointer_capture(false);
@@ -776,14 +786,13 @@ void apply_input(const PendingInput &e) {
 // that reach a mod callback: the modifier resync on gain and the release on
 // loss. Runs under the baton, from the queue, in arrival order with the key
 // and button events around it - which is the point.
-void apply_focus(bool focused, uint32_t modifier_flags) {
-    if (!host_main_window())
-        return; // the guest has no window yet
-    post(WM_ACTIVATEAPP_, focused ? 1 : 0, 0);
-    post(WM_ACTIVATE_, focused ? 1 : 0, 0);
-    post(focused ? WM_SETFOCUS_ : WM_KILLFOCUS_, 0, 0);
-    if (focused)
-        post(WM_PAINT_, 0, 0);
+void apply_focus(bool focused, uint32_t modifier_flags, bool minimized) {
+    // The runtime turns the change into the messages Windows sends -
+    // WM_ACTIVATEAPP, WM_ACTIVATE, the focus messages and WM_SIZE for a
+    // minimise - delivered when the window's thread next reads its queue, and
+    // unacquires foreground DirectInput devices on the way out. A guest that
+    // has no window yet is activated when it shows one.
+    host_app_state(focused, minimized);
     // Whatever is held right now became held while another application had
     // the focus, so no event announced it and the gate's state says it is up.
     if (focused)
@@ -1058,9 +1067,11 @@ void handle_event(const SDL_Event &event) {
         break;
     case SDL_EVENT_WINDOW_MINIMIZED:
         trace_state("window MINIMIZED");
+        note_focus(window_focused());
         break;
     case SDL_EVENT_WINDOW_RESTORED:
         trace_state("window restored");
+        note_focus(window_focused());
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP:

@@ -26,7 +26,6 @@ namespace {
 enum : uint32_t {
     WM_KEYDOWN_ = 0x0100,
     WM_KEYUP_ = 0x0101,
-    WM_CHAR_ = 0x0102,
     WM_SYSKEYDOWN_ = 0x0104,
     WM_SYSKEYUP_ = 0x0105,
 };
@@ -66,20 +65,24 @@ void post(uint32_t msg, uint32_t wparam, uint32_t lparam) {
 // about whether Alt is down now. Releasing Alt itself is the case where they
 // differ: Win32 sends WM_SYSKEYUP, with the context bit clear because Alt is
 // no longer held.
+// The key message goes out together with the character it makes, which the
+// runtime queues as WM_CHAR straight behind it and marks as translated, so
+// the guest's own TranslateMessage does not make a second one. A system key
+// (Alt held) makes no character here, as on Windows.
 void post_key(HostKeyMapping m, bool down, bool sys, bool context, uint32_t character) {
     if (!m.vk)
         return;
     bool was_down = g_guest_key[m.vk];
     g_guest_key[m.vk] = down;
     uint32_t lparam = host_key_lparam(m, down, context, down ? was_down : true);
-    post(down ? (sys ? WM_SYSKEYDOWN_ : WM_KEYDOWN_) : (sys ? WM_SYSKEYUP_ : WM_KEYUP_), m.vk,
-         lparam);
-    // Printable characters, and the four control characters Win32 also
-    // delivers as WM_CHAR.
-    if (down && !sys && character &&
-        ((character >= 0x20 && character < 0x7f) || character == 0x0d || character == 0x1b ||
-         character == 0x09 || character == 0x08))
-        post(WM_CHAR_, character, lparam);
+    // Printable characters (any layout's, not only ASCII), and the four
+    // control characters Win32 also delivers as WM_CHAR.
+    const bool text = down && !sys && character &&
+                      ((character >= 0x20 && character != 0x7f) || character == 0x0d ||
+                       character == 0x1b || character == 0x09 || character == 0x08);
+    host_post_key_text(down ? (sys ? WM_SYSKEYDOWN_ : WM_KEYDOWN_)
+                            : (sys ? WM_SYSKEYUP_ : WM_KEYUP_),
+                       m.vk, lparam, text ? character : 0);
 }
 
 // The modifier bit a scan code contributes: either side counts, which is what
