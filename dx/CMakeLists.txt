@@ -102,6 +102,14 @@ pop_optimize(dmusic_tests 1)
 pop_test_binary(dmusic_tests)
 add_test(NAME dmusic_tests COMMAND dmusic_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(dmusic_tests PROPERTIES LABELS nogame TIMEOUT 120)
+# A game's own segment rendered offline through the same calls, with its
+# level reported: what a game repository checks its music with.
+add_executable(dmusic_render tests/dmusic_render.cpp
+  ${POP_ROOT}/runtime/tests/stub_recomp_call.cpp)
+target_link_libraries(dmusic_render PRIVATE recomp_platform recomp_dx recomp_runtime)
+target_compile_options(dmusic_render PRIVATE ${POP_WARN_HOST})
+pop_optimize(dmusic_render 2)
+pop_test_binary(dmusic_render)
 add_test(NAME dmusic_fixtures_current
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/make_dmusic_fixtures.py
           --check ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/dmusic_fixtures.h)
