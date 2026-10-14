@@ -1369,6 +1369,25 @@ static void test_surface_dc() {
         check(gdi_surface_dc_close(dc) && !gdi_surface_dc_is(dc) && !gdi_surface_dc_close(dc),
               "%s: closed once", f.name);
     }
+    // The older bridge DirectDraw shims already use - gdi_new_dc plus
+    // gdi_bind_surface_dc - stays drawable by the ANSI text calls, for 32-bit
+    // XRGB and 5-6-5 memory.
+    for (uint32_t bpp : {32u, 16u}) {
+        const uint32_t pitch = 64 * bpp / 8;
+        memset(g_mem + bits, 0, pitch * 32);
+        const uint32_t dc = gdi_new_dc();
+        gdi_bind_surface_dc(dc, 64, 32, int(bpp), pitch, bits, nullptr);
+        call_import(&c, "GDI32.dll", "SelectObject", {dc, font});
+        call_import(&c, "GDI32.dll", "SetTextColor", {dc, 0x00ffffffu});
+        call_import(&c, "GDI32.dll", "SetBkMode", {dc, 1});
+        check(call_import(&c, "GDI32.dll", "ExtTextOutA", {dc, 2, 1, 0, 0, s + 0x200, 1, 0}) == 1,
+              "ExtTextOutA on a bound %u-bit surface DC", bpp);
+        const uint32_t at = bits + 9 * pitch + 5 * (bpp / 8);
+        const uint32_t inside = bpp == 32 ? rd32(at) & 0xffffff : rd16(at);
+        check(inside == (bpp == 32 ? 0xffffffu : 0xffffu), "%u-bit: the glyph is drawn (%x)", bpp,
+              inside);
+        gdi_unbind_surface_dc(dc);
+    }
     GdiSurfaceDesc bad;
     bad.width = 64;
     bad.height = 32;
