@@ -716,7 +716,9 @@ class Rebase(object):
     def listing(self, text):
         import bisect
         out = []
-        for line in text.splitlines():
+        lines = text.splitlines()
+        listed = sorted(int(m.group(1), 16) for m in map(LINE_RE.match, lines) if m)
+        for line in lines:
             m = LINE_RE.match(line.rstrip("\n"))
             if not m:
                 out.append(line)
@@ -727,7 +729,12 @@ class Rebase(object):
                 raise TranslateError("listing line %r lies outside the image (%08x-%08x)"
                                      % (line, self.lo, self.hi))
             new = a + self.delta
+            # The instruction's own bytes: its decoded length, and never past
+            # the next listed instruction.
             end = a + self.length(new)
+            k = bisect.bisect_right(listed, a)
+            if k < len(listed):
+                end = min(end, listed[k])
             k = bisect.bisect_left(self.sites, a)
             while k < len(self.sites) and self.sites[k] < end:
                 v = self.values[self.sites[k]]
