@@ -464,6 +464,14 @@ void com_set_qi_hook(ComKind kind, ComQiHook hook);
 // ---------------------------------------------------------------------------
 void com_register_class(const uint8_t clsid[16], const char *name, ComIface primary,
                         ComObj *(*create)());
+// A class whose objects are not kit ComObjs: a host or a harness builds the
+// guest object itself (its own vtable of trampolines) for a component the kit
+// does not model yet. `create` gets the requested IID's guest address and
+// returns an HRESULT, storing the interface pointer at `*out` on success.
+// CoCreateInstance consults these after the kit's own classes; aggregation is
+// still refused. Registering a CLSID again replaces its constructor.
+typedef uint32_t (*ComGuestCreate)(X86 *c, uint32_t riid, uint32_t *out);
+void com_register_guest_class(const uint8_t clsid[16], const char *name, ComGuestCreate create);
 // Registers ole32.dll!CoCreateInstance. Idempotent.
 void com_register_ole32();
 // True when `iface` may be a view of `kind` (com_bind was called for the pair).

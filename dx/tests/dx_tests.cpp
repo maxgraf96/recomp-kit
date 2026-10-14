@@ -3158,6 +3158,39 @@ static void test_cocreate_directsound() {
     CHECK_EQ(call_shim(cocreate, {clsid, 0, 1, iid, ppv}), 0x80040154u); // REGDB_E_CLASSNOTREG
 }
 
+// A class the kit does not model, served by guest-side objects a host builds:
+// CoCreateInstance hands the constructor the requested IID and returns what it
+// made and its HRESULT; a failing constructor leaves the out pointer null and
+// aggregation is refused before it runs.
+static uint32_t g_guest_class_iid = 0, g_guest_class_calls = 0;
+static uint32_t guest_class_create(X86 *, uint32_t riid, uint32_t *out) {
+    ++g_guest_class_calls;
+    g_guest_class_iid = riid;
+    if (rd8(riid) == 0xee)
+        return 0x80004002u; // E_NOINTERFACE
+    *out = 0x00c0ffeeu;
+    return 0;
+}
+static void test_cocreate_guest_class() {
+    static const uint8_t clsid_guest[16] = {0x92, 0x28, 0xac, 0xd2, 0x9b, 0xb3, 0xd1, 0x11,
+                                            0x87, 0x04, 0x00, 0x60, 0x08, 0x93, 0xb1, 0xbd};
+    com_register_guest_class(clsid_guest, "guest-built class", guest_class_create);
+    uint32_t clsid = sc(0x1d40), iid = sc(0x1d50), ppv = sc(0x1d60);
+    memcpy(g_mem + clsid, clsid_guest, 16);
+    memset(g_mem + iid, 0x11, 16);
+    wr32(ppv, 0xffffffffu);
+    uint32_t cocreate = tramp("ole32.dll", "CoCreateInstance");
+    g_guest_class_calls = 0;
+    CHECK_EQ(call_shim(cocreate, {clsid, 0, 3, iid, ppv}), 0u);
+    CHECK_EQ(rd32(ppv), 0x00c0ffeeu);
+    CHECK_EQ(g_guest_class_iid, iid);
+    wr8(iid, 0xee);
+    CHECK_EQ(call_shim(cocreate, {clsid, 0, 3, iid, ppv}), 0x80004002u);
+    CHECK_EQ(rd32(ppv), 0u);
+    CHECK_EQ(call_shim(cocreate, {clsid, 0x1000, 3, iid, ppv}), 0x80040110u); // NOAGGREGATION
+    CHECK_EQ(g_guest_class_calls, 2u);
+}
+
 // ---------------------------------------------------------------------------
 // DirectShow multimedia streaming: the reading side of the API a game uses to
 // pull decoded audio out of a music file and feed its own DirectSound buffer.
@@ -12691,6 +12724,7 @@ int main() {
         {"DC write diff", test_getdc_releasedc},
         {"GDI primary blit", test_gdi_primary_blit},
         {"CoCreateInstance DirectSound", test_cocreate_directsound},
+        {"CoCreateInstance of a guest-built class", test_cocreate_guest_class},
         {"DirectShow audio stream", test_dshow_audio_stream},
         {"DirectShow graph playback", test_dshow_graph_playback},
         {"palette versions", test_palette_versions},

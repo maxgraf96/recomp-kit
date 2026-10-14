@@ -158,6 +158,15 @@ std::vector<ComClass> &classes() {
     static auto *v = new std::vector<ComClass>();
     return *v;
 }
+struct GuestClass {
+    uint8_t clsid[16];
+    const char *name;
+    ComGuestCreate create;
+};
+std::vector<GuestClass> &guest_classes() {
+    static auto *v = new std::vector<GuestClass>();
+    return *v;
+}
 static const uint8_t kIidUnknown[16] = {0, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46};
 
 // CoCreateInstance(rclsid, pUnkOuter, dwClsContext, riid, ppv)
@@ -177,6 +186,21 @@ void CoCreateInstance(X86 *c) {
         if (memcmp(gm_ptr(clsid), k.clsid, 16) == 0)
             cls = &k;
     if (!cls) {
+        for (const GuestClass &g : guest_classes()) {
+            if (memcmp(gm_ptr(clsid), g.clsid, 16) != 0)
+                continue;
+            if (outer) {
+                com_ret(c, CLASS_E_NOAGGREGATION);
+                return;
+            }
+            uint32_t made = 0;
+            uint32_t hr = g.create(c, riid, &made);
+            if ((int32_t)hr >= 0)
+                wr32(out, made);
+            LOGV("com: CoCreateInstance(%s) -> %08x (hr %08x)", g.name, made, hr);
+            com_ret(c, hr);
+            return;
+        }
         log_once("ole32.cocreate", "CoCreateInstance: class %08x-... is not registered here",
                  rd32(clsid));
         com_ret(c, 0x80040154u); // REGDB_E_CLASSNOTREG
@@ -227,6 +251,20 @@ void com_register_class(const uint8_t clsid[16], const char *name, ComIface prim
     k.primary = primary;
     k.create = create;
     classes().push_back(k);
+}
+
+void com_register_guest_class(const uint8_t clsid[16], const char *name, ComGuestCreate create) {
+    for (GuestClass &g : guest_classes())
+        if (memcmp(g.clsid, clsid, 16) == 0) {
+            g.name = name;
+            g.create = create;
+            return;
+        }
+    GuestClass g;
+    memcpy(g.clsid, clsid, 16);
+    g.name = name;
+    g.create = create;
+    guest_classes().push_back(g);
 }
 
 void com_register_ole32() {
