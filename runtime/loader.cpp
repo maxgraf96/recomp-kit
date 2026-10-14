@@ -748,7 +748,9 @@ uint32_t module_acquire(X86 *c, LoaderModule &m, std::vector<const LoaderModule 
     std::vector<LoaderModule *> taken;
     for (const std::string &name : m.imports) {
         LoaderModule *dep = loader_module_named(name.c_str());
-        if (!dep || dep == &m)
+        // A module on the way in (an import cycle) is finished by the outer
+        // acquisition; taking no reference here keeps the counts balanced.
+        if (!dep || dep == &m || std::find(visiting.begin(), visiting.end(), dep) != visiting.end())
             continue;
         if (uint32_t err = module_acquire(c, *dep, visiting, pin)) {
             for (auto it = taken.rbegin(); it != taken.rend(); ++it)
@@ -774,6 +776,9 @@ uint32_t module_acquire(X86 *c, LoaderModule &m, std::vector<const LoaderModule 
     m.load_refs = 1;
     m.pinned = pin;
     m.attach_seq = ++g_attach_seq;
+    m.held.clear();
+    for (const LoaderModule *dep : taken)
+        m.held.push_back(dep->name);
     run_tls_callbacks(c, m, DLL_PROCESS_ATTACH, pin ? 1 : 0);
     if (!dll_main(c, m, DLL_PROCESS_ATTACH, pin ? 1 : 0)) {
         // Windows detaches a DLL whose attach failed, then unloads it.
@@ -784,6 +789,7 @@ uint32_t module_acquire(X86 *c, LoaderModule &m, std::vector<const LoaderModule 
         m.load_refs = 0;
         m.attach_seq = 0;
         m.pinned = false;
+        m.held.clear();
         for (auto it = taken.rbegin(); it != taken.rend(); ++it)
             module_release(c, **it);
         g_error = m.name + ": DllMain refused DLL_PROCESS_ATTACH";
@@ -807,10 +813,12 @@ uint32_t module_release(X86 *c, LoaderModule &m) {
     tls_detach(m);
     m.attached = false;
     m.attach_seq = 0;
-    for (auto it = m.imports.rbegin(); it != m.imports.rend(); ++it)
+    // Exactly the references its attach took, last first.
+    const std::vector<std::string> held = std::move(m.held);
+    m.held.clear();
+    for (auto it = held.rbegin(); it != held.rend(); ++it)
         if (LoaderModule *dep = loader_module_named(it->c_str()))
-            if (dep != &m)
-                module_release(c, *dep);
+            module_release(c, *dep);
     return 0;
 }
 

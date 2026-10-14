@@ -601,6 +601,51 @@ static void test_dynamic_load(X86 *c) {
           "DLL_PROCESS_DETACH in reverse attach order with lpReserved set: %s", events().c_str());
 }
 
+// gamma and delta importing each other: the cycle attaches once, in
+// discovery order, and every reference taken is the one given back.
+static void test_import_cycle(Config &cfg) {
+    section("an import cycle");
+    const std::string saved = g_dir;
+    g_dir += "/cycle";
+    os_mkdir(g_dir.c_str());
+    pe::Image exe;
+    exe.preferred = IMAGE_BASE;
+    exe.dll = false;
+    exe.strip = true;
+    exe.imports = {{"KERNEL32.dll", {"GetTickCount"}}};
+    const std::string main = write_image("main.exe", exe);
+    pe::Image gamma, delta;
+    gamma.exports = {{"GammaFn", 0x1030}};
+    gamma.imports = {{"delta.dll", {"DeltaFn"}}};
+    delta.exports = {{"DeltaFn", 0x1040}};
+    delta.imports = {{"gamma.dll", {"GammaFn"}}};
+    const std::string gp = write_image("gamma.dll", gamma), dp = write_image("delta.dll", delta);
+    const std::string gs = loader_hash_file(gp.c_str()), ds = loader_hash_file(dp.c_str());
+    const std::string ms = loader_hash_file(main.c_str());
+    g_dir = saved;
+    LoaderModuleSpec specs[2] = {{"gamma.dll", gp.c_str(), gs.c_str(), kStubs[2].base, 0x10000},
+                                 {"delta.dll", dp.c_str(), ds.c_str(), kStubs[3].base, 0x10000}};
+    (void)cfg;
+    if (!check(loader_load_config(main.c_str(), ms.c_str(), specs, 2),
+               "two DLLs importing each other load"))
+        return;
+    X86 *c = loader_context();
+    g_events.clear();
+    const uint32_t g = call_import(c, "KERNEL32.dll", "LoadLibraryA", {guest_str("gamma.dll")});
+    const uint32_t d = call_import(c, "KERNEL32.dll", "LoadLibraryA", {guest_str("delta.dll")});
+    check(g == kStubs[2].base && d == kStubs[3].base && events() == "delta.dll:1/0 gamma.dll:1/0",
+          "loading one attaches the other first, each once: %s", events().c_str());
+    g_events.clear();
+    check(call_import(c, "KERNEL32.dll", "FreeLibrary", {g}) == 1 && events() == "gamma.dll:0/0" &&
+              loader_module_named("delta.dll")->attached,
+          "freeing gamma detaches it and leaves delta its own reference: %s", events().c_str());
+    g_events.clear();
+    check(call_import(c, "KERNEL32.dll", "FreeLibrary", {d}) == 1 && events() == "delta.dll:0/0" &&
+              !loader_module_named("gamma.dll")->load_refs &&
+              !loader_module_named("delta.dll")->load_refs,
+          "freeing delta detaches it, and gives back nothing it never took: %s", events().c_str());
+}
+
 static void test_dll_main_image(Config &cfg) {
     section("a DLL as the main image, relocated to the image base");
     pe::Image omega;
@@ -873,6 +918,7 @@ int main(int argc, char **argv) {
     test_static_attach(c);
     test_dynamic_load(c);
     test_heap_growth(cfg);
+    test_import_cycle(cfg);
     test_dll_main_image(cfg);
     test_guards_and_strict(argv[0]);
 

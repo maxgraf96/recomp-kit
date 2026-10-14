@@ -86,6 +86,7 @@ struct LoaderModule {
     bool pinned = false;              // loaded as a static import: never unloaded
     uint32_t attach_seq = 0;          // order of its DLL_PROCESS_ATTACH; 0 = not attached
     std::vector<std::string> imports; // the mapped modules it imports, in import order
+    std::vector<std::string> held;    // those it holds a reference on while attached
     LoaderTls tls = {0, 0, 0, 0, 0, 0xffffffffu};
 };
 uint32_t loader_module_count();
