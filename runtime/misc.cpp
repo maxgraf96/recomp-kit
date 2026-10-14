@@ -1030,6 +1030,14 @@ void i_ImmGetCandidateListA(X86 *c) {
 void i_ImmSetCompositionWindow(X86 *c) {
     set_eax(c, 1);
 }
+// No composition ever exists: 0 bytes, for either encoding.
+void i_ImmGetCompositionStringW(X86 *c) {
+    set_eax(c, 0);
+}
+// Nothing to notify: with no input method, every request fails.
+void i_ImmNotifyIME(X86 *c) {
+    set_eax(c, 0);
+}
 
 // -------------------------------------------------------------------------
 // WSOCK32: enough for startup probing; real networking is a later task.
@@ -2050,6 +2058,8 @@ const ImportShim g_misc_shims[] = {
     {"IMM32.dll", "ImmGetCompositionStringA", 4, i_ImmGetCompositionStringA},
     {"IMM32.dll", "ImmGetCandidateListA", 4, i_ImmGetCandidateListA},
     {"IMM32.dll", "ImmSetCompositionWindow", 2, i_ImmSetCompositionWindow},
+    {"IMM32.dll", "ImmGetCompositionStringW", 4, i_ImmGetCompositionStringW},
+    {"IMM32.dll", "ImmNotifyIME", 4, i_ImmNotifyIME},
     // WSOCK32. D3DPopTB.exe imports these five by ordinal, so each shim is
     // registered under both the ordinal the IAT uses and the documented name
     // (which is what GetProcAddress would ask for).

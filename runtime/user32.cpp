@@ -2085,7 +2085,6 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "AdjustWindowRect", 3, u_AdjustWindowRect},
     {"USER32.dll", "SetCapture", 1, u_SetCapture},
     {"USER32.dll", "ReleaseCapture", 0, u_ReleaseCapture},
-    {"USER32.dll", "GetDesktopWindow", 0, nullptr},
     {"USER32.dll", "MapVirtualKeyA", 2, u_MapVirtualKeyA},
     {"USER32.dll", "MapVirtualKeyExA", 3, u_MapVirtualKeyA},
     {"USER32.dll", "ToUnicode", 6, nullptr},
