@@ -50,6 +50,17 @@ struct Stream {
     std::vector<uint8_t> rbuf; // raw bytes read ahead from fd
     size_t rpos = 0;
     std::vector<uint8_t> pushback; // ungetc, last in first out
+    // The file bytes each pushed-back character stands for: ungetc puts the
+    // character where the last one read was, and a CR LF read as '\n' took two
+    // bytes, so ftell steps back two. The last read's count is kept for that.
+    std::vector<uint8_t> pushback_raw;
+    uint8_t last_raw = 1;
+    int64_t pushback_bytes() const {
+        int64_t n = 0;
+        for (uint8_t r : pushback_raw)
+            n += r;
+        return n;
+    }
 };
 
 struct Table {
@@ -114,12 +125,13 @@ bool console_echo() {
 
 // Discards read-ahead so the descriptor's position is the logical one again.
 void drop_readahead(Stream &s) {
-    size_t unread = (s.rbuf.size() - s.rpos) + s.pushback.size();
+    size_t unread = (s.rbuf.size() - s.rpos) + (size_t)s.pushback_bytes();
     if (unread && s.fd >= 0)
         os_fd_seek(s.fd, -(int64_t)unread, OS_SEEK_CUR);
     s.rbuf.clear();
     s.rpos = 0;
     s.pushback.clear();
+    s.pushback_raw.clear();
 }
 
 bool refill(Stream &s) {
@@ -147,6 +159,8 @@ int stream_getc(uint32_t file, Stream &s) {
     if (!s.pushback.empty()) {
         int ch = s.pushback.back();
         s.pushback.pop_back();
+        s.last_raw = s.pushback_raw.back();
+        s.pushback_raw.pop_back();
         return ch;
     }
     if (!s.readable) {
@@ -178,10 +192,12 @@ int stream_getc(uint32_t file, Stream &s) {
         return -1;
     }
     ++s.rpos;
+    s.last_raw = 1;
     if (s.text && ch == '\r') {
         int next = raw_peek(s);
         if (next == '\n') {
             ++s.rpos;
+            s.last_raw = 2;
             return '\n';
         }
     }
@@ -190,6 +206,8 @@ int stream_getc(uint32_t file, Stream &s) {
 
 void stream_ungetc(uint32_t file, Stream &s, int ch) {
     s.pushback.push_back((uint8_t)ch);
+    s.pushback_raw.push_back(s.last_raw);
+    s.last_raw = 1;
     s.eof = false;
     sync_flags(file, s);
 }
@@ -238,7 +256,7 @@ int64_t stream_tell(Stream &s) {
     int64_t pos = os_fd_seek(s.fd, 0, OS_SEEK_CUR);
     if (pos < 0)
         return -1;
-    return pos - (int64_t)(s.rbuf.size() - s.rpos) - (int64_t)s.pushback.size();
+    return pos - (int64_t)(s.rbuf.size() - s.rpos) - s.pushback_bytes();
 }
 
 int stream_seek(uint32_t file, Stream &s, int64_t off, int whence) {
@@ -256,6 +274,7 @@ int stream_seek(uint32_t file, Stream &s, int64_t off, int whence) {
     s.rbuf.clear();
     s.rpos = 0;
     s.pushback.clear();
+    s.pushback_raw.clear();
     int64_t r = os_fd_seek(s.fd, off, whence == 0 ? OS_SEEK_SET : OS_SEEK_END);
     if (r < 0) {
         set_errno(E_INVAL);

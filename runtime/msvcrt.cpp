@@ -450,7 +450,7 @@ struct Undecorator {
             // A cv-qualified type: "int const".
             p += 3;
             std::string q = cv(*p++);
-            return type() + q;
+            return type() + q + " "; // undname prints "int const ,int"
         }
         return type();
     }

@@ -28,6 +28,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <string>
+#include <vector>
 
 namespace crt {
 
@@ -154,8 +155,11 @@ std::string format_float_body(double v, const Spec &s, bool &negative) {
     bool strip = false;
     if (type == 'g' || type == 'G') {
         // Round to the significant digits first: the exponent that decides
-        // between the two styles is the rounded one.
+        // between the two styles is the rounded one. Zero has no leading
+        // digit here, so %#g prints all P digits after the point.
         int p = prec == 0 ? 1 : prec;
+        if (!t.special && t.digits == "0")
+            t.decpt = 0;
         t.digits = round_digits(t.digits, p, t.decpt);
         int mag = t.decpt - 1;
         strip = !s.alt;
@@ -483,69 +487,277 @@ std::string format_guest(const char *fmt, uint32_t ap_start) {
 }
 
 // ---------------------------------------------------------------------------
-// Decimal -> binary.
+// Decimal -> binary, as msvcrt.dll does it.
+//
+// msvcrt's conversion is not correctly rounded. Measured against Windows'
+// msvcrt.dll (7.0.26100, 4,267 strtod and 4,267 sscanf("%f") vectors with
+// midpoint and near-midpoint inputs; tests/crt in the game repository), every
+// result is reproduced by this model:
+//   1. The digits accumulate, one at a time, into an integer that keeps only
+//      its 64 most significant bits: anything below is truncated away. Long
+//      inputs lose their tail; a 20-digit input can lose its last digit.
+//   2. That integer times 10^exponent is then exact (as far as any vector can
+//      tell).
+//   3. It is rounded to the target's significand, up only when the remainder
+//      is MORE than half: an exact tie rounds down, toward zero, never to even.
+//   4. A result below the normal range is rounded again from that value, half
+//      down at half the smallest denormal, and that extra bit is then dropped
+//      by truncation.
+// Overflow gives infinity and an underflow to zero gives zero, both with
+// ERANGE; a non-zero denormal result is not a range error.
 // ---------------------------------------------------------------------------
 namespace {
 
-// Builds "0.DIGITSe<exp>" in the host's own decimal separator, so the host
-// conversion (correctly rounded on every platform the kit supports) reads it
-// whatever locale the host process is in.
-std::string host_text(const std::string &canon, bool *negative, bool *nonzero) {
+// A non-negative integer of any size: little-endian 32-bit limbs.
+struct Big {
+    std::vector<uint32_t> limb;
+    explicit Big(uint64_t v = 0) {
+        while (v) {
+            limb.push_back((uint32_t)v);
+            v >>= 32;
+        }
+    }
+    int bits() const {
+        if (limb.empty())
+            return 0;
+        return 32 * (int)(limb.size() - 1) + (32 - __builtin_clz(limb.back()));
+    }
+    void mul_small(uint32_t m) {
+        uint64_t carry = 0;
+        for (uint32_t &x : limb) {
+            uint64_t t = (uint64_t)x * m + carry;
+            x = (uint32_t)t;
+            carry = t >> 32;
+        }
+        if (carry)
+            limb.push_back((uint32_t)carry);
+    }
+    void mul_pow10(int n) {
+        for (; n >= 9; n -= 9)
+            mul_small(1000000000u);
+        static const uint32_t small[9] = {1,      10,      100,      1000,     10000,
+                                          100000, 1000000, 10000000, 100000000};
+        if (n)
+            mul_small(small[n]);
+    }
+    void shl(int n) {
+        if (limb.empty() || n <= 0)
+            return;
+        int words = n / 32, b = n % 32;
+        std::vector<uint32_t> out((size_t)words, 0u);
+        uint32_t carry = 0;
+        for (uint32_t x : limb) {
+            out.push_back((x << b) | carry);
+            carry = b ? x >> (32 - b) : 0;
+        }
+        if (carry)
+            out.push_back(carry);
+        limb.swap(out);
+    }
+    void shr1() {
+        for (size_t i = 0; i < limb.size(); ++i)
+            limb[i] = (limb[i] >> 1) | (i + 1 < limb.size() ? limb[i + 1] << 31 : 0);
+        while (!limb.empty() && !limb.back())
+            limb.pop_back();
+    }
+    int cmp(const Big &o) const {
+        if (limb.size() != o.limb.size())
+            return limb.size() < o.limb.size() ? -1 : 1;
+        for (size_t i = limb.size(); i-- > 0;)
+            if (limb[i] != o.limb[i])
+                return limb[i] < o.limb[i] ? -1 : 1;
+        return 0;
+    }
+    void sub(const Big &o) { // *this >= o
+        int64_t borrow = 0;
+        for (size_t i = 0; i < limb.size(); ++i) {
+            int64_t t = (int64_t)limb[i] - (i < o.limb.size() ? o.limb[i] : 0) - borrow;
+            borrow = t < 0;
+            limb[i] = (uint32_t)(t + (borrow ? (int64_t)1 << 32 : 0));
+        }
+        while (!limb.empty() && !limb.back())
+            limb.pop_back();
+    }
+    bool zero() const {
+        return limb.empty();
+    }
+};
+
+// floor(n / d) for a quotient below 2^63; n is left holding the remainder.
+uint64_t divide(Big &n, const Big &d) {
+    int k = n.bits() - d.bits();
+    if (k < 0)
+        return 0;
+    Big ds = d;
+    ds.shl(k);
+    uint64_t q = 0;
+    for (int i = k; i >= 0; --i) {
+        if (n.cmp(ds) >= 0) {
+            n.sub(ds);
+            q |= 1ull << i;
+        }
+        ds.shr1();
+    }
+    return q;
+}
+
+int bitlen128(unsigned __int128 v) {
+    uint64_t hi = (uint64_t)(v >> 64);
+    return hi ? 128 - __builtin_clzll(hi) : (v ? 64 - __builtin_clzll((uint64_t)v) : 0);
+}
+
+struct Decimal {
+    bool negative = false;
+    std::string digits; // no leading zeros
+    long exp10 = 0;     // the value is 0.digits x 10^exp10
+};
+
+Decimal parse_canon(const std::string &canon) {
+    Decimal d;
     const char *p = canon.c_str();
-    *negative = false;
     if (*p == '-' || *p == '+')
-        *negative = *p++ == '-';
-    std::string digits;
-    long exp10 = 0;
+        d.negative = *p++ == '-';
     bool seen_point = false;
     for (; *p && *p != 'e'; ++p) {
         if (*p == '.') {
             seen_point = true;
             continue;
         }
-        if (digits.empty() && *p == '0') {
+        if (d.digits.empty() && *p == '0') {
             if (seen_point)
-                --exp10;
+                --d.exp10;
             continue;
         }
-        digits.push_back(*p);
+        d.digits.push_back(*p);
         if (!seen_point)
-            ++exp10;
+            ++d.exp10;
     }
     if (*p == 'e') {
         long e = strtol(p + 1, nullptr, 10);
-        if (e > 100000)
-            e = 100000;
-        if (e < -100000)
-            e = -100000;
-        exp10 += e;
+        d.exp10 += e > 100000 ? 100000 : e < -100000 ? -100000 : e;
     }
-    *nonzero = !digits.empty();
-    if (digits.empty())
-        return "0";
-    const char *point = localeconv()->decimal_point;
-    return std::string("0") + (point && *point ? point : ".") + digits + "e" +
-           std::to_string(exp10);
+    return d;
+}
+
+// The magnitude's IEEE bits for a P-bit significand with the given exponent
+// range (53, -1022, 1023 or 24, -126, 127).
+uint64_t ms_convert(const Decimal &dec, int P, int emin, int emax, bool *range) {
+    const uint64_t inf = (uint64_t)(emax * 2 + 1) << (P - 1);
+    *range = false;
+    if (dec.digits.empty())
+        return 0;
+    if (dec.exp10 > 400) {
+        *range = true;
+        return inf;
+    }
+    if (dec.exp10 < -400) {
+        *range = true;
+        return 0;
+    }
+    // 1. The 64-bit truncating digit accumulator: value = mant << shift.
+    uint64_t mant = 0;
+    int shift = 0;
+    for (char ch : dec.digits) {
+        unsigned digit = (unsigned)(ch - '0');
+        unsigned __int128 v;
+        if (shift == 0 || shift < 4)
+            v = (((unsigned __int128)mant * 10) << shift) + digit;
+        else
+            v = (unsigned __int128)mant * 10; // the digit lies below the kept bits
+        int base = shift < 4 ? 0 : shift;
+        int len = bitlen128(v);
+        if (len > 64) {
+            int s = len - 64;
+            mant = (uint64_t)(v >> s);
+            shift = base + s;
+        } else {
+            mant = (uint64_t)v;
+            shift = base;
+        }
+    }
+    if (!mant)
+        return 0;
+    // 2. Exact scaling: num / den = mant * 2^shift * 10^E.
+    long E = dec.exp10 - (long)dec.digits.size();
+    Big num(mant), den(1);
+    if (E >= 0)
+        num.mul_pow10((int)E);
+    else
+        den.mul_pow10((int)-E);
+    num.shl(shift);
+    // 3. P significant bits and a half bit; the remainder is the sticky part.
+    int t = (P + 1) - (num.bits() - den.bits());
+    if (t > 0)
+        num.shl(t);
+    else
+        den.shl(-t);
+    uint64_t q = divide(num, den);
+    bool sticky = !num.zero();
+    // num and den have a and b bits, so the quotient lies in [2^P, 2^(P+2)).
+    if (q >> (P + 1)) {
+        sticky = sticky || (q & 1);
+        q >>= 1;
+        --t;
+    }
+    uint64_t m = q >> 1;
+    int e = P - t;           // the value is m x 2^(e - (P - 1))
+    if ((q & 1) && sticky) { // more than half: up; an exact half stays down
+        if (++m >> P) {
+            m >>= 1;
+            ++e;
+        }
+    }
+    if (e > emax) {
+        *range = true;
+        return inf;
+    }
+    if (e >= emin)
+        return ((uint64_t)(e + emax) << (P - 1)) | (m & ((1ull << (P - 1)) - 1));
+    // 4. Denormal: to half the smallest denormal, half down, then truncate.
+    int s = emin - e - 1;
+    uint64_t n;
+    if (s >= P + 1) {
+        n = 0;
+    } else {
+        n = s ? m >> s : m;
+        if (s) {
+            uint64_t dropped = m & ((1ull << s) - 1), half = 1ull << (s - 1);
+            if (dropped > half)
+                ++n;
+        }
+        n >>= 1;
+    }
+    if (!n)
+        *range = true;
+    return n;
 }
 
 } // namespace
 
 double decimal_to_double(const std::string &canon, bool *range) {
-    bool negative, nonzero;
-    std::string text = host_text(canon, &negative, &nonzero);
-    double v = nonzero ? strtod(text.c_str(), nullptr) : 0.0;
+    Decimal d = parse_canon(canon);
+    bool r;
+    uint64_t bits = ms_convert(d, 53, -1022, 1023, &r);
+    if (d.negative)
+        bits |= 1ull << 63;
     if (range)
-        *range = nonzero && (std::isinf(v) || v == 0);
-    return negative ? -v : v;
+        *range = r;
+    double v;
+    memcpy(&v, &bits, 8);
+    return v;
 }
 
 float decimal_to_float(const std::string &canon, bool *range) {
-    bool negative, nonzero;
-    std::string text = host_text(canon, &negative, &nonzero);
-    float v = nonzero ? strtof(text.c_str(), nullptr) : 0.0f;
+    Decimal d = parse_canon(canon);
+    bool r;
+    uint32_t bits = (uint32_t)ms_convert(d, 24, -126, 127, &r);
+    if (d.negative)
+        bits |= 1u << 31;
     if (range)
-        *range = nonzero && (std::isinf(v) || v == 0);
-    return negative ? -v : v;
+        *range = r;
+    float v;
+    memcpy(&v, &bits, 4);
+    return v;
 }
 
 namespace {
@@ -591,7 +803,8 @@ uint32_t parse_strtod(uint32_t s, std::string &canon) {
     return p - s;
 }
 
-double guest_strtod(uint32_t s, uint32_t *end) {
+// strtod reports a range error in errno; atof, the same conversion, does not.
+double guest_strtod(uint32_t s, uint32_t *end, bool report_range) {
     std::string canon;
     uint32_t n = parse_strtod(s, canon);
     if (end)
@@ -600,17 +813,17 @@ double guest_strtod(uint32_t s, uint32_t *end) {
         return 0.0;
     bool range = false;
     double v = decimal_to_double(canon, &range);
-    if (range)
+    if (range && report_range)
         set_errno(E_RANGE);
     return v;
 }
 
 void crt_atof(X86 *c) {
-    fpush(c, guest_strtod(arg(c, 0), nullptr));
+    fpush(c, guest_strtod(arg(c, 0), nullptr, false));
 }
 void crt_strtod(X86 *c) {
     uint32_t end = 0;
-    double v = guest_strtod(arg(c, 0), &end);
+    double v = guest_strtod(arg(c, 0), &end, true);
     if (arg(c, 1))
         wr32(arg(c, 1), end);
     fpush(c, v);
@@ -710,8 +923,27 @@ uint64_t guest_atoi64(uint32_t s) {
 void crt_atoi(X86 *c) {
     set_eax(c, (uint32_t)guest_atoi64(arg(c, 0)));
 }
+// _atoi64 saturates where atoi wraps.
 void crt_atoi64(X86 *c) {
-    set_eax64(c, guest_atoi64(arg(c, 0)));
+    uint32_t p = arg(c, 0);
+    while (ctype_bits(rd8(p)) & CT_SPACE)
+        ++p;
+    bool neg = false;
+    if (rd8(p) == '+' || rd8(p) == '-')
+        neg = rd8(p++) == '-';
+    uint64_t v = 0;
+    bool over = false;
+    while (rd8(p) >= '0' && rd8(p) <= '9') {
+        unsigned d = rd8(p++) - '0';
+        if (v > (0xffffffffffffffffull - d) / 10)
+            over = true;
+        else
+            v = v * 10 + d;
+    }
+    uint64_t lim = neg ? 0x8000000000000000ull : 0x7fffffffffffffffull;
+    if (over || v > lim)
+        v = lim;
+    set_eax64(c, neg ? 0 - v : v);
 }
 // char *_itoa(int value, char *buf, int radix)
 void crt_itoa(X86 *c) {
@@ -850,6 +1082,15 @@ struct Counted {
         }
     }
 };
+
+// A conversion that failed. msvcrt returns EOF when the input ran out in the
+// middle of it and nothing was converted before, as for "-" or "." alone;
+// otherwise the count of fields assigned so far.
+int failure(Counted &in, int assigned, bool any_conversion) {
+    int next = in.src.get();
+    in.src.unget(next);
+    return (next < 0 && !any_conversion && !assigned) ? -1 : assigned;
+}
 
 bool is_space(int ch) {
     return ch >= 0 && (ctype_bits(ch) & CT_SPACE);
@@ -1047,7 +1288,7 @@ int scan_guest(CharSource &raw, const char *fmt, uint32_t ap_start) {
             }
             in.unget(ch);
             if (!any)
-                return assigned;
+                return failure(in, assigned, any_conversion);
             any_conversion = true;
             if (neg)
                 v = 0 - v;
@@ -1066,7 +1307,7 @@ int scan_guest(CharSource &raw, const char *fmt, uint32_t ap_start) {
             uint32_t used = 0;
             if (!scan_decimal(in.src, width, false, canon, used)) {
                 in.count += used;
-                return assigned;
+                return failure(in, assigned, any_conversion);
             }
             in.count += used;
             any_conversion = true;

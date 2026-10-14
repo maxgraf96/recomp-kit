@@ -26,7 +26,7 @@ void msvc_eh_throw_bad_cast(X86 *c);
 namespace crt {
 
 // ---------------------------------------------------------------------------
-// Heap (msvcrt_heap.cpp). malloc's contract: 16-byte aligned, the requested
+// Heap (msvcrt_heap.cpp). malloc's contract: 8 mod 16, as Windows' 32-bit heap, the requested
 // size remembered for _msize, and a free of anything that is not the start of
 // a live block logged and ignored rather than allowed to corrupt the heap.
 // ---------------------------------------------------------------------------

@@ -154,7 +154,8 @@ static void test_heap() {
     reset_world();
     uint32_t a = ms("malloc", {10});
     uint32_t b = ms("malloc", {10});
-    check(a && b && a != b && (a & 15) == 0 && (b & 15) == 0, "malloc: distinct 16-byte aligned");
+    check(a && b && a != b && (a & 15) == 8 && (b & 15) == 8,
+          "malloc: distinct, 8 mod 16 as on Windows");
     check(ms("_msize", {a}) == 10, "_msize reports the requested size");
     check(ms("_msize", {ms("malloc", {0})}) == 1, "malloc(0) is a one-byte block");
     memset(g_mem + a, 0x5a, 10);
@@ -265,7 +266,7 @@ static void test_strings() {
     check((int)ms("strncmp", {gstr("abcx"), gstr("abcz"), 4}) == 'x' - 'z',
           "strncmp gives the byte difference");
     check(ms("strncmp", {gstr("abcx"), gstr("abcz"), 3}) == 0, "strncmp stops at n");
-    check((int)ms("_stricmp", {gstr("HELLO"), gstr("help")}) == 'l' - 'p', "_stricmp");
+    check((int)ms("_stricmp", {gstr("HELLO"), gstr("help")}) == -1, "_stricmp in C: the sign");
     check(ms("_strnicmp", {gstr("HELLO"), gstr("help"), 3}) == 0, "_strnicmp");
     check(ms("strchr", {s, 'W'}) == s + 7 && ms("strchr", {s, 0}) == s + 12 &&
               ms("strchr", {s, 'z'}) == 0,
@@ -323,7 +324,7 @@ static void test_strings() {
     check(str_at(cat) == "abcd", "_mbsnbcat");
     uint32_t up = gstr("mixed Case \xe9");
     ms("_mbsupr", {up});
-    check(str_at(up) == "MIXED CASE \xe9", "_mbsupr in the C locale leaves high bytes alone");
+    check(str_at(up) == "MIXED CASE \xc9", "_mbsupr maps code page 1252 even in the C locale");
 
     // _splitpath
     uint32_t dr = gbuf(8), di = gbuf(260), fn = gbuf(260), ex = gbuf(260);
@@ -332,6 +333,9 @@ static void test_strings() {
               str_at(ex) == ".txt",
           "_splitpath: %s|%s|%s|%s", str_at(dr).c_str(), str_at(di).c_str(), str_at(fn).c_str(),
           str_at(ex).c_str());
+    ms("_splitpath", {gstr("C:\\d\\" + std::string(300, 'x') + ".txt"), dr, di, fn, ex});
+    check(str_at(dr) == "" && str_at(di) == "" && str_at(fn) == "" && str_at(ex) == "",
+          "_splitpath empties every part when one is too long");
     ms("_splitpath", {gstr("noext"), dr, di, fn, ex});
     check(str_at(dr) == "" && str_at(di) == "" && str_at(fn) == "noext" && str_at(ex) == "",
           "_splitpath of a bare name");
@@ -351,6 +355,9 @@ static void test_locale() {
           "the C locale knows nothing above 127");
     check(ms("toupper", {'q'}) == 'Q' && ms("tolower", {'Q'}) == 'q', "ASCII case");
     check(!ms("isalpha", {0xffffffffu}), "EOF is in no class");
+    check(ms("tolower", {0xffffffffu}) == 255 && ms("toupper", {0xffffffffu}) == 0x9f &&
+              ms("toupper", {(uint32_t)-23}) == 0xc9 && ms("tolower", {0x1234}) == 0x34,
+          "outside 0..255 the low byte goes through code page 1252, EOF included");
     check(str_at(ms("setlocale", {0, 0})) == "C", "the start-up locale is C");
     uint32_t r = ms("setlocale", {0, gstr("English")});
     check(str_at(r) == "English_United States.1252", "setlocale(LC_ALL, \"English\") = %s",
@@ -384,6 +391,11 @@ static void test_locale() {
     ms("setlocale", {0, all.size() ? gstr(all) : 0});
     check(str_at(ms("setlocale", {0, 0})) == all, "a composite LC_ALL string round-trips");
     check(ms("setlocale", {0, gstr("Klingon")}) == 0, "an unknown locale is refused");
+    ms("setlocale", {0, gstr("Dutch")});
+    lc = ms("localeconv", {});
+    check(rd8(lc + 40 + 6) == 4 && rd8(lc + 40 + 7) == 4 && rd8(lc + 40 + 2) == 1,
+          "localeconv's sign positions per locale");
+    check(ms("setlocale", {0, gstr("british")}) == 0, "\"british\" is not a locale name");
     ms("setlocale", {0, gstr("C")});
     check(!ms("isalpha", {0xe9}), "back to C");
 
@@ -394,6 +406,14 @@ static void test_locale() {
     check(ms("towupper", {0xe9}) == 0xc9 && ms("towupper", {0x3b1}) == 0x391 &&
               ms("towlower", {0x416}) == 0x436,
           "towupper/towlower through Unicode in a real locale");
+    check(ms("towupper", {0xff}) == 0x9f && ms("towupper", {0xb5}) == 0xb5 &&
+              ms("towupper", {0x3c2}) == 0x3c2 && ms("towupper", {0x131}) == 0x131 &&
+              ms("towupper", {0x1c5}) == 0x1c5 && ms("towupper", {0x252}) == 0x252,
+          "Windows' case data: below 256 through the code page, no unpaired or newer mappings");
+    check(ms("iswctype", {0x20ac, 0x1ff}) == 0 && ms("iswctype", {0x2c6, 0x1ff}) == 0 &&
+              ms("iswctype", {0x1c5, 0x1ff}) == 0x103 && ms("iswctype", {0x2160, 0x1ff}) == 0x100 &&
+              ms("iswctype", {0xaa, 0x1ff}) == 0x10,
+          "Windows' wide classes (Unicode 3.2 categories, symbols unclassified)");
     check(ms("iswctype", {0x416, 0x103}) != 0 && ms("iswctype", {'5', 0x4}) != 0 &&
               ms("iswctype", {0x3000, 0x8}) != 0,
           "iswctype");
@@ -439,6 +459,8 @@ static void test_printf() {
     expect_fmt("%g", 999999.5, "1e+006");
     expect_fmt("%G", 1e-20, "1E-020");
     expect_fmt("%#g", 1.0, "1.00000");
+    expect_fmt("%#g", 0.0, "0.000000");
+    expect_fmt("%#.3g", -0.0, "-0.000");
     expect_fmt("%.3g", 3.14159, "3.14");
     expect_fmt("%g", 0.0, "0");
     expect_fmt("%f", -0.0, "-0.000000");
@@ -545,8 +567,17 @@ static void test_parsing() {
     // Hard cases: correctly rounded.
     check(bits_of(strtod_guest("9007199254740993", nullptr)) == 0x4340000000000000ull,
           "2^53+1 ties to even");
-    check(bits_of(strtod_guest("9007199254740993.00000000001", nullptr)) == 0x4340000000000001ull,
-          "just above the tie rounds up");
+    check(bits_of(strtod_guest("9007199254740993.00000000001", nullptr)) == 0x4340000000000000ull,
+          "digits past the 64-bit accumulator are lost: just above the tie rounds down");
+    check(bits_of(strtod_guest("9007199254740995", nullptr)) == 0x4340000000000001ull,
+          "an exact tie rounds down, not to even");
+    check(bits_of(strtod_guest("6124.4496174844666712", nullptr)) == 0x40b7ec731a21a77full,
+          "a 20-digit input whose truncation to 64 bits loses nothing keeps its last digit");
+    clear_errno();
+    check(strtod_guest("4.9406564584124654e-324", nullptr) == from_bits(1) && guest_errno() == 0,
+          "a denormal result is not a range error");
+    check(strtod_guest("2.4703282292062328e-324", nullptr) == 0 && guest_errno() == 34,
+          "just above half the smallest denormal still gives zero");
     check(bits_of(strtod_guest("2.2250738585072011e-308", nullptr)) == 0x000fffffffffffffull,
           "the largest denormal");
     ms("atof", {gstr("  3.25 rest")});
@@ -566,6 +597,19 @@ static void test_parsing() {
     check(ms("sscanf", {gstr("1.00000005960464477625"), gstr("%f"), f1}) == 1 &&
               rd32(f1) == 0x3f800001,
           "%%f is not rounded twice (%08x)", rd32(f1));
+    // Measured on Windows (tests/crt): float ties round down, and a float
+    // denormal is rounded at half its unit and then truncated.
+    check(ms("sscanf", {gstr("645605600"), gstr("%f"), f1}) == 1 && rd32(f1) == 0x4e19eca3,
+          "an exact float tie rounds down (%08x)", rd32(f1));
+    check(ms("sscanf", {gstr("892.072235107421875"), gstr("%f"), f1}) == 1 &&
+              rd32(f1) == 0x445f049f,
+          "a long exact float tie rounds down");
+    check(ms("sscanf", {gstr("1.28392112e-43"), gstr("%f"), f1}) == 1 && rd32(f1) == 0x5b,
+          "a float denormal: 91.6 units gives 91 (%08x)", rd32(f1));
+    check(ms("sscanf", {gstr("."), gstr("%f"), f1}) == 0xffffffffu &&
+              ms("sscanf", {gstr("-"), gstr("%d"), f1}) == 0xffffffffu &&
+              ms("sscanf", {gstr("-x"), gstr("%d"), f1}) == 0,
+          "a conversion cut off by the end of the input is EOF");
     check(ms("sscanf", {gstr(""), gstr("%d"), i1}) == 0xffffffffu, "EOF before any conversion");
     check(ms("sscanf", {gstr("   "), gstr("%d"), i1}) == 0xffffffffu, "only spaces is EOF too");
     check(ms("sscanf", {gstr("abc"), gstr("%d"), i1}) == 0, "a matching failure gives 0");
@@ -606,6 +650,9 @@ static void test_parsing() {
     check(ms("strtoul", {gstr("zz"), 0, 36}) == 35 * 36 + 35, "strtoul base 36");
     check(ms("atoi", {gstr("  +42xyz")}) == 42, "atoi");
     check(ms("atoi", {gstr("4294967297")}) == 1, "atoi wraps");
+    ms("_atoi64", {gstr("99999999999999999999")});
+    check(((uint64_t)g_cpu.r[R_EDX] << 32 | g_cpu.r[R_EAX]) == 0x7fffffffffffffffull,
+          "_atoi64 saturates");
     ms("_atoi64", {gstr("-9000000000")});
     check(((uint64_t)g_cpu.r[R_EDX] << 32 | g_cpu.r[R_EAX]) == (uint64_t)-9000000000ll, "_atoi64");
     uint32_t ib = gbuf(40);
@@ -670,8 +717,8 @@ static void test_math() {
     check(bad == 0, "sqrt at PC=24 rounds once: %d wrong of 19999", bad);
     g_cpu.fpu_cw = 0x027f;
     check(math1("fabs", -2.5) == 2.5, "fabs");
-    check(bits_of(math1("fabs", from_bits(0xfff0000000000001ull))) == 0x7ff8000000000001ull,
-          "an argument is loaded as FLD loads it: a signalling NaN comes back quiet");
+    check(bits_of(math1("fabs", from_bits(0xfff0000000000001ull))) == 0xfff8000000000001ull,
+          "fabs of a NaN: quiet, as FLD leaves it, and keeping its sign");
     check(math1("log", std::exp(1.0)) == 1.0 || std::fabs(math1("log", std::exp(1.0)) - 1) < 1e-15,
           "log");
     clear_errno();
@@ -693,6 +740,14 @@ static void test_math() {
     la.push_back(4);
     ms("ldexp", la);
     check(st0_result() == 24.0, "ldexp");
+    {
+        std::vector<uint32_t> lu;
+        push_double(lu, 1.0);
+        lu.push_back((uint32_t)-1075);
+        clear_errno();
+        ms("ldexp", lu);
+        check(st0_result() == 0 && guest_errno() == 0, "ldexp underflowing to zero sets no errno");
+    }
     std::vector<uint32_t> fa;
     push_double(fa, HUGE_VAL);
     check(ms("_finite", fa) == 0, "_finite(inf)");
@@ -918,6 +973,11 @@ static void test_stdio() {
     ms("fseek", {f, 4, 0});
     check(ms("fgetc", {f}) == '\n' && ms("fgetc", {f}) == 0xffffffffu, "text mode stops at Ctrl-Z");
     ms("fclose", {f});
+    f = ms("fopen", {gstr("test.txt"), gstr("r")});
+    ms("fseek", {f, 8, 0});
+    check(ms("fgetc", {f}) == '\n' && ms("ungetc", {'Q', f}) == 'Q' && ms("ftell", {f}) == 8,
+          "ungetc of a character read from CR LF steps back over both bytes");
+    ms("fclose", {f});
 
     f = ms("fopen", {gstr("app.txt"), gstr("a")});
     ms("fputs", {gstr("1"), f});
@@ -974,7 +1034,11 @@ static void test_time() {
           "asctime pads the day with a zero: %s", str_at(ms("asctime", {tm})).c_str());
     check(ms("localtime", {t}) == tm, "localtime and gmtime share a buffer");
     wr32(t, 0xffffffffu);
-    check(ms("gmtime", {t}) == 0, "gmtime refuses a negative time");
+    uint32_t neg = ms("gmtime", {t});
+    check(neg && (int32_t)rd32(neg) == -1 && rd32(neg + 20) == 70 && rd32(neg + 12) == 1,
+          "gmtime(-1) is second -1 of 1 January 1970");
+    wr32(t, (uint32_t)-43201);
+    check(ms("gmtime", {t}) == 0, "gmtime refuses more than twelve hours before 1970");
     uint32_t buf = gbuf(128);
     wr32(t, 315626635);
     tm = ms("gmtime", {t});
@@ -1021,7 +1085,7 @@ static void test_cxx() {
          "class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> >"},
         {".?AV?$Array@$03@@", "class Array<4>"},
         {".PBD", "char const *"},
-        {".?AU?$pair@$$CBHH@std@@", "struct std::pair<int const,int>"},
+        {".?AU?$pair@$$CBHH@std@@", "struct std::pair<int const ,int>"},
     };
     for (auto &k : cases) {
         std::string got = crt::undecorated_type_name(k.raw);

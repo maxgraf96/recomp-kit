@@ -66,11 +66,26 @@ void crt_clock(X86 *c) {
     set_eax(c, (uint32_t)((os_monotonic_ns() - g_start_ns) / 1000000));
 }
 
+// gmtime accepts a time up to twelve hours before 1970 and then divides with
+// C's truncation, so gmtime(-1) is "second -1 of 1 January 1970" rather than
+// 31 December 1969; anything earlier, and any negative localtime, is NULL.
 void convert(X86 *c, bool local) {
     uint32_t pt = arg(c, 0);
     int32_t t = pt ? (int32_t)rd32(pt) : -1;
     struct tm out{};
-    if (t < 0 || (local ? os_localtime(t, &out) : os_gmtime(t, &out)) != 0) {
+    if (!pt || t < (local ? 0 : -43200)) {
+        set_errno(E_INVAL);
+        set_eax(c, 0);
+        return;
+    }
+    if (t < 0) {
+        out.tm_hour = t / 3600;
+        out.tm_min = t % 3600 / 60;
+        out.tm_sec = t % 60;
+        out.tm_mday = 1;
+        out.tm_year = 70;
+        out.tm_wday = 4;
+    } else if ((local ? os_localtime(t, &out) : os_gmtime(t, &out)) != 0) {
         set_errno(E_INVAL);
         set_eax(c, 0);
         return;

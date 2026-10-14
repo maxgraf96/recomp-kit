@@ -30,6 +30,10 @@ namespace crt {
 namespace {
 
 constexpr uint32_t CHUNK_SIZE = 0x10000; // 64 KB, and 64 KB aligned
+// Every block starts 8 bytes past a 16-byte boundary, as Windows' 32-bit heap
+// hands them out (its block header is 8 bytes): malloc's addresses are 8 mod
+// 16 there and here.
+constexpr uint32_t BLOCK_SKEW = 8;
 constexpr uint32_t SLAB_MAX = 2048;
 constexpr uint32_t CLASS_SIZES[] = {16,  32,  48,  64,   80,   96,   112,  128,
                                     160, 192, 224, 256,  320,  384,  448,  512,
@@ -105,7 +109,7 @@ bool new_chunk(Heap &h, int cls) {
     auto *ch = new Chunk();
     ch->base = base;
     ch->slot = CLASS_SIZES[cls];
-    ch->nslots = CHUNK_SIZE / ch->slot;
+    ch->nslots = (CHUNK_SIZE - BLOCK_SKEW) / ch->slot;
     ch->cls = cls;
     ch->req.assign(ch->nslots, 0);
     h.chunks.push_back(ch);
@@ -113,7 +117,7 @@ bool new_chunk(Heap &h, int cls) {
     // Pushed highest first, so the lowest address is handed out first.
     auto &fl = h.free_slots[cls];
     for (uint32_t i = ch->nslots; i-- > 0;)
-        fl.push_back(base + i * ch->slot);
+        fl.push_back(base + BLOCK_SKEW + i * ch->slot);
     return true;
 }
 
@@ -124,7 +128,12 @@ Chunk *slab_find(Heap &h, uint32_t addr, uint32_t *slot, bool *exact) {
     Chunk *ch = h.chunk_of[addr >> 16];
     if (!ch)
         return nullptr;
-    uint32_t off = addr - ch->base;
+    if (addr - ch->base < BLOCK_SKEW) {
+        *slot = 0;
+        *exact = false;
+        return ch;
+    }
+    uint32_t off = addr - ch->base - BLOCK_SKEW;
     *slot = off / ch->slot;
     *exact = (off % ch->slot) == 0 && *slot < ch->nslots;
     return ch;
@@ -162,18 +171,18 @@ uint32_t mem_alloc(uint32_t size) {
         uint32_t a = fl.back();
         fl.pop_back();
         Chunk *ch = h.chunk_of[a >> 16];
-        ch->req[(a - ch->base) / ch->slot] = want + 1;
+        ch->req[(a - ch->base - BLOCK_SKEW) / ch->slot] = want + 1;
         ++h.live;
         return a;
     }
     if (want > 0xffffffe0u) // _HEAP_MAXREQ
         return 0;
-    uint32_t a = heap_alloc(want, false);
+    uint32_t a = heap_alloc(want + BLOCK_SKEW, false);
     if (!a)
         return 0;
-    h.large[a] = want;
+    h.large[a + BLOCK_SKEW] = want;
     ++h.live;
-    return a;
+    return a + BLOCK_SKEW;
 }
 
 uint32_t mem_calloc(uint32_t count, uint32_t size) {
@@ -223,7 +232,7 @@ void mem_free(uint32_t addr, const char *who, const X86 *c) {
     auto it = h.large.find(addr);
     if (it != h.large.end()) {
         h.large.erase(it);
-        heap_free(addr);
+        heap_free(addr - BLOCK_SKEW);
         --h.live;
         return;
     }
@@ -275,12 +284,12 @@ uint32_t mem_realloc(uint32_t addr, uint32_t size) {
             return 0;
         }
         if (size > SLAB_MAX) {
-            uint32_t moved = heap_realloc(addr, size);
+            uint32_t moved = heap_realloc(addr - BLOCK_SKEW, size + BLOCK_SKEW);
             if (!moved)
                 return 0;
             h.large.erase(it);
-            h.large[moved] = size;
-            return moved;
+            h.large[moved + BLOCK_SKEW] = size;
+            return moved + BLOCK_SKEW;
         }
         old_size = it->second;
     }

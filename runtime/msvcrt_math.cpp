@@ -63,8 +63,16 @@ void crt_sqrt(X86 *c) {
     fpush(c, x);
     x87_fsqrt(c);
 }
+// fabs of a NaN is a domain error in msvcrt, and returns the (quiet) NaN with
+// its sign: Windows hands back -nan(ind) for -nan(ind).
 void crt_fabs(X86 *c) {
-    fpush(c, std::fabs(stack_double(c, 0)));
+    double x = stack_double(c, 0);
+    if (std::isnan(x)) {
+        set_errno(E_DOM);
+        fpush(c, x);
+        return;
+    }
+    fpush(c, std::fabs(x));
 }
 
 double crt_pow_value(double x, double y) {
@@ -122,7 +130,7 @@ void crt_ldexp(X86 *c) {
     double x = stack_double(c, 0);
     int32_t e = (int32_t)arg(c, 2);
     double r = std::ldexp(x, e);
-    if ((std::isinf(r) && std::isfinite(x)) || (r == 0 && x != 0))
+    if (std::isinf(r) && std::isfinite(x)) // an underflow to zero is not reported
         set_errno(E_RANGE);
     fpush(c, r);
 }
