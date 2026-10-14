@@ -51,6 +51,13 @@ strict = false
 # time). Off, a version 7 request is refused and the game falls back to
 # DirectDrawCreate, which is what a game that only probes for 7 expects.
 ddraw7 = false
+# A DirectInput mouse acquired exclusively gets raw relative motion with the
+# system pointer hidden, as on Windows (RECOMP_RELATIVE_MOUSE=0/1 overrides).
+relative_mouse = false
+# GDI draws Windows faces with the platform's own copies (Arial, Tahoma, ...),
+# measured as Windows measures them, rather than the bundled stand-in
+# (RECOMP_SYSTEM_FONTS=0/1 overrides).
+system_fonts = false
 
 # [imports.argc] "DLL!name" = the stdcall argument count (dwords) or "cdecl" of
 # an import that no shim and no built-in table describes, e.g.

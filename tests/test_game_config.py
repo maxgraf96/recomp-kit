@@ -35,6 +35,20 @@ class LoadTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "cd_tracks"):
                     game_config.load(game)
 
+    def test_runtime_booleans_default_false_and_render(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            stub = (ROOT / "games/stub/game.toml").read_text()
+            stub = stub.replace("relative_mouse = false", "relative_mouse = true")
+            (game / "globals.toml").write_text("")
+            (game / "game.toml").write_text(stub)
+            header = gen_game_config.render_header(game_config.load(game))
+            self.assertIn("#define RECOMP_RELATIVE_MOUSE_DEFAULT 1", header)
+            self.assertIn("#define RECOMP_SYSTEM_FONTS_DEFAULT 0", header)
+            (game / "game.toml").write_text(stub.replace("system_fonts = false", 'system_fonts = "yes"'))
+            with self.assertRaisesRegex(ValueError, "system_fonts must be a boolean"):
+                game_config.load(game)
+
     def test_windows_version_defaults_and_optional_build(self):
         with tempfile.TemporaryDirectory() as tmp:
             game = Path(tmp)

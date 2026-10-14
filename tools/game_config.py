@@ -236,9 +236,15 @@ def load(game_dir):
 def load_runtime(cfg, source):
     """[runtime] strict: the default of the runtime's strict mode (RECOMP_STRICT
     overrides it at run time). [runtime] ddraw7: whether DirectDraw 7 is offered
-    (RECOMP_DDRAW7 overrides it). [imports.argc]: "DLL!name" = the stdcall argument
-    count (dwords) of an import no shim and no built-in table describes, or
-    "cdecl" - what a game knows from its own symbol data."""
+    (RECOMP_DDRAW7 overrides it). relative_mouse: a DirectInput mouse acquired
+    exclusively takes raw relative motion with the system pointer hidden, as on
+    Windows, instead of motion derived from window positions
+    (RECOMP_RELATIVE_MOUSE). system_fonts: GDI draws a Windows face the game
+    did not supply with the platform's own copy of it, measured as Windows
+    measures it, instead of the bundled stand-in (RECOMP_SYSTEM_FONTS).
+    [imports.argc]: "DLL!name" = the stdcall argument count (dwords) of an
+    import no shim and no built-in table describes, or "cdecl" - what a game
+    knows from its own symbol data."""
     runtime = cfg.setdefault("runtime", {})
     strict = runtime.setdefault("strict", False)
     if not isinstance(strict, bool):
@@ -249,6 +255,9 @@ def load_runtime(cfg, source):
     ddraw7 = runtime.setdefault("ddraw7", False)
     if not isinstance(ddraw7, bool):
         raise ValueError("%s: [runtime] ddraw7 must be a boolean" % source)
+    for key in ("relative_mouse", "system_fonts"):
+        if not isinstance(runtime.setdefault(key, False), bool):
+            raise ValueError("%s: [runtime] %s must be a boolean" % (source, key))
     argc = cfg.setdefault("imports", {}).setdefault("argc", {})
     if not isinstance(argc, dict):
         raise ValueError("%s: [imports.argc] must be a table" % source)
