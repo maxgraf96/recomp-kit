@@ -490,19 +490,20 @@ std::string format_guest(const char *fmt, uint32_t ap_start) {
 // Decimal -> binary, as msvcrt.dll does it.
 //
 // msvcrt's conversion is not correctly rounded. Measured against Windows'
-// msvcrt.dll (7.0.26100, 4,267 strtod and 4,267 sscanf("%f") vectors with
-// midpoint and near-midpoint inputs; tests/crt in the game repository), every
-// result is reproduced by this model:
-//   1. The digits accumulate, one at a time, into an integer that keeps only
-//      its 64 most significant bits: anything below is truncated away. Long
-//      inputs lose their tail; a 20-digit input can lose its last digit.
-//   2. That integer times 10^exponent is then exact (as far as any vector can
-//      tell).
-//   3. It is rounded to the target's significand, up only when the remainder
-//      is MORE than half: an exact tie rounds down, toward zero, never to even.
-//   4. A result below the normal range is rounded again from that value, half
-//      down at half the smallest denormal, and that extra bit is then dropped
-//      by truncation.
+// msvcrt.dll (7.0.26100; about 14,000 strtod, atof and sscanf("%f"/"%lf")
+// inputs, 1,200 of them chosen to tell models apart; tests/crt in the game
+// repository, whose decimal_model.py is the reference), every result is
+// reproduced by this model:
+//   1. The significand's digits, without leading or trailing zeros, form an
+//      integer that keeps only its 64 most significant bits; the rest is
+//      truncated away. Long inputs lose their tail.
+//   2. That integer times 10^exponent keeps 80 significant bits, truncated:
+//      one rounding standing for msvcrt's extended-precision arithmetic.
+//   3. A normal result is rounded from those 80 bits to the significand, up
+//      only when the remainder is MORE than half: an exact tie rounds down,
+//      never to even.
+//   4. A denormal result is rounded from the same 80 bits, half down at half
+//      the smallest denormal, and that extra bit is then truncated.
 // Overflow gives infinity and an underflow to zero gives zero, both with
 // ERANGE; a non-zero denormal result is not a range error.
 // ---------------------------------------------------------------------------
@@ -521,6 +522,25 @@ struct Big {
         if (limb.empty())
             return 0;
         return 32 * (int)(limb.size() - 1) + (32 - __builtin_clz(limb.back()));
+    }
+    void add_small(uint32_t a) {
+        uint64_t carry = a;
+        for (size_t i = 0; i < limb.size() && carry; ++i) {
+            uint64_t t = (uint64_t)limb[i] + carry;
+            limb[i] = (uint32_t)t;
+            carry = t >> 32;
+        }
+        if (carry)
+            limb.push_back((uint32_t)carry);
+    }
+    // The top `n` bits (n <= 64) and how far they sit above bit 0.
+    uint64_t top_bits(int n, int *shift) const {
+        int len = bits();
+        *shift = len > n ? len - n : 0;
+        uint64_t v = 0;
+        for (int b = len - 1; b >= *shift; --b)
+            v = (v << 1) | ((limb[(size_t)b / 32] >> (b % 32)) & 1u);
+        return v;
     }
     void mul_small(uint32_t m) {
         uint64_t carry = 0;
@@ -583,27 +603,22 @@ struct Big {
     }
 };
 
-// floor(n / d) for a quotient below 2^63; n is left holding the remainder.
-uint64_t divide(Big &n, const Big &d) {
+// floor(n / d) for a quotient below 2^127; n is left holding the remainder.
+unsigned __int128 divide(Big &n, const Big &d) {
     int k = n.bits() - d.bits();
     if (k < 0)
         return 0;
     Big ds = d;
     ds.shl(k);
-    uint64_t q = 0;
+    unsigned __int128 q = 0;
     for (int i = k; i >= 0; --i) {
         if (n.cmp(ds) >= 0) {
             n.sub(ds);
-            q |= 1ull << i;
+            q |= (unsigned __int128)1 << i;
         }
         ds.shr1();
     }
     return q;
-}
-
-int bitlen128(unsigned __int128 v) {
-    uint64_t hi = (uint64_t)(v >> 64);
-    return hi ? 128 - __builtin_clzll(hi) : (v ? 64 - __builtin_clzll((uint64_t)v) : 0);
 }
 
 struct Decimal {
@@ -644,8 +659,10 @@ Decimal parse_canon(const std::string &canon) {
 uint64_t ms_convert(const Decimal &dec, int P, int emin, int emax, bool *range) {
     const uint64_t inf = (uint64_t)(emax * 2 + 1) << (P - 1);
     *range = false;
-    if (dec.digits.empty())
+    size_t ndigits = dec.digits.find_last_not_of('0');
+    if (dec.digits.empty() || ndigits == std::string::npos)
         return 0;
+    ++ndigits; // trailing zeros take no part
     if (dec.exp10 > 400) {
         *range = true;
         return inf;
@@ -654,77 +671,58 @@ uint64_t ms_convert(const Decimal &dec, int P, int emin, int emax, bool *range) 
         *range = true;
         return 0;
     }
-    // 1. The 64-bit truncating digit accumulator: value = mant << shift.
-    uint64_t mant = 0;
-    int shift = 0;
-    for (char ch : dec.digits) {
-        unsigned digit = (unsigned)(ch - '0');
-        unsigned __int128 v;
-        if (shift == 0 || shift < 4)
-            v = (((unsigned __int128)mant * 10) << shift) + digit;
-        else
-            v = (unsigned __int128)mant * 10; // the digit lies below the kept bits
-        int base = shift < 4 ? 0 : shift;
-        int len = bitlen128(v);
-        if (len > 64) {
-            int s = len - 64;
-            mant = (uint64_t)(v >> s);
-            shift = base + s;
-        } else {
-            mant = (uint64_t)v;
-            shift = base;
-        }
+    // 1. The digits as an integer, truncated to 64 bits: mant << shift.
+    Big all(0);
+    for (size_t i = 0; i < ndigits; ++i) {
+        all.mul_small(10);
+        all.add_small((uint32_t)(dec.digits[i] - '0'));
     }
-    if (!mant)
-        return 0;
-    // 2. Exact scaling: num / den = mant * 2^shift * 10^E.
-    long E = dec.exp10 - (long)dec.digits.size();
+    int shift;
+    uint64_t mant = all.top_bits(64, &shift);
+    // 2. num / den = mant * 2^shift * 10^E, kept to 80 bits by truncation.
+    long E = dec.exp10 - (long)ndigits;
     Big num(mant), den(1);
     if (E >= 0)
         num.mul_pow10((int)E);
     else
         den.mul_pow10((int)-E);
     num.shl(shift);
-    // 3. P significant bits and a half bit; the remainder is the sticky part.
-    int t = (P + 1) - (num.bits() - den.bits());
+    const int KEEP = 80;
+    int t = KEEP - (num.bits() - den.bits());
     if (t > 0)
         num.shl(t);
     else
         den.shl(-t);
-    uint64_t q = divide(num, den);
-    bool sticky = !num.zero();
-    // num and den have a and b bits, so the quotient lies in [2^P, 2^(P+2)).
-    if (q >> (P + 1)) {
-        sticky = sticky || (q & 1);
+    unsigned __int128 q = divide(num, den); // in [2^79, 2^81)
+    if (q >> KEEP) {
         q >>= 1;
         --t;
     }
-    uint64_t m = q >> 1;
-    int e = P - t;           // the value is m x 2^(e - (P - 1))
-    if ((q & 1) && sticky) { // more than half: up; an exact half stays down
-        if (++m >> P) {
+    int e = (KEEP - 1) - t; // the value is q x 2^-t, its leading bit 2^e
+    if (e >= emin) {
+        // 3. Half down to P bits.
+        int drop = KEEP - P;
+        uint64_t m = (uint64_t)(q >> drop);
+        unsigned __int128 rest = q & (((unsigned __int128)1 << drop) - 1);
+        if (rest > ((unsigned __int128)1 << (drop - 1)) && ++m >> P) {
             m >>= 1;
             ++e;
         }
-    }
-    if (e > emax) {
-        *range = true;
-        return inf;
-    }
-    if (e >= emin)
-        return ((uint64_t)(e + emax) << (P - 1)) | (m & ((1ull << (P - 1)) - 1));
-    // 4. Denormal: to half the smallest denormal, half down, then truncate.
-    int s = emin - e - 1;
-    uint64_t n;
-    if (s >= P + 1) {
-        n = 0;
-    } else {
-        n = s ? m >> s : m;
-        if (s) {
-            uint64_t dropped = m & ((1ull << s) - 1), half = 1ull << (s - 1);
-            if (dropped > half)
-                ++n;
+        if (e > emax) {
+            *range = true;
+            return inf;
         }
+        return ((uint64_t)(e + emax) << (P - 1)) | (m & ((1ull << (P - 1)) - 1));
+    }
+    // 4. Denormal: in units of half the smallest denormal, half down, then
+    // the half bit truncated. Those units are 2^(emin - P).
+    int s = t + emin - P;
+    uint64_t n = 0;
+    if (s < 127) {
+        n = (uint64_t)(q >> s);
+        unsigned __int128 rest = q & (((unsigned __int128)1 << s) - 1);
+        if (rest > ((unsigned __int128)1 << (s - 1)))
+            ++n;
         n >>= 1;
     }
     if (!n)

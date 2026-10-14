@@ -573,6 +573,11 @@ static void test_parsing() {
           "an exact tie rounds down, not to even");
     check(bits_of(strtod_guest("6124.4496174844666712", nullptr)) == 0x40b7ec731a21a77full,
           "a 20-digit input whose truncation to 64 bits loses nothing keeps its last digit");
+    // Measured on Windows (tests/crt decimal suite).
+    check(bits_of(strtod_guest("1.45385967068568021430e-231", nullptr)) == 0x10020ea1389c1cd0ull,
+          "trailing zeros take no part in the 64-bit accumulator");
+    check(bits_of(strtod_guest("5.563466145614656417e-309", nullptr)) == 0x00040024d418f7b1ull,
+          "a denormal is rounded straight from the 80-bit product");
     clear_errno();
     check(strtod_guest("4.9406564584124654e-324", nullptr) == from_bits(1) && guest_errno() == 0,
           "a denormal result is not a range error");
@@ -604,6 +609,9 @@ static void test_parsing() {
     check(ms("sscanf", {gstr("892.072235107421875"), gstr("%f"), f1}) == 1 &&
               rd32(f1) == 0x445f049f,
           "a long exact float tie rounds down");
+    check(ms("sscanf", {gstr("3.584194811992347240448e-3"), gstr("%f"), f1}) == 1 &&
+              rd32(f1) == 0x3b6ae4cf,
+          "the product keeps 80 bits: a float 8e-18 ulp past its midpoint rounds down");
     check(ms("sscanf", {gstr("1.28392112e-43"), gstr("%f"), f1}) == 1 && rd32(f1) == 0x5b,
           "a float denormal: 91.6 units gives 91 (%08x)", rd32(f1));
     check(ms("sscanf", {gstr("."), gstr("%f"), f1}) == 0xffffffffu &&
