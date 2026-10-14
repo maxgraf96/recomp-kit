@@ -503,6 +503,37 @@ uint32_t harness_header_selftest(void) {
         CHECK((c.fpu_sw & 1u) == 1u && bits == 0xfff8000000000000ull);
     }
 
+    /* SDM table 4-7: of a quiet and a signalling NaN the quiet one is the
+     * result, whichever operand it is, a memory operand's NaN included (the
+     * hardware recording shows it for FSUBR m64). m32 operands keep their
+     * signalling bit through x87_f32. */
+    {
+        int bad = 0;
+        uint64_t q = 0x7ff8000000001234ull, sn = 0x7ff4000000000000ull;
+        uint32_t sn32 = 0x7fa00000u;
+        double qd, snd;
+        float snf;
+        memcpy(&qd, &q, 8);
+        memcpy(&snd, &sn, 8);
+        memcpy(&snf, &sn32, 4);
+        for (int op = X87_ADD; op <= X87_DIVR; op++)
+            for (int w = 0; w < 2; w++) {
+                double r = h_arith(&c, 0x027f, op, qd, w ? x87_f32(snf) : snd);
+                uint64_t rb;
+                memcpy(&rb, &r, 8);
+                bad += rb != q || !(c.fpu_sw & 1u);
+            }
+        CHECK(bad == 0);
+        /* and two signalling NaNs: the larger significand, quietened
+         * (m32 0x7fb00000 widens to 0x7ff6000000000000, above ST(0)'s) */
+        uint32_t sn32b = 0x7fb00000u;
+        memcpy(&snf, &sn32b, 4);
+        double r = h_arith(&c, 0x027f, X87_ADD, snd, x87_f32(snf));
+        uint64_t rb;
+        memcpy(&rb, &r, 8);
+        CHECK(rb == 0x7ffe000000000000ull);
+    }
+
     /* FPREM quotient bits.  2^56 / 3 is 24019198012642645, whose low three
      * bits are 5: C0 (bit 2) and C1 (bit 0). */
     CHECK(h_fprem(&c, ldexp(1.0, 56), 3.0, 0) == 1.0);

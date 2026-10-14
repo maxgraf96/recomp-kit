@@ -1188,9 +1188,9 @@ static inline void x87_kind_sync_tags(X86 *c) {
 
 /* Arithmetic the fast path does not settle: any mode, any operands. The _st
  * form is ST(pd) = ST(pd) op ST(ps) on physical slots; the _m form is ST(0)
- * = ST(0) op m for a memory operand already widened to double (FLD m32,
- * FILD m16/m32 and FLD m64 widen exactly; a signalling NaN in an m64 operand
- * is quietened here, as x87 loads it). */
+ * = ST(0) op m for a memory operand widened to double exactly, a signalling
+ * NaN still signalling (x87_f32 for m32): the operand's class decides which
+ * NaN the result is, as for a register (SDM table 4-7). */
 void x87_arith_slow_st(X86 *c, int op, unsigned pd, unsigned ps);
 void x87_arith_slow_m(X86 *c, int op, double m);
 void x87_fsqrt_slow(X86 *c);
@@ -1548,6 +1548,22 @@ RECOMP_HOT_INLINE int64_t x87_fist64(X86 *c) {
             return (int64_t)r;
     }
     return x87_fist_slow(c, 64);
+}
+
+/* An m32 arithmetic operand as a double: exact, and a signalling NaN stays
+ * signalling - the host's conversion would quieten it, and x87 picks a QNaN
+ * operand over a signalling one. FLD m32 does quieten, so it converts plainly. */
+RECOMP_HOT_INLINE double x87_f32(float f) {
+    uint32_t b;
+    memcpy(&b, &f, 4);
+    if (RECOMP_UNLIKELY((b & 0x7f800000u) == 0x7f800000u && (b & 0x007fffffu))) {
+        uint64_t d = (uint64_t)(b >> 31) << 63 | UINT64_C(0x7ff0000000000000) |
+                     (uint64_t)(b & 0x007fffffu) << 29;
+        double r;
+        memcpy(&r, &d, 8);
+        return r;
+    }
+    return (double)f;
 }
 
 /* FLD m64: an exact load, except that a signalling NaN is quietened. */

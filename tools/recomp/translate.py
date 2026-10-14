@@ -4118,9 +4118,11 @@ class Translator(object):
 
     def x87_mem_value(self, op):
         """Value of an m32/m64 x87 operand as a C double expression. Both widen
-        exactly; an m80 operand is never an arithmetic or compare source."""
+        exactly, a signalling NaN still signalling (x87_f32): arithmetic picks
+        a quiet register NaN over it. An m80 operand is never an arithmetic or
+        compare source."""
         if op.size == 32:
-            return "(double)rdf32(%s)" % addr_expr(op)
+            return "x87_f32(rdf32(%s))" % addr_expr(op)
         if op.size == 64:
             return "rdf64(%s)" % addr_expr(op)
         raise TranslateError("bad x87 memory size %r" % op.size)

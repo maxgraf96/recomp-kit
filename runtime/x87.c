@@ -315,16 +315,6 @@ static X87Ext nan_result(X86 *c, const X87Ext *v, const int *cls, int n) {
     return best;
 }
 
-/* A memory operand as x87 loads it: a signalling NaN comes in quiet, with IE. */
-static X87Ext load_f64(X86 *c, double m) {
-    X87Ext v = x80_from_f64(m);
-    if (x80_class(v) == XC_SNAN) {
-        v.signif |= SIG_QUIET;
-        c->fpu_sw |= SW_IE;
-    }
-    return v;
-}
-
 /* ------------------------------------------------------- arithmetic --- */
 
 static X87Ext arith_exact(X86 *c, int op, X87Ext a, X87Ext b) {
@@ -460,7 +450,9 @@ void x87_arith_slow_m(X86 *c, int op, double m) {
         ftag_put(c, p, ftag_classify(r));
         return;
     }
-    reg_put(c, p, arith_exact(c, op, reg_get(c, p), load_f64(c, m)));
+    /* the operand as it is: a signalling NaN loses to a quiet ST(0), and
+     * arith_exact raises IE for it */
+    reg_put(c, p, arith_exact(c, op, reg_get(c, p), x80_from_f64(m)));
 }
 
 void x87_fsqrt_slow(X86 *c) {

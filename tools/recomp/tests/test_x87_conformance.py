@@ -43,9 +43,9 @@ def test_transcendentals_are_within_an_ulp(report):
     assert set(report["transc_dist"]) <= {"1"}, dict(report["transc_dist"])
 
 
-#: Operations x87_conformance.py can run that no hardware recording has
-#: covered yet. The edge vectors below cover them against the reference model.
-NOT_RECORDED = {"fsubr_m64", "fcom_m64", "fild_m16", "fild_m32"}
+#: Operations the main subset's recording does not use; the edge vectors'
+#: recording does.
+EDGE_ONLY = {"fsubr_m64", "fcom_m64", "fild_m16", "fild_m32"}
 
 
 def test_every_operation_and_control_word_is_covered(report):
@@ -55,23 +55,23 @@ def test_every_operation_and_control_word_is_covered(report):
         pytest.skip("an external corpus covers what it covers")
     ops = {op for op, _, _ in report["groups"]}
     cws = {cw for _, cw, _ in report["groups"]}
-    assert ops == set(X.OPS) - NOT_RECORDED, (set(X.OPS) - NOT_RECORDED) ^ ops
+    assert ops == set(X.OPS) - EDGE_ONLY, (set(X.OPS) - EDGE_ONLY) ^ ops
     assert cws == {"027f", "007f", "037f", "0e7f", "067f", "0a7f"}
 
 
-def test_edge_vectors_equal_the_reference_model(tmp_path):
-    """The fast path's own edges, which the recorded classes do not reach: a
-    product that a double rounds up to DBL_MIN from below, PC=24 sums whose
-    double result is exactly a 24-bit midpoint, quotients beside DBL_MIN; and
-    the four NOT_RECORDED forms. Their reference is the SDM model that equals
-    the hardware on every recorded vector (data/x87/README.md), until a
-    hardware recording replaces it."""
+def test_edge_vectors_equal_hardware(tmp_path):
+    """The fast path's own edges, which the main subset's classes do not
+    reach: a product that a double rounds up to DBL_MIN from below, PC=24 sums
+    whose double result is exactly a 24-bit midpoint, quotients beside
+    DBL_MIN; the four EDGE_ONLY forms; and every NaN pairing of FSUBR m64 and
+    FCOM m64, where a quiet ST(0) beats a signalling memory operand. Recorded
+    on the same hardware (data/x87/README.md)."""
     if shutil.which("clang") is None:
         pytest.skip("clang is not on PATH")
     if platform.system() == "Windows":
         pytest.skip("the conformance library builds as a POSIX shared library")
     rep, text = X.check(os.path.join(X.DATA, "insn-edge.jsonl"),
-                        os.path.join(X.DATA, "insn-edge-model.jsonl"), work=str(tmp_path))
+                        os.path.join(X.DATA, "insn-edge-hw.jsonl"), work=str(tmp_path))
     t = rep["totals"]
-    assert t["n"] > 1000 and t["diff"] == 0, "\n".join(str(e) for e in rep["examples"][:10])
-    assert NOT_RECORDED <= {op for op, _, _ in rep["groups"]}
+    assert t["n"] > 1700 and t["diff"] == 0, "\n".join(str(e) for e in rep["examples"][:10])
+    assert EDGE_ONLY <= {op for op, _, _ in rep["groups"]}
