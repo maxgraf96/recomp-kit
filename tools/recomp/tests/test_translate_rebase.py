@@ -150,3 +150,22 @@ def test_an_image_without_relocations_cannot_move(tmp_path):
     assert T.Image(str(path)).base == PREFERRED
     with pytest.raises(T.TranslateError):
         T.Image(str(path), BASE)
+
+
+def test_listings_already_exported_at_the_configured_base_are_kept(tmp_path):
+    """A program Ghidra rebased before exporting needs no listing rebase; the
+    image is still relocated."""
+    path = tmp_path / "a.dll"
+    dll(path)
+    image = T.Image(str(path), BASE)
+    saved = T.FUNCS_TSV
+    try:
+        T.FUNCS_TSV = str(tmp_path / "functions.tsv")
+        (tmp_path / "functions.tsv").write_text(
+            "address\tname\tbytes\tstatus\tmessage\n10001000\tfn\t23\tlisting\t\n")
+        assert T.listings_base(image) == PREFERRED
+        (tmp_path / "functions.tsv").write_text(
+            "address\tname\tbytes\tstatus\tmessage\n10101000\tfn\t23\tlisting\t\n")
+        assert T.listings_base(image) == BASE
+    finally:
+        T.FUNCS_TSV = saved

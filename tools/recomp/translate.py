@@ -677,6 +677,19 @@ def listing_name(addr):
     return "%08x" % (addr - REBASE.delta if REBASE is not None else addr)
 
 
+def listings_base(image):
+    """The base the listings were exported at: the image's preferred base (the
+    function DB's and a plain Ghidra import's convention) unless every listed
+    function lies in the image as it is mapped and none in the preferred range -
+    a program Ghidra rebased before exporting."""
+    with open(FUNCS_TSV) as fh:
+        listed = [int(l.split("\t")[0], 16) for l in list(fh)[1:] if l.strip()]
+    preferred = image.preferred_base
+    at_preferred = any(preferred <= a < preferred + image.size for a in listed)
+    at_base = listed and all(image.base <= a < image.end for a in listed)
+    return image.base if at_base and not at_preferred else preferred
+
+
 #: Relative branches: absolute in Ghidra's text, relative in the encoding, so a
 #: rebase moves them although no relocation names them.
 DIRECT_BRANCHES = frozenset(("CALL", "JMP", "LOOP", "LOOPE", "LOOPZ", "LOOPNE", "LOOPNZ",
@@ -4195,7 +4208,10 @@ def main():
     if IMAGE_BASE is not None and image.base != IMAGE_BASE:
         image = Image(BINARY, IMAGE_BASE)  # mapped elsewhere than it prefers: relocate
     global REBASE
-    REBASE = Rebase(image) if image.base != getattr(image, "preferred_base", image.base) else None
+    REBASE = None
+    if image.base != getattr(image, "preferred_base", image.base) and \
+            listings_base(image) == image.preferred_base:
+        REBASE = Rebase(image)
     if REBASE is not None:
         print("  rebase: %s prefers %08x, translated for %08x (%d relocations)"
               % (os.path.basename(BINARY), image.preferred_base, image.base,
