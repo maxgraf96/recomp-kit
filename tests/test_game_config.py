@@ -329,6 +329,19 @@ class LoadTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 gen_game_config.render_header(game_config.load(game))
 
+    def test_runtime_ddraw7_knob(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            (game / "globals.toml").write_text((ROOT / "games/stub/globals.toml").read_text())
+            base = (ROOT / "games/stub/game.toml").read_text()
+            (game / "game.toml").write_text(base)
+            self.assertIn("#define RECOMP_DDRAW7_DEFAULT 0", gen_game_config.render_header(game_config.load(game)))
+            (game / "game.toml").write_text(base.replace("ddraw7 = false", "ddraw7 = true"))
+            self.assertIn("#define RECOMP_DDRAW7_DEFAULT 1", gen_game_config.render_header(game_config.load(game)))
+            (game / "game.toml").write_text(base.replace("ddraw7 = false", 'ddraw7 = "yes"'))
+            with self.assertRaisesRegex(ValueError, "ddraw7"):
+                game_config.load(game)
+
     def test_launcher_keys(self):
         with tempfile.TemporaryDirectory() as tmp:
             game = Path(tmp)

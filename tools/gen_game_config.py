@@ -64,6 +64,7 @@ def render_header(cfg):
     lines.append("#define RECOMP_GUEST_SIZE %s" % c_hex(game["guest_size"]))
     # [runtime] strict and [imports.argc] (runtime/cpu.cpp, runtime/import_argc.cpp).
     lines.append("#define RECOMP_STRICT_DEFAULT %d" % int(cfg.get("runtime", {}).get("strict", False)))
+    lines.append("#define RECOMP_DDRAW7_DEFAULT %d" % int(cfg.get("runtime", {}).get("ddraw7", False)))
     argc = cfg.get("imports", {}).get("argc", {})
     if argc:
         lines.append("#define RECOMP_IMPORT_ARGC {%s}" % ", ".join(

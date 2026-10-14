@@ -235,13 +235,20 @@ def load(game_dir):
 
 def load_runtime(cfg, source):
     """[runtime] strict: the default of the runtime's strict mode (RECOMP_STRICT
-    overrides it at run time). [imports.argc]: "DLL!name" = the stdcall argument
+    overrides it at run time). [runtime] ddraw7: whether DirectDraw 7 is offered
+    (RECOMP_DDRAW7 overrides it). [imports.argc]: "DLL!name" = the stdcall argument
     count (dwords) of an import no shim and no built-in table describes, or
     "cdecl" - what a game knows from its own symbol data."""
     runtime = cfg.setdefault("runtime", {})
     strict = runtime.setdefault("strict", False)
     if not isinstance(strict, bool):
         raise ValueError("%s: [runtime] strict must be a boolean" % source)
+    # [runtime] ddraw7: DirectDrawCreateEx serves IID_IDirectDraw7 (dx/ddraw7.cpp).
+    # Off by default, because a game that probes for version 7 and falls back to
+    # DirectDrawCreate when it is refused takes the version 7 path once offered.
+    ddraw7 = runtime.setdefault("ddraw7", False)
+    if not isinstance(ddraw7, bool):
+        raise ValueError("%s: [runtime] ddraw7 must be a boolean" % source)
     argc = cfg.setdefault("imports", {}).setdefault("argc", {})
     if not isinstance(argc, dict):
         raise ValueError("%s: [imports.argc] must be a table" % source)
