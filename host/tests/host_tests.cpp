@@ -47,6 +47,7 @@
 #include "../../runtime/memory.h"
 #include "../../runtime/imports.h"
 #include "../../dx/dx.h"
+#include "../d3d7_render.h"
 #include "../../dx/d3d11.h"
 #include "../../dx/com.h"
 #include "../../runtime/loader.h"
@@ -5861,6 +5862,52 @@ static void test_gpu2d_pixels(D3DRenderer *) {
     CHECK_EQ(host_gpu2d_available(), 0);
 }
 
+// The Direct3D 7 renderer's present on the real presenter: the renderer
+// attaches to the presenter's device, and a presented surface (or a rectangle
+// of one, as a windowed Blt to the primary shows) becomes the window frame.
+static void test_d3d7_present(D3DRenderer *) {
+    host_present_start_offscreen(4, 4);
+    CHECK_EQ(host_d7_available(), 1);
+    // A whole 4x4 surface, and the middle 4x4 of a 6x6 one: both frames are
+    // the drawable's size, so the composite is the frame itself.
+    const uint32_t small = 0x7101, big = 0x7102;
+    CHECK_EQ(host_d7_create(small, 4, 4, 1, HOST_D7_CREATE_OPAQUE), 1);
+    CHECK_EQ(host_d7_create(big, 6, 6, 1, HOST_D7_CREATE_OPAQUE), 1);
+    const HostD7Rect small_all{0, 0, 4, 4}, small_in{1, 1, 3, 3};
+    const HostD7Rect big_all{0, 0, 6, 6}, big_in{2, 2, 4, 4}, big_shown{1, 1, 5, 5};
+    for (uint32_t id : {small, big})
+        host_d7_fill(id, id == small ? &small_all : &big_all, 0xff204060u);
+    // Alpha is not written to an opaque surface.
+    host_d7_fill(small, &small_in, 0x00c08040u);
+    host_d7_fill(big, &big_in, 0x00c08040u);
+    for (uint32_t id : {small, big}) {
+        const uint64_t before = host_present_unique_completed();
+        host_d7_present(id, id == small ? &small_all : &big_shown, 4, 4);
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (host_present_unique_completed() == before &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::yield();
+        CHECK(host_present_unique_completed() > before);
+        uint8_t rgba[64] = {};
+        CHECK(host_present_test_read_rgba(rgba, sizeof rgba));
+        for (int y = 0; y < 4; ++y)
+            for (int x = 0; x < 4; ++x) {
+                const uint8_t *p = rgba + (y * 4 + x) * 4;
+                const bool in = x >= 1 && x < 3 && y >= 1 && y < 3;
+                CHECK_EQ(p[0], in ? 0xc0 : 0x20);
+                CHECK_EQ(p[1], in ? 0x80 : 0x40);
+                CHECK_EQ(p[2], in ? 0x40 : 0x60);
+            }
+    }
+    uint8_t px[4] = {};
+    CHECK_EQ(host_d7_readback(big, 0, &big_in, px, 8), 1);
+    CHECK_EQ(px[3], 0xff);
+    host_d7_destroy(small);
+    host_d7_destroy(big);
+    host_present_stop();
+    CHECK_EQ(host_d7_available(), 0);
+}
+
 static void test_presenter_menu_ui_and_movie_pixels() {
     for (auto cls : {HOST_SCREEN_MENU, HOST_SCREEN_FMV}) {
         host_present_test_begin();
@@ -9957,6 +10004,7 @@ int main(int argc, char **argv) {
             {"presenter GPU color order", test_presenter_gpu_color_order},
             {"presenter GPU logical coordinates", test_presenter_gpu_logical_coordinates},
             {"Direct3D 11 hardware path", test_gpu2d_pixels},
+            {"Direct3D 7 present", test_d3d7_present},
             {"presenter world and overlay", test_presenter_incremental_world_and_overlay},
             {"wide scene clipping", test_wide_scene_pixels},
             {"native tile borders", test_native_tile_borders},

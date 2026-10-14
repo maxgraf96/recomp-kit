@@ -164,7 +164,9 @@ static std::vector<Shown> cursor_frames(bool soft) {
         py += 5;
         const uint32_t d = rect(px, py, px + 8, py + 8);
         CHECK_EQ(call_method(save, S_Blt, {r8, back, d, d7::DDBLT_DONOTWAIT, 0}), 0);
-        CHECK_EQ(call_method(back, S_Blt, {d, cursor, r8, d7::DDBLT_DONOTWAIT | d7::DDBLT_KEYSRC, 0}), 0);
+        CHECK_EQ(
+            call_method(back, S_Blt, {d, cursor, r8, d7::DDBLT_DONOTWAIT | d7::DDBLT_KEYSRC, 0}),
+            0);
         heap_free(d);
         saved = true;
         call_method(dev, DEV_EndScene, {});
@@ -233,7 +235,9 @@ static void benchmark_frame() {
     std::vector<uint32_t> textures;
     for (int i = 0; i < 8; ++i) {
         const uint32_t t = texture(dd, 128, 128, PF_A8R8G8B8, 8);
-        write(t, [i](int x, int y) { return 0xff000000u | uint32_t(x * 2 + i) << 16 | uint32_t(y * 2) << 8; });
+        write(t, [i](int x, int y) {
+            return 0xff000000u | uint32_t(x * 2 + i) << 16 | uint32_t(y * 2) << 8;
+        });
         textures.push_back(t);
     }
     const uint32_t vb = vertex_buffer(d3d, {}, 2442);
@@ -246,8 +250,9 @@ static void benchmark_frame() {
     const uint32_t r32 = rect(0, 0, 32, 32), at = rect(500, 400, 532, 432);
     std::vector<Vertex> verts(40);
     for (int i = 0; i < 40; ++i)
-        verts[size_t(i)] = {float(i % 8) * 10.0f, float(i / 8) * 10.0f, 5.0f + float(i % 3), 0, 0, -1,
-                            0xffffffffu, float(i % 8) / 8, float(i / 8) / 5};
+        verts[size_t(i)] = {
+            float(i % 8) * 10.0f, float(i / 8) * 10.0f, 5.0f + float(i % 3), 0, 0, -1,
+            0xffffffffu,          float(i % 8) / 8,     float(i / 8) / 5};
     set_transform(dev, d7::TS_PROJECTION, perspective(1.0f, 1.333f, 1, 1000));
     Light l;
     set_light(dev, 0, l);
