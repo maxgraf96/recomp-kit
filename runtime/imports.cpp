@@ -628,8 +628,10 @@ void imports_init() {
     gdi::register_text();
     extern void msimg32_register();
     msimg32_register();
-    // Winsock (winsock.cpp) after the misc table, whose older WSOCK32
-    // stand-ins it replaces.
+    // Winsock and the IP helper API (winsock.cpp, iphlpapi.cpp) after the
+    // misc table, whose older WSOCK32 stand-ins they replace.
     extern void winsock_register();
     winsock_register();
+    extern void iphlpapi_register();
+    iphlpapi_register();
 }
