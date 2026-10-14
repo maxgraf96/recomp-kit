@@ -3107,7 +3107,7 @@ bool thread_prepare_context(GuestThread *t) {
     t->tls = block + TEB_SIZE;
 
     memset(&t->ctx, 0, sizeof t->ctx);
-    t->ctx.fpu_cw = 0x037f;
+    x87_set_cw(&t->ctx, GUEST_INITIAL_FPU_CW); // as Windows starts every thread
     t->ctx.fpu_sw = 0;
     t->ctx.fpu_tag = 0xffff;
     t->ctx.fpu_top = 0;

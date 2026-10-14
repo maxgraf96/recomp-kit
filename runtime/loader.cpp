@@ -771,11 +771,12 @@ bool loader_load(const char *exe_path) {
 void loader_init_context(X86 *c) {
     recomp_seh_reset(c);
     memset(c, 0, sizeof(*c));
-    // Process-start CPU state. The x87 values are the post-FINIT ones the CRT
-    // assumes: control word 0x037f (round to nearest, 64-bit precision, all
-    // exceptions masked), clear status word, all-empty tag word. __ftol,
-    // __ctrlfp and __statfp diverge immediately if these are wrong.
-    c->fpu_cw = 0x037f;
+    // Process-start CPU state. The x87 values are the ones Windows gives a new
+    // thread: control word GUEST_INITIAL_FPU_CW (0x027f: round to nearest,
+    // 53-bit precision, all exceptions masked), clear status word, all-empty
+    // tag word. __ftol, __ctrlfp and __statfp diverge immediately if these are
+    // wrong.
+    x87_set_cw(c, GUEST_INITIAL_FPU_CW);
     c->fpu_sw = 0;
     c->fpu_tag = 0xffff;
     c->fpu_top = 0;

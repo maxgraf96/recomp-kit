@@ -45,6 +45,13 @@ static const uint32_t TRAMP_BASE = GUEST_SHIM_BASE; // import shim trampolines
 static const uint32_t TRAMP_STRIDE = GUEST_SHIM_STRIDE;
 static const uint32_t TRAMP_MAX = 4096; // 4096 * 16 = 64 KB of trampolines
 static const uint32_t TRAMP_LIMIT = TRAMP_BASE + TRAMP_STRIDE * TRAMP_MAX;
+// The x87 control word every 32-bit Windows thread starts with: 53-bit
+// precision, round to nearest, every exception masked. Not FNINIT's 0x037f:
+// the kernel initialises a new thread's FPU state to 0x027f, and measurements
+// of real programs on Windows show it on the main thread and on every thread
+// a program has not changed itself. A CRT that never calls _controlfp
+// therefore computes in double precision, not extended.
+static const uint16_t GUEST_INITIAL_FPU_CW = 0x027f;
 
 // ---------------------------------------------------------------------------
 // Memory accessors. Loads and stores use x86.h's rd8/rd16/rd32 and

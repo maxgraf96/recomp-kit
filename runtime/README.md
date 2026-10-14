@@ -44,7 +44,8 @@ GDI objects from `0x00028004`, registry keys from `0x00030004`, mmio files
 from `0x00040004`, pseudo modules from `0x60000000`.
 
 `loader_init_context` sets the process-start CPU state: x87 control word
-`0x037f`, clear status word, all-empty tag word `0xffff`, `fpu_top` 0, and
+`0x027f` (`GUEST_INITIAL_FPU_CW`, what Windows gives every new thread; guest
+threads start with it too), clear status word, all-empty tag word `0xffff`, `fpu_top` 0, and
 `eflags_misc` `0x202` so `PUSHFD` reads `0x202`. The CRT's `__ftol`,
 `__ctrlfp` and `__statfp` depend on those x87 values.
 
