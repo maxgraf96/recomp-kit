@@ -147,6 +147,17 @@ enum ComIface : uint16_t {
     IF_D3D7, // a view of the DirectDraw 7 object, as IDirect3D2 is of DirectDraw
     IF_D3DDEVICE7,
     IF_D3DVB7,
+    // DirectMusic (dmusic.cpp), the DirectX 6.1/7 interfaces: one synthesizer
+    // port, IKsControl as a second view of it, and the objects a loader makes.
+    IF_DMLOADER,
+    IF_DMCOMPOSER,
+    IF_DMPERFORMANCE,
+    IF_DIRECTMUSIC,
+    IF_DMPORT,
+    IF_KSCONTROL, // a view of the port
+    IF_DMSEGMENT,
+    IF_DMSEGMENTSTATE,
+    IF_DMSTYLE,
     IF_COUNT
 };
 
@@ -218,6 +229,14 @@ enum ComKind : uint16_t {
     K_SURFACE7,       // IDirectDrawSurface7
     K_D3DDEVICE7,     // IDirect3DDevice7
     K_D3DVB7,         // IDirect3DVertexBuffer7
+    K_DMLOADER,       // IDirectMusicLoader: search directories, a cache, file access
+    K_DMCOMPOSER,     // IDirectMusicComposer: transitions
+    K_DMPERFORMANCE,  // IDirectMusicPerformance: one synthesizer engine
+    K_DIRECTMUSIC,    // IDirectMusic: the port factory a performance hands out
+    K_DMPORT,         // IDirectMusicPort, and IKsControl as its view
+    K_DMSEGMENT,      // one loaded segment
+    K_DMSEGMENTSTATE, // one play of a segment
+    K_DMSTYLE,        // a segment's style, as GetParam hands it out
     K_KIND_COUNT      // com.cpp sizes its per-kind tables and interface masks from this
 };
 

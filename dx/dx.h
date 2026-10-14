@@ -46,6 +46,13 @@ void soundlib_register();
 void galaxy_stub_register();
 void bink_register();
 void weanetr_register();
+// DirectMusic (dmusic.cpp): the loader, composer and performance classes and
+// their interfaces, over GothicKit/dmusic. The classes are registered with
+// ole32 only when the game asks for them (game.toml [runtime] dmusic,
+// RECOMP_DMUSIC=0/1); otherwise CoCreateInstance reports them missing.
+void dmusic_register();
+// Stops every performance and drops the objects before com_reset.
+void dmusic_reset();
 // Media Foundation: the session, the topology it is given and the file it
 // plays. Registered last of the media shims because nothing else defers to it.
 void mf_register();
