@@ -936,9 +936,13 @@ DmResult DmPerformance_renderPcm(DmPerformance* slf, void* buf, size_t len, DmRe
 		DmMessage msg;
 		DmMessage_copy(ok_ctrl ? &msg_ctrl : &msg_midi, &msg, -1);
 
+		// The samples before the message is due, counted on the exact clock (time + time_fraction): never past
+		// the message, and an even number for stereo so both channels stay in step.
 		uint32_t time_offset = (uint32_t) max_s32((int) msg.time - (int) slf->time, 0);
-		uint32_t offset_samples =
-		    Dm_getSampleCountForDuration(time_offset, slf->time_signature, slf->tempo, slf->sample_rate, channels);
+		double ticks_per_sample =
+		    Dm_getTicksPerSample(slf->time_signature, slf->tempo, slf->sample_rate) / channels;
+		double due = ((double) time_offset - slf->time_fraction) / ticks_per_sample;
+		uint32_t offset_samples = due > 0 ? (uint32_t) due : 0;
 
 		if (offset_samples > len - sample) {
 			// The next message does not fall into this render call (i.e. it happens after the number of
@@ -949,12 +953,7 @@ DmResult DmPerformance_renderPcm(DmPerformance* slf, void* buf, size_t len, DmRe
 		// Eliminate crackling when rendering stereo audio. This is required so that we always output the
 		// same number of samples for each channel.
 		if ((opts & DmRender_STEREO)) {
-			offset_samples += offset_samples % 2;
-			time_offset = Dm_getDurationForSampleCount(offset_samples,
-			                                           slf->time_signature,
-			                                           slf->tempo,
-			                                           slf->sample_rate,
-			                                           channels);
+			offset_samples -= offset_samples % 2;
 		}
 
 		// Render the samples from now until the message occurs and advance the buffer pointer
@@ -964,7 +963,10 @@ DmResult DmPerformance_renderPcm(DmPerformance* slf, void* buf, size_t len, DmRe
 			buf = (uint8_t*) buf + bytes_rendered;
 		}
 
+		// The message happens at its own time; what the samples rendered fall short of it (less than a frame)
+		// is carried, so the clock stays exactly as long as the audio rendered.
 		sample += offset_samples;
+		slf->time_fraction += offset_samples * ticks_per_sample - (double) time_offset;
 		slf->time += time_offset;
 
 		// Handle the next message
@@ -978,13 +980,21 @@ DmResult DmPerformance_renderPcm(DmPerformance* slf, void* buf, size_t len, DmRe
 		DmMessage_free(&msg);
 	}
 
+	// The rest of the buffer, on the same exact clock. Whole ticks go into the time and the fraction is kept:
+	// rounding each call's duration to whole ticks made the tempo depend on how much a caller renders at once
+	// (at 100 beats a minute in 512-frame calls at 48 kHz, 2.5 % fast).
+	uint32_t remaining_samples = (uint32_t) (len - sample);
+	double advance = remaining_samples *
+	                     (Dm_getTicksPerSample(slf->time_signature, slf->tempo, slf->sample_rate) / channels) +
+	                 slf->time_fraction;
+	double whole = floor(advance);
+	slf->time += (uint32_t) max_s32((int32_t) whole, 0);
+	slf->time_fraction = advance - (whole > 0 ? whole : 0);
+
 	(void) mtx_unlock(&slf->lock);
 
 	// Render the remaining samples
-	uint32_t remaining_samples = (uint32_t) (len - sample);
 	(void) DmSynth_render(&slf->synth, buf, remaining_samples, opts);
-	slf->time +=
-	    Dm_getDurationForSampleCount(remaining_samples, slf->time_signature, slf->tempo, slf->sample_rate, channels);
 
 	return DmResult_SUCCESS;
 }

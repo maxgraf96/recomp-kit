@@ -63,6 +63,7 @@ git format-patch --relative=third_party/dmusic <commit>^!   # one upstream-ready
 | Accept a 16-byte `fmt ` chunk | A wave's format may be a `PCMWAVEFORMAT`, without `cbSize`; reading past it logged an error per wave (hundreds for Apple's GS bank). |
 | A SoundFont 2 bank in place of a DLS collection | A resolver may answer `gm.dls` with an SF2 (a General MIDI bank where the system has no `gm.dls`); TinySoundFont loads it as it is and the synthesizer plays its presets, banks numbered by MSB as SoundFonts number them. |
 | Unnamed DLS instruments and waves | A DLS collection need not name its instruments or waves (`INFO`/`INAM` is optional); building the synthesizer's presets copied the missing name from a null pointer. |
+| Keep the clock sample-exact | Each render call rounded its duration to whole ticks, so the tempo depended on how much a caller rendered at once: 0.7 % fast at 240 beats a minute and 2.5 % at 100 in 512-frame calls at 48 kHz. The fraction is now carried, and a message falls on the last sample boundary before it is due. The time is also advanced under the performance lock. |
 
 To move to a newer upstream commit, replace the files listed under *What is
 here*, re-apply the patches that upstream has not taken, and run

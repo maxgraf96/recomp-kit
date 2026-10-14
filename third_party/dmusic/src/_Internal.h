@@ -552,6 +552,7 @@ struct DmPerformance {
 	uint32_t sample_rate;
 	uint32_t variation;
 	uint32_t time;
+	double time_fraction; // ticks rendered beyond `time`, below one (and a little below zero after a message)
 	uint8_t groove;
 	uint8_t groove_range;
 	int8_t master_groove; // Added to every command's groove level (GUID_PerfMasterGrooveLevel)
