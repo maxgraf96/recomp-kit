@@ -65,6 +65,7 @@ def render_header(cfg):
     # [runtime] strict and [imports.argc] (runtime/cpu.cpp, runtime/import_argc.cpp).
     lines.append("#define RECOMP_STRICT_DEFAULT %d" % int(cfg.get("runtime", {}).get("strict", False)))
     lines.append("#define RECOMP_DDRAW7_DEFAULT %d" % int(cfg.get("runtime", {}).get("ddraw7", False)))
+    lines.append("#define RECOMP_DMUSIC_DEFAULT %d" % int(cfg.get("runtime", {}).get("dmusic", False)))
     # [runtime] relative_mouse (host/sdl/main.cpp) and system_fonts (runtime/gdi32_fontdb.cpp).
     lines.append("#define RECOMP_RELATIVE_MOUSE_DEFAULT %d" %
                  int(cfg.get("runtime", {}).get("relative_mouse", False)))

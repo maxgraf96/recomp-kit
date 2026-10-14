@@ -247,6 +247,7 @@ def load_runtime(cfg, source):
     (RECOMP_RELATIVE_MOUSE). system_fonts: GDI draws a Windows face the game
     did not supply with the platform's own copy of it, measured as Windows
     measures it, instead of the bundled stand-in (RECOMP_SYSTEM_FONTS).
+    dmusic: CoCreateInstance makes DirectMusic's classes (RECOMP_DMUSIC).
     [imports.argc]: "DLL!name" = the stdcall argument count (dwords) of an
     import no shim and no built-in table describes, or "cdecl" - what a game
     knows from its own symbol data."""
@@ -260,7 +261,10 @@ def load_runtime(cfg, source):
     ddraw7 = runtime.setdefault("ddraw7", False)
     if not isinstance(ddraw7, bool):
         raise ValueError("%s: [runtime] ddraw7 must be a boolean" % source)
-    for key in ("relative_mouse", "system_fonts"):
+    # [runtime] dmusic: CoCreateInstance makes DirectMusic's loader, composer and
+    # performance (dx/dmusic.cpp). Off by default: a game that copes without
+    # DirectMusic keeps doing so until it asks.
+    for key in ("relative_mouse", "system_fonts", "dmusic"):
         if not isinstance(runtime.setdefault(key, False), bool):
             raise ValueError("%s: [runtime] %s must be a boolean" % (source, key))
     argc = cfg.setdefault("imports", {}).setdefault("argc", {})

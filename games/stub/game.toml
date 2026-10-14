@@ -58,6 +58,10 @@ relative_mouse = false
 # measured as Windows measures them, rather than the bundled stand-in
 # (RECOMP_SYSTEM_FONTS=0/1 overrides).
 system_fonts = false
+# CoCreateInstance makes DirectMusic's loader, composer and performance, played
+# by GothicKit/dmusic (RECOMP_DMUSIC=0/1 overrides). Off, they are not
+# registered and DirectMusic looks missing, as on a system without it.
+dmusic = false
 
 # [network] offline_hosts = ["old.example.com"]: host names gethostbyname fails
 # at once (WSAHOST_NOT_FOUND) instead of asking a resolver, for a server long
