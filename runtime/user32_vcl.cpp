@@ -4,6 +4,7 @@
 #include "memory.h"
 #include "win32.h"
 #include "gdi_image.h"
+#include "msvcrt_internal.h"
 #include <algorithm>
 #include <set>
 #include <vector>
@@ -34,6 +35,34 @@ void window_created(uint32_t hwnd) {
         active = hwnd;
     if (!focus)
         focus = hwnd;
+}
+uint32_t active_window() {
+    return active;
+}
+void set_active_window(uint32_t hwnd) {
+    active = hwnd;
+}
+uint32_t focus_window() {
+    return focus;
+}
+void set_focus_window(uint32_t hwnd) {
+    focus = hwnd;
+}
+uint32_t capture_window() {
+    return capture;
+}
+uint32_t change_focus(X86 *c, uint32_t hwnd) {
+    const uint32_t old = focus;
+    if (hwnd && !find_window(hwnd))
+        return 0; // ERROR_INVALID_WINDOW_HANDLE: nothing changes
+    if (hwnd == old)
+        return old;
+    focus = hwnd;
+    if (find_window(old))
+        host_dispatch_to_wndproc(c, old, 0x0008 /* WM_KILLFOCUS */, hwnd, 0);
+    if (hwnd && focus == hwnd && find_window(hwnd))
+        host_dispatch_to_wndproc(c, hwnd, 0x0007 /* WM_SETFOCUS */, old, 0);
+    return old;
 }
 std::vector<uint32_t> window_z_order(uint32_t parent) {
     std::vector<uint32_t> result;
@@ -102,8 +131,12 @@ void pump_mouse_input(X86 *c) {
         }
     } guard;
     MouseInput input = mouse_input.front();
-    mouse_input.pop_front();
     uint32_t hwnd = find_window(capture) ? capture : mouse_window(0, input.x, input.y);
+    // Input belongs to the thread of the window it lands on, and only that
+    // thread may run the activation it causes: anyone else leaves it queued.
+    if (find_window(hwnd) && window_thread(hwnd) != guest_current_thread_id())
+        return;
+    mouse_input.pop_front();
     auto *w = find_window(hwnd);
     if (!w)
         return;
@@ -132,13 +165,25 @@ void pump_mouse_input(X86 *c) {
     }
     if (!find_window(hwnd))
         return; // activation may destroy its recipient
+    // Windows asks the window under the pointer which cursor to show before
+    // every mouse message it gets: WM_SETCURSOR, hit-test code in the low word
+    // and the mouse message in the high one. A game that draws its own cursor
+    // answers it with SetCursor(NULL); DefWindowProc shows the class cursor.
+    // Under capture the system does not ask (the capturing window keeps it).
+    if (!find_window(capture)) {
+        host_dispatch_to_wndproc(c, hwnd, 0x0020 /* WM_SETCURSOR */, hwnd,
+                                 (input.message << 16) | 1 /* HTCLIENT */);
+        if (!find_window(hwnd))
+            return;
+    }
     int32_t x, y;
     client_origin(hwnd, &x, &y);
     uint32_t lp = (uint32_t(uint16_t(int64_t(input.y) - y)) << 16) | uint16_t(int64_t(input.x) - x);
     LOGV("host mouse %04x screen=(%d,%d) -> hwnd=%08x client=(%d,%d) mk=%x", input.message, input.x,
          input.y, hwnd, int16_t(lp), int16_t(lp >> 16), input.mk);
-    queue().push_back(
-        {hwnd, input.message, input.mk, lp, input.time, uint32_t(input.x), uint32_t(input.y)});
+    queue_for_thread(window_thread(hwnd))
+        .push_back(
+            {hwnd, input.message, input.mk, lp, input.time, uint32_t(input.x), uint32_t(input.y)});
 }
 // Queue each expired timer at most once. Signed subtraction handles DWORD
 // clock wrap; no host thread mutates guest memory or invokes a callback here.
@@ -149,7 +194,7 @@ void pump_window_timers() {
         if (t.thread != guest_current_thread_id() || int32_t(now - t.due) < 0)
             continue;
         bool queued = false;
-        for (const auto &m : queue())
+        for (const auto &m : queue_for_thread(t.hwnd ? window_thread(t.hwnd) : t.thread))
             if (m.message == 0x113 && m.hwnd == t.hwnd && m.wparam == t.id) {
                 queued = true;
                 break;
@@ -183,17 +228,34 @@ bool destroy_window(X86 *c, uint32_t hwnd) {
             i = timers.erase(i);
         else
             ++i;
-    auto &q = queue();
-    q.erase(std::remove_if(q.begin(), q.end(), [&](const Msg &m) { return m.hwnd == hwnd; }),
-            q.end());
+    // Its posted messages die with it, on whichever thread they wait. Sent
+    // ones stay: delivering them finds no window, which is what answers a
+    // sender still waiting for one.
+    for (auto &kv : thread_queues()) {
+        auto &q = kv.second;
+        q.erase(std::remove_if(q.begin(), q.end(),
+                               [&](const Msg &m) { return m.hwnd == hwnd && !m.sent; }),
+                q.end());
+    }
+    activation_window_destroyed(hwnd);
     if (active == hwnd)
         active = 0;
     if (focus == hwnd)
         focus = 0;
     if (capture == hwnd)
         capture = 0;
-    if (g_main_hwnd == hwnd)
-        g_main_hwnd = windows().empty() ? 0 : windows().begin()->first;
+    if (g_main_hwnd == hwnd) {
+        // The next main window is a top-level one: a child or a plugin's
+        // helper window going away must not hand the role to a control.
+        g_main_hwnd = 0;
+        for (const auto &kv : windows())
+            if (!kv.second.parent) {
+                g_main_hwnd = kv.first;
+                break;
+            }
+        if (!g_main_hwnd && !windows().empty())
+            g_main_hwnd = windows().begin()->first;
+    }
     destroying.erase(hwnd);
     return true;
 }
@@ -424,8 +486,11 @@ void set_placement(X86 *c) {
     guest_call(c, imports_resolve("USER32.dll", "ShowWindow"), hwnd, cmd);
     set_eax(c, 1);
 }
+// An application in the background has no active window, and the
+// foreground window is someone else's. Without a host reporting the focus the
+// application counts as always in the foreground.
 void get_active(X86 *c) {
-    set_eax(c, active);
+    set_eax(c, win32_app_active() ? active : 0);
 }
 void set_active(X86 *c) {
     uint32_t hwnd = arg(c, 0), old = active;
@@ -444,10 +509,7 @@ void get_focus(X86 *c) {
     set_eax(c, focus);
 }
 void set_focus(X86 *c) {
-    uint32_t hwnd = arg(c, 0), old = focus;
-    if (!hwnd || find_window(hwnd))
-        focus = hwnd;
-    set_eax(c, old);
+    set_eax(c, change_focus(c, arg(c, 0)));
 }
 void get_capture(X86 *c) {
     set_eax(c, capture);
@@ -653,6 +715,9 @@ void wait_message(X86 *c) {
     for (;;) {
         pump_once(c);
         pump_mouse_input(c);
+        // A sent message is delivered here and does not end the wait, as in
+        // Windows: only something to retrieve does.
+        deliver_sent_messages(c);
         if (!queue().empty() || paint_pending() || !g_message_waiter)
             break;
         if (!host_guest_yield())
@@ -686,6 +751,7 @@ void message_wait(X86 *c, bool ex) {
     };
     uint32_t result = 0;
     pump_window_timers();
+    deliver_sent_messages(c);
     if (signalled(&result)) {
         set_eax(c, result);
         return;
@@ -1502,14 +1568,56 @@ void user32::forget_window_services(uint32_t hwnd) {
 // is the invisible application window, which does nothing with a keystroke.
 // Falls back to the active window and then to the main one, so a guest that
 // never called SetFocus is no worse off than before.
-void host_post_key_message(uint32_t msg, uint32_t wparam, uint32_t lparam) {
+namespace {
+uint32_t key_window() {
     uint32_t hwnd = user32::focus;
     if (!hwnd || !user32::find_window(hwnd))
         hwnd = user32::active;
     if (!hwnd || !user32::find_window(hwnd))
         hwnd = host_main_window();
-    if (hwnd)
+    return hwnd;
+}
+} // namespace
+void host_post_key_message(uint32_t msg, uint32_t wparam, uint32_t lparam) {
+    if (uint32_t hwnd = key_window())
         host_post_message(hwnd, msg, wparam, lparam);
+}
+
+// A key-down and the character the platform's layout made of it. The key
+// message is marked as translated, so the guest's TranslateMessage finds the
+// character already queued behind it rather than inventing a second one from
+// a US layout. The character is delivered in the window's encoding: UTF-16
+// for a Unicode window, the ANSI code page (1252) byte for an ANSI one, and
+// nothing at all for a character code page 1252 cannot spell.
+void host_post_key_text(uint32_t msg, uint32_t wparam, uint32_t lparam, uint32_t character) {
+    const uint32_t hwnd = key_window();
+    if (!hwnd)
+        return;
+    using namespace user32;
+    Msg m{hwnd, msg, wparam, lparam, host_millis(), (uint32_t)g_cursor_x, (uint32_t)g_cursor_y};
+    const bool down = msg == 0x0100 || msg == 0x0104;
+    uint32_t ch = character;
+    if (down && ch) {
+        Window *w = find_window(hwnd);
+        if (w && !w->unicode) {
+            const int b = ch < 0x10000 ? crt::unicode_to_cp1252(ch) : -1;
+            ch = b < 0 ? 0 : uint32_t(b);
+        } else if (ch > 0xffff)
+            ch = 0; // a surrogate pair would need two messages; nothing here needs one
+    }
+    if (down && ch)
+        m.flags |= MSGF_TRANSLATED;
+    queue_for_thread(window_thread(hwnd)).push_back(m);
+    if (down && ch) {
+        Msg text{hwnd, msg == 0x0100 ? 0x0102u : 0x0106u, ch, lparam, m.time, m.ptx, m.pty};
+        queue_for_thread(window_thread(hwnd)).push_back(text);
+    }
+}
+
+// Weak, like the runtime's other hooks into dx/: a binary without DirectInput
+// has no exclusive mouse. dinput.cpp supplies the real answer.
+extern "C" __attribute__((weak)) bool dinput_mouse_exclusive(void) {
+    return false;
 }
 
 void host_post_mouse_message(uint32_t msg, uint32_t mk, int32_t x, int32_t y) {
@@ -1518,6 +1626,11 @@ void host_post_mouse_message(uint32_t msg, uint32_t mk, int32_t x, int32_t y) {
     if (user32::g_key_state[0x11] & 0x80)
         mk |= 8;
     if (msg < 0x200 || msg > 0x209)
+        return;
+    // A mouse a game has acquired exclusively through DirectInput is the
+    // game's alone: Windows generates no mouse messages for it, and the
+    // system cursor stays where it was.
+    if (dinput_mouse_exclusive())
         return;
     // A mouse move is a position, not an event. Windows does not queue one per
     // motion the hardware reports: it keeps the latest and synthesises the

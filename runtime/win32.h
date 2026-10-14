@@ -358,6 +358,13 @@ void host_post_client_mouse_message(uint32_t hwnd, uint32_t msg, uint32_t mk, in
 // Windows sends one. Not the same as host_main_window: in a VCL application
 // that is the invisible application window.
 void host_post_key_message(uint32_t msg, uint32_t wparam, uint32_t lparam);
+// The same, for a key-down the host has already translated: `character` is
+// the Unicode character the platform's keyboard layout produced with the
+// modifiers held (0 for none). It is queued as WM_CHAR (WM_SYSCHAR after a
+// WM_SYSKEYDOWN) straight behind the key message, in the window's encoding,
+// and the guest's TranslateMessage then recognises the key as translated
+// rather than making a second character from a US layout.
+void host_post_key_text(uint32_t msg, uint32_t wparam, uint32_t lparam, uint32_t character);
 uint32_t host_main_window();              // first created top-level HWND, or 0
 uint32_t host_window_proc(uint32_t hwnd); // guest WNDPROC address, or 0
 bool host_window_rect(uint32_t hwnd, int32_t *x, int32_t *y, int32_t *w, int32_t *h);
@@ -471,8 +478,34 @@ bool host_window_visible(uint32_t hwnd);
 // ---------------------------------------------------------------------------
 X86 *guest_current_context();
 uint32_t guest_current_thread_id();
+// Whether `id` (a GetCurrentThreadId value) names a guest thread that exists
+// and has not finished. The main thread is 1 and is alive from the start.
+bool guest_thread_alive(uint32_t id);
 bool host_cursor_visible();
 bool host_cursor_clip(int32_t out[4]);
+
+// ---------------------------------------------------------------------------
+// Activation (user32_activation.cpp). The host reports what the platform
+// says about the game's window; the runtime turns each change into the
+// messages Windows sends - WM_ACTIVATEAPP, WM_NCACTIVATE, WM_ACTIVATE,
+// WM_SETFOCUS / WM_KILLFOCUS, WM_SIZE for a minimise or restore - delivered
+// to the window's thread inside its next message retrieval. Call it under the
+// baton, whenever the focus or the minimised state may have changed; a call
+// that changes nothing sends nothing. A window the guest shows while the
+// application has the focus is activated from inside ShowWindow, as Windows
+// does, so a host may report the focus before the guest has a window.
+void host_app_state(bool focused, bool minimized);
+// Whether the application is in the foreground as the guest has been told.
+// True when no host ever reported the focus: such a host has no focus to
+// lose, and foreground-only devices must keep working under it.
+bool win32_app_active();
+// Whether a host has reported the focus at all.
+bool win32_app_focus_reported();
+// Called with the new state at every activation change, before the messages
+// are delivered: DirectInput unacquires its foreground devices here.
+void win32_add_activation_observer(void (*fn)(bool active));
+// Forgets the reported state, for a test that wants a fresh application.
+void win32_reset_activation_for_test();
 
 // Calls the window's WNDPROC through recomp_call.
 uint32_t host_dispatch_to_wndproc(X86 *c, uint32_t hwnd, uint32_t msg, uint32_t wparam,

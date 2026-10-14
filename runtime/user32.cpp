@@ -10,6 +10,7 @@
 #include "../platform/os.h"
 #include "memory.h"
 
+#include <algorithm>
 #include <array>
 #include <deque>
 #include <map>
@@ -31,9 +32,19 @@ std::map<uint32_t, Window> &windows() {
     static std::map<uint32_t, Window> m;
     return m;
 }
+std::map<uint32_t, std::deque<Msg>> &thread_queues() {
+    static std::map<uint32_t, std::deque<Msg>> m;
+    return m;
+}
+std::deque<Msg> &queue_for_thread(uint32_t thread_id) {
+    return thread_queues()[thread_id];
+}
 std::deque<Msg> &queue() {
-    static std::deque<Msg> q;
-    return q;
+    return queue_for_thread(guest_current_thread_id());
+}
+uint32_t window_thread(uint32_t hwnd) {
+    auto it = windows().find(hwnd);
+    return it != windows().end() && it->second.thread ? it->second.thread : 1u;
 }
 
 uint32_t g_next_hwnd = 0x00020004;
@@ -107,6 +118,129 @@ void store_msg(uint32_t p, const Msg &m) {
     wr32(p + 24, m.pty);
 }
 
+// A message SENT to a window whose thread is not the sender's, or sent by the
+// host. It waits in the receiving thread's queue until that thread retrieves
+// messages, which is when Windows delivers it too. A guest sender is blocked
+// in SendMessage until then; the host's messages have nobody waiting and are
+// forgotten once delivered.
+struct SentCall {
+    uint32_t hwnd = 0, msg = 0, wp = 0, lp = 0;
+    bool wide = false;
+    bool waited = false; // a guest sender is blocked on the result
+    bool done = false;
+    uint32_t result = 0;
+};
+std::map<uint32_t, SentCall> &sent_calls() {
+    static std::map<uint32_t, SentCall> m;
+    return m;
+}
+uint32_t g_next_sent = 1;
+
+uint32_t new_sent_call(const SentCall &call) {
+    uint32_t id = g_next_sent++;
+    if (!id) // a wrapped counter must not produce the "posted" marker
+        id = g_next_sent++;
+    sent_calls()[id] = call;
+    return id;
+}
+
+// Delivers one sent message taken off the calling thread's queue. A window
+// destroyed while the message waited answers 0, as SendMessage to a window
+// that no longer exists does.
+void deliver_sent(X86 *c, uint32_t id) {
+    auto it = sent_calls().find(id);
+    if (it == sent_calls().end())
+        return;
+    const SentCall call = it->second;
+    const uint32_t result = find_window(call.hwnd) ? deliver_message(c, call.hwnd, call.msg,
+                                                                     call.wp, call.lp, call.wide)
+                                                   : 0;
+    // The procedure may have sent, posted or destroyed anything: look again.
+    it = sent_calls().find(id);
+    if (it == sent_calls().end())
+        return;
+    if (it->second.waited) {
+        it->second.done = true;
+        it->second.result = result;
+    } else
+        sent_calls().erase(it);
+}
+
+bool deliver_sent_messages(X86 *c) {
+    bool any = false;
+    for (;;) {
+        auto &q = queue();
+        auto it = std::find_if(q.begin(), q.end(), [](const Msg &m) { return m.sent != 0; });
+        if (it == q.end())
+            return any;
+        const uint32_t id = it->sent;
+        q.erase(it);
+        deliver_sent(c, id);
+        any = true;
+    }
+}
+
+void notify_message(uint32_t hwnd, uint32_t msg, uint32_t wp, uint32_t lp) {
+    Window *w = find_window(hwnd);
+    if (!w)
+        return;
+    SentCall call;
+    call.hwnd = hwnd;
+    call.msg = msg;
+    call.wp = wp;
+    call.lp = lp;
+    call.wide = w->unicode;
+    Msg m{hwnd, msg, wp, lp, host_millis(), (uint32_t)g_cursor_x, (uint32_t)g_cursor_y};
+    m.sent = new_sent_call(call);
+    queue_for_thread(window_thread(hwnd)).push_back(m);
+}
+
+// SendMessage to a window another guest thread created. The message goes to
+// the front of that thread's queue, behind any other sent message (Windows
+// delivers sent messages before posted ones), and the sender waits for the
+// answer. While it waits it delivers the messages sent to IT, which is what
+// keeps two threads sending to each other from deadlocking - Windows does the
+// same. A receiver that has finished, or a window destroyed meanwhile,
+// answers 0.
+uint32_t send_to_thread(X86 *c, uint32_t thread_id, uint32_t hwnd, uint32_t msg, uint32_t wp,
+                        uint32_t lp, bool wide) {
+    SentCall call;
+    call.hwnd = hwnd;
+    call.msg = msg;
+    call.wp = wp;
+    call.lp = lp;
+    call.wide = wide;
+    call.waited = true;
+    const uint32_t id = new_sent_call(call);
+    {
+        Msg m{hwnd, msg, wp, lp, host_millis(), (uint32_t)g_cursor_x, (uint32_t)g_cursor_y};
+        m.sent = id;
+        auto &q = queue_for_thread(thread_id);
+        auto at = std::find_if(q.begin(), q.end(), [](const Msg &e) { return e.sent == 0; });
+        q.insert(at, m);
+    }
+    for (;;) {
+        auto it = sent_calls().find(id);
+        if (it == sent_calls().end())
+            return 0;
+        if (it->second.done) {
+            const uint32_t result = it->second.result;
+            sent_calls().erase(it);
+            return result;
+        }
+        if (!guest_thread_alive(thread_id) || !find_window(hwnd)) {
+            auto &q = queue_for_thread(thread_id);
+            q.erase(std::remove_if(q.begin(), q.end(), [&](const Msg &e) { return e.sent == id; }),
+                    q.end());
+            sent_calls().erase(id);
+            return 0;
+        }
+        deliver_sent_messages(c);
+        if (!host_guest_yield())
+            guest_sleep_ms(1);
+    }
+}
+
 } // namespace user32
 
 using namespace user32;
@@ -119,7 +253,9 @@ void host_post_message(uint32_t hwnd, uint32_t msg, uint32_t wparam, uint32_t lp
     if (msg == 0x0113)
         host_note_cadence("WM_TIMER");
     Msg m{hwnd, msg, wparam, lparam, host_millis(), (uint32_t)g_cursor_x, (uint32_t)g_cursor_y};
-    queue().push_back(m);
+    // A window's messages go to the thread that created it; a thread message
+    // (no window) to the thread that posts it.
+    queue_for_thread(hwnd ? window_thread(hwnd) : guest_current_thread_id()).push_back(m);
 }
 uint32_t host_main_window() {
     return g_main_hwnd;
@@ -169,6 +305,8 @@ void host_set_message_waiter(bool (*fn)()) {
 void host_set_window_shown_callback(void (*fn)(uint32_t)) {
     g_window_shown = fn;
 }
+// The calling thread's queue: GetMessageA asks on behalf of the thread
+// waiting in it.
 bool host_messages_pending() {
     return !queue().empty();
 }
@@ -363,7 +501,12 @@ void create_window_body(X86 *c, bool wide) {
         }
     }
     window_created(hwnd);
-    set_eax(c, hwnd);
+    // CreateWindowEx sends a WS_VISIBLE window everything it needs to be
+    // shown and activated.
+    if (Window *nw = find_window(hwnd))
+        if (nw->visible)
+            activation_window_shown(c, hwnd, true);
+    set_eax(c, find_window(hwnd) ? hwnd : 0);
 }
 } // namespace
 // The creation messages, and the imports their handlers make, run without a
@@ -425,8 +568,14 @@ void u_ShowWindow(X86 *c) {
     } else if (cmd == 1 || cmd == 9)
         w->style &= ~0x21000000u;
     set_eax(c, was ? 1 : 0);
+    const uint32_t hwnd = w->hwnd;
+    // SW_SHOWNOACTIVATE, SW_SHOWMINNOACTIVE and SW_SHOWNA keep the stacking
+    // and the activation; SW_MINIMIZE activates some other window instead.
+    const bool activates = cmd != 0 && cmd != 4 && cmd != 6 && cmd != 7 && cmd != 8;
     if (!was && w->visible)
-        became_visible(w, cmd != 4 && cmd != 7 && cmd != 8); // SW_*NOACTIVATE keeps stacking
+        became_visible(w, cmd != 4 && cmd != 7 && cmd != 8);
+    if (activates)
+        activation_window_shown(c, hwnd, true);
 }
 
 // UpdateWindow sends WM_PAINT directly to the window procedure, synchronously,
@@ -478,6 +627,13 @@ void set_window_pos(X86 *c, Window *w, uint32_t after, int32_t x, int32_t y, int
         w->visible = true;
         w->style |= WS_VISIBLE;
         became_visible(w, false); // stacking is SWP_NOZORDER's business
+        const uint32_t hwnd = w->hwnd;
+        if (!(flags & 0x0010)) { // SWP_NOACTIVATE
+            activation_window_shown(c, hwnd, true);
+            w = find_window(hwnd);
+            if (!w)
+                return;
+        }
     } else if ((flags & 0x0080) && w->visible) {
         w->visible = false;
         w->style &= ~WS_VISIBLE;
@@ -768,10 +924,14 @@ void u_CreateDialogParamA(X86 *c) {
 // ---------------------------------------------------------------------------
 // A message passes the filter when the window matches (0 means any) and the
 // message id is in [min, max]; min == max == 0 means no id filter at all.
+// A window filter of -1 asks for thread messages only: those posted with no
+// window, by PostThreadMessage or PostMessage(NULL, ...).
 bool msg_matches(const Msg &m, uint32_t filter_hwnd, uint32_t min_msg, uint32_t max_msg) {
     if (m.message == 0x0012)
         return true; // WM_QUIT is never filtered out
-    if (filter_hwnd && m.hwnd != filter_hwnd)
+    if (filter_hwnd == 0xffffffffu && m.hwnd != 0)
+        return false;
+    if (filter_hwnd && filter_hwnd != 0xffffffffu && m.hwnd != filter_hwnd)
         return false;
     if (min_msg == 0 && max_msg == 0)
         return true;
@@ -784,10 +944,15 @@ bool msg_matches(const Msg &m, uint32_t filter_hwnd, uint32_t min_msg, uint32_t 
 // queued item consumed by PM_REMOVE. Only validation (normally BeginPaint)
 // makes it disappear. Hidden child hierarchies never receive synthesized paint.
 static bool pending_paint(uint32_t p, uint32_t hwnd, uint32_t min_msg, uint32_t max_msg) {
+    const uint32_t me = guest_current_thread_id();
     for (const auto &kv : windows()) {
         const Window *w = &kv.second;
         if (!w->update_pending || !w->visible || w->w <= 0 || w->h <= 0)
             continue;
+        if ((w->thread ? w->thread : 1u) != me)
+            continue; // its own thread paints it
+        if (hwnd == 0xffffffffu)
+            continue; // thread messages only
         const Window *ancestor = w;
         size_t hops = 0;
         while (ancestor && ancestor->visible && (ancestor->style & 0x40000000u) &&
@@ -813,6 +978,43 @@ bool paint_pending() {
     return pending_paint(0, 0, 0, 0);
 }
 
+// The last key message each thread retrieved that the host had already
+// translated (MSGF_TRANSLATED), so TranslateMessage can recognise it.
+std::map<uint32_t, Msg> &translated_keys() {
+    static std::map<uint32_t, Msg> m;
+    return m;
+}
+
+// Message retrieval as PeekMessage and GetMessage share it. The calling
+// thread's queue is walked in order: a sent message is delivered to its
+// window procedure when the walk reaches it (Windows delivers those inside
+// the retrieval call, whatever the filter), and the first posted message the
+// filter accepts is the one returned, removed when `remove` is set.
+bool retrieve(X86 *c, uint32_t filter_hwnd, uint32_t min_msg, uint32_t max_msg, bool remove,
+              Msg *out) {
+    for (;;) {
+        auto &q = queue();
+        auto it = q.begin();
+        for (; it != q.end() && !it->sent; ++it) {
+            if (!msg_matches(*it, filter_hwnd, min_msg, max_msg))
+                continue;
+            *out = *it;
+            if (remove)
+                q.erase(it);
+            if (out->flags & MSGF_TRANSLATED)
+                translated_keys()[guest_current_thread_id()] = *out;
+            return true;
+        }
+        if (it == q.end())
+            return false;
+        // A sent message comes before anything this call could return. The
+        // procedure may post, send or destroy anything, so walk again after.
+        const uint32_t id = it->sent;
+        q.erase(it);
+        deliver_sent(c, id);
+    }
+}
+
 void peek_message(X86 *c) {
     // The game's message loop is PeekMessageA and nothing else: it never calls
     // GetMessageA, so anything hung off that one never runs. Windows services
@@ -826,13 +1028,10 @@ void peek_message(X86 *c) {
     gdi_present_windows();
     uint32_t p = arg(c, 0), filter_hwnd = arg(c, 1);
     uint32_t min_msg = arg(c, 2), max_msg = arg(c, 3), flags = arg(c, 4);
-    for (auto it = queue().begin(); it != queue().end(); ++it) {
-        if (!msg_matches(*it, filter_hwnd, min_msg, max_msg))
-            continue;
-        last_message = *it;
-        store_msg(p, *it);
-        if (flags & 1)
-            queue().erase(it); // PM_REMOVE
+    Msg m{};
+    if (retrieve(c, filter_hwnd, min_msg, max_msg, (flags & 1) != 0 /* PM_REMOVE */, &m)) {
+        last_message = m;
+        store_msg(p, m);
         set_eax(c, 1);
         return;
     }
@@ -853,7 +1052,7 @@ void u_GetMessageA(X86 *c) {
     uint32_t p = arg(c, 0), filter_hwnd = arg(c, 1);
     uint32_t min_msg = arg(c, 2), max_msg = arg(c, 3);
 
-    if (filter_hwnd && !find_window(filter_hwnd)) {
+    if (filter_hwnd && filter_hwnd != 0xffffffffu && !find_window(filter_hwnd)) {
         set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
         set_eax(c, 0xffffffffu);
         return;
@@ -863,11 +1062,8 @@ void u_GetMessageA(X86 *c) {
         pump_window_timers();
         pump_mouse_input(c);
         gdi_present_windows();
-        for (auto it = queue().begin(); it != queue().end(); ++it) {
-            if (!msg_matches(*it, filter_hwnd, min_msg, max_msg))
-                continue;
-            Msg m = *it;
-            queue().erase(it);
+        Msg m{};
+        if (retrieve(c, filter_hwnd, min_msg, max_msg, true, &m)) {
             last_message = m;
             store_msg(p, m);
             set_eax(c, m.message == 0x0012 ? 0 : 1); // WM_QUIT ends the loop
@@ -904,35 +1100,99 @@ void u_GetMessageA(X86 *c) {
     }
 }
 
+// The character a key makes on the US layout, from its virtual key and the
+// modifier state. TranslateMessage falls back on it for a key message nobody
+// translated: one the guest posted itself, or one from a host that does not
+// know the layout. 0 when the key makes no character.
+uint32_t us_layout_char(uint32_t vk, bool shift, bool caps, bool ctrl) {
+    if (vk >= 'A' && vk <= 'Z') {
+        if (ctrl)
+            return vk - 0x40; // Ctrl+A is 0x01
+        return (shift != caps) ? vk : vk + 32;
+    }
+    if (ctrl) {
+        switch (vk) {
+        case 0xdb: // Ctrl+[ is ESC, and so on: the C0 controls a terminal sends
+            return 0x1b;
+        case 0xdc:
+            return 0x1c;
+        case 0xdd:
+            return 0x1d;
+        case 0x0d:
+            return 0x0a;
+        case 0x08:
+            return 0x7f;
+        case 0x1b:
+            return 0x1b;
+        default:
+            return 0;
+        }
+    }
+    if (vk >= '0' && vk <= '9')
+        return shift ? (uint32_t)")!@#$%^&*("[vk - '0'] : vk;
+    if (vk >= 0x60 && vk <= 0x69) // the numeric keypad, with Num Lock on
+        return '0' + (vk - 0x60);
+    static const struct {
+        uint8_t vk;
+        char plain, shifted;
+    } kOem[] = {
+        {0x20, ' ', ' '},   {0x0d, '\r', '\r'}, {0x08, '\b', '\b'}, {0x1b, 0x1b, 0x1b},
+        {0x09, '\t', '\t'}, {0x6a, '*', '*'},   {0x6b, '+', '+'},   {0x6d, '-', '-'},
+        {0x6e, '.', '.'},   {0x6f, '/', '/'},   {0xba, ';', ':'},   {0xbb, '=', '+'},
+        {0xbc, ',', '<'},   {0xbd, '-', '_'},   {0xbe, '.', '>'},   {0xbf, '/', '?'},
+        {0xc0, '`', '~'},   {0xdb, '[', '{'},   {0xdc, '\\', '|'},  {0xdd, ']', '}'},
+        {0xde, '\'', '"'},
+    };
+    for (const auto &k : kOem)
+        if (k.vk == vk)
+            return (uint8_t)(shift ? k.shifted : k.plain);
+    return 0;
+}
+
+// TranslateMessage posts the character message a key-down makes: WM_CHAR, or
+// WM_SYSCHAR for a key pressed with Alt. It goes ahead of the posted messages
+// already queued, so the guest reads it straight after its key-down and before
+// that key's key-up, as Windows orders them. A key the host posted together
+// with its character (host_post_key_text) already has it queued behind it, so
+// for that one there is nothing left to post, and the call still reports that
+// the key was translated.
 void u_TranslateMessage(X86 *c) {
     uint32_t p = arg(c, 0);
-    if (!p) {
+    if (!p || !gm_valid(p, 28)) {
         set_eax(c, 0);
         return;
     }
-    uint32_t msg = rd32(p + 4), vk = rd32(p + 8), lparam = rd32(p + 12);
-    if (msg == 0x0100 || msg == 0x0104) { // WM_KEYDOWN / WM_SYSKEYDOWN
-        uint32_t ch = 0;
-        if (vk >= 0x30 && vk <= 0x5a)
-            ch = vk; // digits and letters
-        else if (vk == 0x20)
-            ch = ' ';
-        else if (vk == 0x0d)
-            ch = '\r';
-        else if (vk == 0x08)
-            ch = '\b';
-        else if (vk == 0x1b)
-            ch = 0x1b;
-        if (ch) {
-            bool shift = (g_key_state[0x10] & 0x80) != 0;
-            if (!shift && ch >= 'A' && ch <= 'Z')
-                ch += 32;
-            host_post_message(rd32(p), msg == 0x0100 ? 0x0102 : 0x0106, ch, lparam);
-            set_eax(c, 1);
-            return;
-        }
+    uint32_t hwnd = rd32(p), msg = rd32(p + 4), vk = rd32(p + 8), lparam = rd32(p + 12);
+    if (msg != 0x0100 && msg != 0x0104) { // WM_KEYDOWN / WM_SYSKEYDOWN
+        set_eax(c, 0);
+        return;
     }
-    set_eax(c, 0);
+    auto done = translated_keys().find(guest_current_thread_id());
+    if (done != translated_keys().end() && done->second.hwnd == hwnd &&
+        done->second.message == msg && done->second.wparam == vk && done->second.lparam == lparam &&
+        done->second.time == rd32(p + 16)) {
+        translated_keys().erase(done);
+        set_eax(c, 1);
+        return;
+    }
+    const bool shift = (g_key_state[0x10] & 0x80) != 0;
+    const bool caps = (g_key_state[0x14] & 0x01) != 0 || (g_key_state[0x14] & 0x80) != 0;
+    const bool ctrl = (g_key_state[0x11] & 0x80) != 0 && msg == 0x0100;
+    const uint32_t ch = us_layout_char(vk, shift, caps, ctrl);
+    if (!ch) {
+        set_eax(c, 0);
+        return;
+    }
+    Msg m{hwnd,
+          msg == 0x0100 ? 0x0102u : 0x0106u,
+          ch,
+          lparam,
+          host_millis(),
+          (uint32_t)g_cursor_x,
+          (uint32_t)g_cursor_y};
+    auto &q = queue_for_thread(hwnd ? window_thread(hwnd) : guest_current_thread_id());
+    q.insert(std::find_if(q.begin(), q.end(), [](const Msg &e) { return e.sent == 0; }), m);
+    set_eax(c, 1);
 }
 
 void dispatch_message(X86 *c) {
@@ -963,6 +1223,27 @@ void u_PostMessageA(X86 *c) {
         return;
     }
     host_post_message(arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3));
+    set_eax(c, 1);
+}
+
+// PostThreadMessage queues a message with no window on another thread's
+// queue. Windows fails it for a thread that has no queue yet; here every live
+// guest thread has one, created on demand, since a cooperative scheduler can
+// run the poster before the receiver has first looked at its queue.
+void u_PostThreadMessageA(X86 *c) {
+    uint32_t tid = arg(c, 0), msg = arg(c, 1);
+    if (msg == 0x000c || msg == 0x000d) {
+        set_last_error(1159); // ERROR_MESSAGE_SYNC_ONLY
+        set_eax(c, 0);
+        return;
+    }
+    if (!guest_thread_alive(tid)) {
+        set_last_error(1444); // ERROR_INVALID_THREAD_ID
+        set_eax(c, 0);
+        return;
+    }
+    Msg m{0, msg, arg(c, 2), arg(c, 3), host_millis(), (uint32_t)g_cursor_x, (uint32_t)g_cursor_y};
+    queue_for_thread(tid).push_back(m);
     set_eax(c, 1);
 }
 
@@ -1017,7 +1298,49 @@ void def_window_proc(X86 *c, bool wide) {
     }
     case 0x0081: // WM_NCCREATE: TRUE, or creation is cancelled
     case 0x0014: // WM_ERASEBKGND: the background counts as erased
+    case 0x0086: // WM_NCACTIVATE: proceed with the change
         set_eax(c, 1);
+        return;
+    case 0x0006: // WM_ACTIVATE: an activated window that is not minimised
+                 // takes the keyboard focus, which is where WM_SETFOCUS comes from
+        if (w && (arg(c, 2) & 0xffff) != 0 && (arg(c, 2) >> 16) == 0) {
+            uint32_t focus = focus_window();
+            bool inside = false;
+            for (Window *f = find_window(focus); f;
+                 f = f->parent ? find_window(f->parent) : nullptr)
+                if (f->hwnd == hwnd) {
+                    inside = true;
+                    break;
+                }
+            if (!inside)
+                change_focus(c, hwnd);
+        }
+        set_eax(c, 0);
+        return;
+    case 0x0020: { // WM_SETCURSOR: the parent decides first, then the class cursor
+        if (w && w->parent && (w->style & 0x40000000u) &&
+            host_dispatch_to_wndproc(c, w->parent, msg, arg(c, 2), arg(c, 3))) {
+            set_eax(c, 1);
+            return;
+        }
+        if (w && arg(c, 2) == hwnd && (arg(c, 3) & 0xffff) == 1 /* HTCLIENT */) {
+            auto ci = classes().find(w->cls);
+            g_cursor = ci != classes().end() ? ci->second.hcursor : 0;
+            set_eax(c, 1);
+            return;
+        }
+        set_eax(c, 0);
+        return;
+    }
+    case 0x0104: // WM_SYSKEYDOWN: Alt+F4 asks the window to close
+        if (arg(c, 2) == 0x73 /* VK_F4 */ && (arg(c, 3) & (1u << 29)))
+            host_dispatch_to_wndproc(c, hwnd, 0x0112 /* WM_SYSCOMMAND */, 0xf060 /* SC_CLOSE */, 0);
+        set_eax(c, 0);
+        return;
+    case 0x0112: // WM_SYSCOMMAND: SC_CLOSE becomes WM_CLOSE
+        if ((arg(c, 2) & 0xfff0) == 0xf060)
+            host_dispatch_to_wndproc(c, hwnd, 0x0010 /* WM_CLOSE */, 0, 0);
+        set_eax(c, 0);
         return;
     case 0x0010: // WM_CLOSE -> DestroyWindow
         destroy_window(c, hwnd);
@@ -1762,7 +2085,8 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "MapVirtualKeyExA", 3, u_MapVirtualKeyA},
     {"USER32.dll", "ToUnicode", 6, nullptr},
     {"USER32.dll", "SendInput", 3, nullptr},
-    {"USER32.dll", "PostThreadMessageA", 4, nullptr},
+    {"USER32.dll", "PostThreadMessageA", 4, u_PostThreadMessageA},
+    {"USER32.dll", "PostThreadMessageW", 4, u_PostThreadMessageA},
     {"USER32.dll", "GetForegroundWindow", 0, u_GetForegroundWindow},
     {"USER32.dll", "WaitMessage", 0, u_WaitMessage},
     {"USER32.dll", "GetActiveWindow", 0, u_GetActiveWindow},

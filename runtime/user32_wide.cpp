@@ -60,8 +60,20 @@ uint32_t deliver_message(X86 *c, uint32_t hwnd, uint32_t msg, uint32_t wp, uint3
     heap_free(tmp);
     return result;
 }
+// SendMessage calls the window procedure directly when the window belongs to
+// the calling thread. A window of another guest thread gets the message
+// through that thread's queue, and the caller waits for its answer
+// (send_to_thread), as Windows makes it wait.
 void send_message(X86 *c, bool wide) {
-    set_eax(c, deliver_message(c, arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3), wide));
+    const uint32_t hwnd = arg(c, 0);
+    Window *w = find_window(hwnd);
+    const uint32_t me = guest_current_thread_id();
+    const uint32_t owner = w && w->thread ? w->thread : me;
+    if (w && owner != me && guest_thread_alive(owner)) {
+        set_eax(c, send_to_thread(c, owner, hwnd, arg(c, 1), arg(c, 2), arg(c, 3), wide));
+        return;
+    }
+    set_eax(c, deliver_message(c, hwnd, arg(c, 1), arg(c, 2), arg(c, 3), wide));
 }
 void display_rect(uint32_t out) {
     uint32_t w = 1024, h = 768, bpp = 32;

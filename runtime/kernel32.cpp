@@ -2038,6 +2038,13 @@ X86 *guest_current_context() {
 uint32_t guest_current_thread_id() {
     return t_id;
 }
+bool guest_thread_alive(uint32_t id) {
+    cur_thread(); // registers the main thread on first use
+    for (GuestThread *t : threads())
+        if (t->id == id)
+            return !t->finished;
+    return false;
+}
 
 // --------------------------------------------------------------------------
 // The scheduler coordination the mod foundation asks for. Defined here rather

@@ -57,11 +57,51 @@ struct Window {
 
 struct Msg {
     uint32_t hwnd, message, wparam, lparam, time, ptx, pty;
+    // Non-zero for a SENT message waiting in the queue: the id of its
+    // SentCall. Message retrieval delivers it straight to the window procedure
+    // and never returns it to the caller, which is how Windows hands a thread
+    // the messages other threads (and the system) send it.
+    uint32_t sent = 0;
+    // MSGF_* below: what the runtime knows about a queued message that its
+    // guest-visible MSG cannot carry.
+    uint32_t flags = 0;
 };
+// A key message the host posted together with the character it produced, so
+// TranslateMessage has nothing left to post for it (host_post_key_text).
+constexpr uint32_t MSGF_TRANSLATED = 1;
 
 std::map<std::string, WndClass> &classes();
 std::map<uint32_t, Window> &windows();
+// The calling guest thread's message queue. Windows gives every thread its
+// own: PeekMessage and GetMessage see only the messages for windows the
+// calling thread created and the thread messages posted to it.
 std::deque<Msg> &queue();
+std::deque<Msg> &queue_for_thread(uint32_t thread_id);
+// Every thread's queue, for the bookkeeping that spans them (a window's
+// messages die with it, whichever thread it was on).
+std::map<uint32_t, std::deque<Msg>> &thread_queues();
+// The thread a message for this window is queued on: the one that created
+// it. The main thread (1) for the desktop and for unknown windows.
+uint32_t window_thread(uint32_t hwnd);
+// Delivers every sent message waiting in the calling thread's queue, in
+// order; true when it delivered any. Message retrieval and every wait a
+// thread makes inside USER32 call this, as Windows does in the same places.
+bool deliver_sent_messages(X86 *c);
+// Queues a message the host SENDS to a window: delivered to its window
+// procedure (never returned by PeekMessage) when the window's thread next
+// retrieves messages, in order with the input queued around it.
+void notify_message(uint32_t hwnd, uint32_t msg, uint32_t wp, uint32_t lp);
+// The window manager's view of activation and keyboard focus
+// (GetActiveWindow, GetFocus, GetCapture), kept in user32_vcl.cpp.
+uint32_t active_window();
+void set_active_window(uint32_t hwnd);
+uint32_t focus_window();
+void set_focus_window(uint32_t hwnd);
+uint32_t capture_window();
+// SendMessage to a window of another guest thread: queued there, and the
+// caller waits for the answer (user32.cpp).
+uint32_t send_to_thread(X86 *c, uint32_t thread_id, uint32_t hwnd, uint32_t msg, uint32_t wp,
+                        uint32_t lp, bool wide);
 Window *find_window(uint32_t hwnd);
 std::string class_key(uint32_t p, bool wide = false);
 uint32_t wide_units(const std::string &text);
@@ -94,6 +134,14 @@ void display_rect(uint32_t out);
 void alias_ansi(X86 *c, const char *name);
 // Registers the system control classes (STATIC) on first use.
 void ensure_system_classes();
+// The activation model (user32_activation.cpp): a top-level window became
+// visible (`activate` is false for the show commands that do not activate),
+// or is being destroyed.
+void activation_window_shown(X86 *c, uint32_t hwnd, bool activate);
+void activation_window_destroyed(uint32_t hwnd);
+// SetFocus's body: WM_KILLFOCUS to the window losing the focus, WM_SETFOCUS
+// to the one gaining it. Returns the window that had it.
+uint32_t change_focus(X86 *c, uint32_t hwnd);
 } // namespace user32
 void user32_wide_register();
 
