@@ -1411,6 +1411,15 @@ void S7_BltFast(X86 *c) {
     com_ret(c, DD_OK);
 }
 
+bool vsync_enabled() {
+    static int on = -1;
+    if (on < 0) {
+        const char *v = recomp_env("D3D7_VSYNC");
+        on = !(v && !strcmp(v, "0"));
+    }
+    return on != 0;
+}
+
 // Flip(lpDDSurfaceTargetOverride, dwFlags): copies the back buffer to the
 // front buffer and shows it. The back buffer keeps its contents.
 void S7_Flip(X86 *c) {
@@ -1441,6 +1450,17 @@ void S7_Flip(X86 *c) {
         cpu_blit(front, all, back, all, BlitOptions{});
     }
     present(front, all);
+    // A Flip without DDFLIP_NOVSYNC happens at the vertical blank, which is
+    // what paces a game that flips as fast as it can draw. The wait is a
+    // scheduler sleep, so the guest's other threads run through it.
+    // RECOMP_D3D7_VSYNC=0 turns the pacing off.
+    const uint32_t flags = arg(c, 2);
+    if (!(flags & DDFLIP_NOVSYNC) && vsync_enabled()) {
+        const int intervals = std::max(1, int((flags >> 24) & 7));
+        const double delay = host_present_refresh_delay(intervals);
+        if (delay > 0)
+            guest_sleep_ms(uint32_t(delay * 1000.0));
+    }
     com_ret(c, DD_OK);
 }
 
