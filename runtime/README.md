@@ -22,6 +22,8 @@ owns. Compile the runtime with `-I<repo root>` so `guest.h` can find it.
 | `kernel32.cpp` | heap, files, modules, TLS, sync objects, time, strings and locale |
 | `user32.cpp` | window classes and windows, the message queue, paint/DC/input stubs |
 | `misc.cpp` | GDI32, ADVAPI32 registry, SHELL32, ole32, IMM32, WSOCK32, WINMM (clock, mmio, MIDI out) |
+| `msvcrt*.cpp` | msvcrt.dll: start-up and exit, heap, locale and ctype, strings, printf/scanf/strtod, stdio, maths, time, RTTI (`msvcrt_internal.h` says which file holds what) |
+| `msvcp60.cpp` | msvcp60.dll: `std::_Lockit`, `std::bad_cast`, the locale vectors and conversions |
 | `win32.h` | what the host app and the DirectX shims call into |
 | `tests/` | `runtime_tests.cpp` plus the test-only `recomp_call` |
 

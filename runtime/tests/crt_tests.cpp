@@ -216,15 +216,34 @@ static void test_heap() {
     }
     check(first == second, "allocation addresses are deterministic");
 
-    // A hot loop stays cheap: the slab path is a vector push and pop.
+    // A hot loop stays cheap: the slab path is a vector push and pop. Timed
+    // twice: the allocator alone, and through the import dispatcher as
+    // translated code reaches it (one push, one dispatch per call).
     reset_world();
     uint64_t t0 = os_monotonic_ns();
-    for (int i = 0; i < 200000; ++i) {
-        uint32_t p = ms("??2@YAPAXI@Z", {48});
-        ms("??3@YAXPAX@Z", {p});
+    for (int i = 0; i < 1000000; ++i) {
+        uint32_t p = crt::mem_alloc(48 + (i & 63));
+        crt::mem_free(p, "bench");
     }
+    double alloc_ns = double(os_monotonic_ns() - t0) / 2000000.0;
+    check(alloc_ns < 200, "malloc/free in the allocator: %.1f ns per call", alloc_ns);
+    uint32_t t_new = imports_resolve("msvcrt.dll", "??2@YAPAXI@Z");
+    uint32_t t_del = imports_resolve("msvcrt.dll", "??3@YAXPAX@Z");
+    uint32_t esp = g_cpu.r[R_ESP];
+    t0 = os_monotonic_ns();
+    for (int i = 0; i < 200000; ++i) {
+        g_cpu.r[R_ESP] = esp - 8;
+        wr32(esp - 4, 48);
+        wr32(esp - 8, 0x00401234);
+        imports_dispatch(&g_cpu, t_new);
+        g_cpu.r[R_ESP] = esp - 8;
+        wr32(esp - 4, g_cpu.r[R_EAX]);
+        wr32(esp - 8, 0x00401234);
+        imports_dispatch(&g_cpu, t_del);
+    }
+    g_cpu.r[R_ESP] = esp;
     double ns = double(os_monotonic_ns() - t0) / 400000.0;
-    check(ns < 2000, "new/delete through the trampoline: %.0f ns per call", ns);
+    check(ns < 2000, "new/delete through the import dispatcher: %.0f ns per call", ns);
 }
 
 // ---------------------------------------------------------------------------

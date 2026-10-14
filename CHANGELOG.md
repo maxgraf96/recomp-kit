@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Add the Microsoft C and C++ runtime DLLs, `msvcrt.dll` and `msvcp60.dll`, as
+  programs import them: CRT start-up and exit, a fast deterministic heap that
+  logs and ignores frees of interior or foreign pointers, strings and the
+  single-byte `_mbs*` family, locales and ctype for "C" and code page 1252,
+  printf/scanf/strtod in msvcrt's own model (three-digit exponents, `1.#INF`,
+  half-up digit rounding, correctly rounded input), FILE streams over the guest
+  file system with text-mode translation, time, maths with `sqrt` exact under
+  the caller's precision control, per-thread `rand`, RTTI `dynamic_cast` and
+  type names, and msvcp60's lock, `bad_cast` and locale hooks.
+
 - Load DLLs at configured bases from their original files: the loader and the
   translator apply the same base relocations, every module is mapped before any
   import table is bound, static imports attach in dependency order before the
