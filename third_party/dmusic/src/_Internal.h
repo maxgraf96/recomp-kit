@@ -642,6 +642,9 @@ DMINT void DmBand_release(DmBand* slf);
 DMINT DmResult DmBand_parse(DmBand* slf, DmRiff* rif);
 DMINT DmResult DmBand_download(DmBand* slf, DmLoader* loader);
 DMINT DmDlsInstrument* DmInstrument_getDlsInstrument(DmInstrument* slf);
+DMINT uint32_t DmInstrument_getBank(DmInstrument const* slf);
+DMINT uint32_t DmInstrument_getProgram(DmInstrument const* slf);
+DMINT bool DmInstrument_isDrumKit(DmInstrument const* slf);
 DMINT void DmInstrument_free(DmInstrument* slf);
 
 DMINT DmResult DmStyle_create(DmStyle** slf);

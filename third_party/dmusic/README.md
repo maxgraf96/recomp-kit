@@ -54,7 +54,7 @@ git format-patch --relative=third_party/dmusic <commit>^!   # one upstream-ready
 
 | Patch | Why |
 | --- | --- |
-| (none yet) | |
+| Select an instrument by bank MSB, LSB and drum flag | A band patch is `drum<<31 \| MSB<<16 \| LSB<<8 \| program`; upstream passed the LSB as the bank and ignored the drum flag, so most GM/GS instruments and every drum kit played the collection's first preset. A missing GS variation plays its capital tone (MSB 0), as GS synthesizers do. |
 
 To move to a newer upstream commit, replace the files listed under *What is
 here*, re-apply the patches that upstream has not taken, and run

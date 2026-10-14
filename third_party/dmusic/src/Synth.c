@@ -172,11 +172,29 @@ static DmResult DmSynth_assignInstrumentChannels(DmSynth* slf, DmBand* band) {
 			continue;
 		}
 
-		uint32_t bank = (ins->patch & 0xFF00U) >> 8;
-		uint32_t patch = ins->patch & 0xFFU;
+		// The presets made from a DLS collection carry its bank, MSB << 8 | LSB, with every drum kit
+		// in bank 128 (see Dm_createHydra); DmInstrument_getBank lines the band's patch up with that.
+		uint32_t bank = DmInstrument_isDrumKit(ins) ? 128U : DmInstrument_getBank(ins);
+		uint32_t patch = DmInstrument_getProgram(ins);
 
 		tsf_set_volume(fnt->syn, slf->volume);
-		tsf_channel_set_bank_preset(fnt->syn, (int) ins->channel, (int) bank, (int) patch);
+		int found = tsf_channel_set_bank_preset(fnt->syn, (int) ins->channel, (int) bank, (int) patch);
+
+		// A GS synthesizer plays the capital tone (bank select MSB 0) of a variation it does not have,
+		// rather than leaving the channel on whatever it played before.
+		if (!found && bank != 128U && (bank & 0x7F00U) != 0) {
+			found = tsf_channel_set_bank_preset(fnt->syn, (int) ins->channel, (int) (bank & 0x7FU), (int) patch);
+		}
+
+		if (!found) {
+			Dm_report(DmLogLevel_WARN,
+			          "DmSynth: Instrument %d:%d:%d%s is not in its collection; channel %d keeps its preset",
+			          bank >> 8,
+			          bank & 0x7F,
+			          patch,
+			          DmInstrument_isDrumKit(ins) ? " (drums)" : "",
+			          ins->channel);
+		}
 
 		// Update the instrument's properties
 		if (ins->options & DmInstrument_VALID_PAN) {

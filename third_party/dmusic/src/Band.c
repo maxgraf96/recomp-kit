@@ -43,33 +43,66 @@ void DmBand_release(DmBand* slf) {
 	Dm_free(slf);
 }
 
+// A band instrument's patch is DirectMusic's MIDI patch (`dwPatch`): the program in bits 0-6, the
+// bank select LSB in bits 8-14, the MSB in bits 16-22 and the drum kit flag in bit 31. A DLS
+// instrument's bank (`ulBank`) is the MSB in bits 8-14 and the LSB in bits 0-6, with the drum kit
+// flag in bit 31 as well, so `patch >> 8` lines the two banks up.
+uint32_t DmInstrument_getBank(DmInstrument const* slf) {
+	return (slf->patch >> 8) & 0x7F7FU;
+}
+
+uint32_t DmInstrument_getProgram(DmInstrument const* slf) {
+	return slf->patch & 0x7FU;
+}
+
+bool DmInstrument_isDrumKit(DmInstrument const* slf) {
+	return (slf->patch & 0x80000000U) != 0;
+}
+
+static DmDlsInstrument* DmInstrument_findDlsInstrument(DmInstrument* slf, uint32_t bank) {
+	bool drum = DmInstrument_isDrumKit(slf);
+	uint32_t patch = DmInstrument_getProgram(slf);
+
+	// TODO(lmichaelis): Dirty fix for drum kit problems. Instead of choosing the first valid DLS instrument, we
+	//                   chose the last valid one. This acts as if later instruments override previous ones and
+	//                   thus prevents problems where the same channel is re-used multiple times, specifically in
+	//                   Gothic 1, which assigns a drum kit and melodic instrument to the same channel. This works
+	//                   in conjunction with the TSF creation in Dm_createHydra to prevent drum kit issues in G1.
+	for (long long i = slf->dls->instrument_count - 1; i >= 0; --i) {
+		DmDlsInstrument* ins = &slf->dls->instruments[i];
+		bool ins_drum = (ins->bank & DmDls_DRUM_KIT) != 0;
+
+		if (ins_drum == drum && (ins->bank & 0x7F7FU) == bank && ins->patch == patch) {
+			return ins;
+		}
+	}
+
+	return NULL;
+}
+
 DmDlsInstrument* DmInstrument_getDlsInstrument(DmInstrument* slf) {
 	if (slf == NULL || slf->dls == NULL) {
 		return NULL;
 	}
 
-	uint32_t bank = (slf->patch & 0xFF00U) >> 8;
-	uint32_t patch = slf->patch & 0xFFU;
+	uint32_t bank = DmInstrument_getBank(slf);
+	DmDlsInstrument* ins = DmInstrument_findDlsInstrument(slf, bank);
 
-	DmDlsInstrument* ins = NULL;
-	for (long long i = slf->dls->instrument_count-1; i >= 0; --i) {
-		ins = &slf->dls->instruments[i];
+	// A GS synthesizer plays the capital tone (bank select MSB 0) of a variation it does not have.
+	if (ins == NULL && (bank & 0x7F00U) != 0) {
+		ins = DmInstrument_findDlsInstrument(slf, bank & 0x7FU);
+	}
 
-		// If it's the correct instrument, return it.
-		// TODO(lmichaelis): Dirty fix for drum kit problems. Instead of choosing the first valid DLS instrument, we
-		//                   chose the last valid one. This acts as if later instruments override previous ones and
-		//                   thus prevents problems where the same channel is re-used multiple times, specifically in
-		//                   Gothic 1, which assigns a drum kit and melodic instrument to the same channel. This works
-		//                   in conjunction with the TSF creation in Dm_createHydra to prevent drum kit issues in G1.
-		if ((ins->bank & 127) == bank && ins->patch == patch) {
-			return ins;
-		}
+	if (ins != NULL) {
+		return ins;
 	}
 
 	Dm_report(DmLogLevel_WARN,
-	          "DmBand: Instrument patch %d:%d not found in band '%s'",
-	          bank,
-	          patch,
+	          "DmBand: Instrument patch %d:%d:%d%s not found in band '%s'",
+	          bank >> 8,
+	          bank & 0x7F,
+	          DmInstrument_getProgram(slf),
+	          DmInstrument_isDrumKit(slf) ? " (drums)" : "",
 	          slf->reference.name);
 	return NULL;
 }
