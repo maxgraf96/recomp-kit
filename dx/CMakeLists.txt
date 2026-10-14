@@ -5,7 +5,28 @@ set(POP_DX_SOURCES
   mf.cpp weanetr.cpp d3d9.cpp d3d9_raster.cpp d3d9_shader.cpp d3d9_shadergen.cpp host_d9_default.cpp
   d3dx9.cpp)
 
+# GothicKit/dmusic (third_party/dmusic/README.md): the DirectMusic composer and
+# synthesizer behind dmusic.cpp. Its sources are compiled into the DX object
+# libraries themselves, so every binary that links the shims has them: vendored
+# C11 built as it is, with no kit warnings, its own C11-threads shim, and every
+# external name it does not export as Dm* renamed by recomp/dm_prefix.h,
+# because the hosts link the kit's own TinySoundFont beside it.
+set(POP_DMUSIC_DIR ${POP_ROOT}/third_party/dmusic)
+set(POP_DMUSIC_SOURCES
+  src/Array.c src/Band.c src/Common.c src/Composer.c src/Dls.c src/Loader.c src/Logger.c
+  src/Memory.c src/Message.c src/Performance.c src/Riff.c src/Rng.c src/Segment.c src/Style.c
+  src/Synth.c src/io/Band.c src/io/Common.c src/io/Dls.c src/io/Segment.c src/io/Style.c
+  src/thread/Thread.Posix.c src/thread/Thread.Win32.c src/util/Tsf.c vendor/TinySoundFont/tsf.c)
+list(TRANSFORM POP_DMUSIC_SOURCES PREPEND ${POP_DMUSIC_DIR}/)
+set_source_files_properties(${POP_DMUSIC_SOURCES} PROPERTIES
+  COMPILE_OPTIONS "-w;-include;${POP_DMUSIC_DIR}/recomp/dm_prefix.h"
+  COMPILE_DEFINITIONS "DM_BUILD=1"
+  INCLUDE_DIRECTORIES "${POP_DMUSIC_DIR}/src;${POP_DMUSIC_DIR}/vendor/TinySoundFont")
+list(APPEND POP_DX_SOURCES ${POP_DMUSIC_SOURCES})
+
 add_library(recomp_dx OBJECT ${POP_DX_SOURCES})
+target_include_directories(recomp_dx PUBLIC ${POP_DMUSIC_DIR}/include)
+target_compile_definitions(recomp_dx PUBLIC DM_STATIC=1)
 target_link_libraries(recomp_dx PUBLIC recomp_runtime)
 pop_link_video(recomp_dx)
 target_compile_options(recomp_dx PRIVATE ${POP_WARN_HOST})
@@ -15,6 +36,8 @@ pop_optimize(recomp_dx 2)
 # these can neither draw nor play sound. The parity fixture and the profile
 # tests use it.
 add_library(recomp_dx_null OBJECT ${POP_DX_SOURCES})
+target_include_directories(recomp_dx_null PUBLIC ${POP_DMUSIC_DIR}/include)
+target_compile_definitions(recomp_dx_null PUBLIC DM_STATIC=1)
 target_link_libraries(recomp_dx_null PUBLIC recomp_runtime)
 pop_link_video(recomp_dx_null)
 target_compile_definitions(recomp_dx_null PUBLIC RECOMP_NULL_HOST)

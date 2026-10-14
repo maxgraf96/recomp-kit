@@ -29,8 +29,9 @@ and an MP3 the examples play) and the CI configuration.
 
 ## How the kit builds it
 
-`third_party/dmusic/CMakeLists.txt` compiles `src/` and the TinySoundFont copy
-as one object library, `recomp_dmusic`, which `recomp_dx` links:
+`dx/CMakeLists.txt` compiles `src/` and the TinySoundFont copy into the DX
+object libraries (`recomp_dx`, `recomp_dx_null`), so every binary that links the
+shims has them:
 
 - C11, the C11-threads shim in `src/thread/` (Apple's C library has no
   `<threads.h>`), `DM_STATIC=1`, warnings off for this directory only.
