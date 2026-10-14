@@ -2,6 +2,7 @@
 // or a GPU. Runs on every platform the layer supports.
 #include "../os.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -254,6 +255,105 @@ void test_switch_names() {
     os_unsetenv("POP_RECOMP_SWITCH_PROBE");
 }
 
+// The network layer on the loopback interface: nothing leaves the machine.
+void test_network() {
+    if (!os_net_supported()) {
+        CHECK(os_net_socket(OS_NET_DGRAM) == -1);
+        return;
+    }
+    const uint32_t lo = 0x7f000001u;
+    int a = os_net_socket(OS_NET_DGRAM), b = os_net_socket(OS_NET_DGRAM);
+    CHECK(a >= 0 && b >= 0);
+    CHECK(os_net_bind(a, lo, 0) == 0);
+    uint32_t ip = 0;
+    uint16_t port = 0;
+    CHECK(os_net_local_address(a, &ip, &port) == 0 && ip == lo && port != 0);
+    // A fresh socket is non-blocking.
+    char buf[64];
+    OsNetDatagram info;
+    CHECK(os_net_recvfrom(a, buf, sizeof buf, 0, &info) == -1 &&
+          (errno == EAGAIN || errno == EWOULDBLOCK));
+    // The destination and interface of what arrives.
+    CHECK(os_net_set_option(a, OS_NET_OPT_RECV_DESTINATION, 1) == 0);
+    CHECK(os_net_sendto(b, "abc", 3, 0, lo, port, 0) == 3);
+    OsNetPoll p = {a, OS_NET_POLL_IN, 0};
+    CHECK(os_net_poll(&p, 1, 1000) == 1 && (p.got & OS_NET_POLL_IN));
+    CHECK(os_net_recvfrom(a, buf, sizeof buf, 0, &info) == 3 && memcmp(buf, "abc", 3) == 0);
+    CHECK(info.from_ip == lo && info.to_ip == lo && info.ifindex != 0 && !info.truncated);
+    // Out of a named interface: the loopback one, by index.
+    unsigned lo_index = info.ifindex;
+    CHECK(os_net_sendto(b, "via", 3, 0, lo, port, lo_index) == 3);
+    CHECK(os_net_poll(&p, 1, 1000) == 1);
+    CHECK(os_net_recvfrom(a, buf, 2, 0, &info) == 2 && info.truncated == 1);
+    int64_t v = 0;
+    CHECK(os_net_get_option(a, OS_NET_OPT_TYPE, &v) == 0 && v == OS_NET_DGRAM);
+    CHECK(os_net_set_option(b, OS_NET_OPT_BROADCAST, 1) == 0);
+    CHECK(os_net_get_option(b, OS_NET_OPT_BROADCAST, &v) == 0 && v != 0);
+    // A stream: connect in progress, accept, data, the peer's close.
+    int l = os_net_socket(OS_NET_STREAM), c = os_net_socket(OS_NET_STREAM);
+    CHECK(os_net_bind(l, lo, 0) == 0 && os_net_listen(l, 4) == 0);
+    CHECK(os_net_local_address(l, nullptr, &port) == 0);
+    int rc = os_net_connect(c, lo, port);
+    CHECK(rc == 0 || errno == EINPROGRESS);
+    OsNetPoll w = {c, OS_NET_POLL_OUT, 0};
+    CHECK(os_net_poll(&w, 1, 1000) == 1 && os_net_pending_error(c) == 0);
+    OsNetPoll q = {l, OS_NET_POLL_IN, 0};
+    CHECK(os_net_poll(&q, 1, 1000) == 1);
+    int s = os_net_accept(l, &ip, nullptr);
+    CHECK(s >= 0 && ip == lo);
+    CHECK(os_net_send(c, "hello", 5, 0) == 5);
+    OsNetPoll r = {s, OS_NET_POLL_IN, 0};
+    CHECK(os_net_poll(&r, 1, 1000) == 1);
+    uint32_t queued = 0;
+    CHECK(os_net_readable(s, &queued) == 0 && queued == 5);
+    CHECK(os_net_recv(s, buf, sizeof buf, OS_NET_MSG_PEEK) == 5 &&
+          os_net_recv(s, buf, sizeof buf, 0) == 5);
+    os_net_close(c);
+    CHECK(os_net_poll(&r, 1, 1000) == 1 && os_net_recv(s, buf, sizeof buf, 0) == 0);
+    // A refused connection.
+    int gone = os_net_socket(OS_NET_STREAM);
+    os_net_bind(gone, lo, 0);
+    os_net_local_address(gone, nullptr, &port);
+    os_net_close(gone);
+    int f = os_net_socket(OS_NET_STREAM);
+    rc = os_net_connect(f, lo, port);
+    CHECK(rc == -1);
+    OsNetPoll fw = {f, OS_NET_POLL_OUT, 0};
+    os_net_poll(&fw, 1, 1000);
+    CHECK(os_net_pending_error(f) == ECONNREFUSED || errno == ECONNREFUSED);
+    for (int k : {a, b, l, s, f})
+        os_net_close(k);
+    // The wake-up pair.
+    int wake[2];
+    CHECK(os_net_wakeup_pair(wake) == 0);
+    OsNetPoll wp = {wake[0], OS_NET_POLL_IN, 0};
+    CHECK(os_net_poll(&wp, 1, 0) == 0);
+    os_net_wakeup_signal(wake[1]);
+    CHECK(os_net_poll(&wp, 1, 0) == 1);
+    os_net_wakeup_drain(wake[0]);
+    CHECK(os_net_poll(&wp, 1, 0) == 0);
+    os_fd_close(wake[0]);
+    os_fd_close(wake[1]);
+    // Interfaces, routes, names - without asking anything off this machine.
+    OsNetInterface ifs[64];
+    int n = os_net_interfaces(ifs, 64);
+    bool loopback = false;
+    for (int i = 0; i < n && i < 64; ++i)
+        loopback |= ifs[i].loopback && ifs[i].ip == lo && ifs[i].index == lo_index;
+    CHECK(n >= 1 && loopback);
+    uint32_t src = 0;
+    CHECK(os_net_route_source(lo, &src) == 0 && src == lo);
+    char host[256];
+    CHECK(os_net_hostname(host, sizeof host) == 0 && host[0]);
+    uint32_t ips[4];
+    char canon[256];
+    CHECK(os_net_resolve("localhost", ips, 4, canon, sizeof canon) >= 1);
+    uint32_t gw = 0;
+    unsigned gw_if = 0;
+    if (os_net_default_route(&gw, &gw_if) == 0)
+        CHECK(gw != 0 && gw_if != 0);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -266,6 +366,7 @@ int main(int argc, char **argv) {
     test_vm();
     test_paths_and_descriptors();
     test_process_and_strings();
+    test_network();
     printf("%d checks, %d failures\n", g_checks, g_failures);
     if (!g_failures)
         printf("all platform tests passed\n");

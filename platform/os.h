@@ -195,6 +195,135 @@ void os_sleep_us(uint64_t us);
 int os_strcasecmp(const char *a, const char *b);
 
 // ---------------------------------------------------------------------------
+// Networking: IPv4 sockets, the host's interfaces and name lookup - what a
+// guest's sockets library needs from the host, and nothing shaped like any
+// one of them. Addresses and ports are in host byte order (a.b.c.d is
+// a<<24 | b<<16 | c<<8 | d). A socket is a descriptor, created non-blocking
+// and close-on-exec, with SIGPIPE suppressed: waiting belongs to the caller
+// (os_net_poll). Failures are -1 with errno set to the POSIX code
+// (EWOULDBLOCK, EINPROGRESS, ECONNREFUSED, ...). os_net_supported() is 0 where
+// the layer has no sockets; every other call then fails with ENOSYS.
+// ---------------------------------------------------------------------------
+int os_net_supported(void);
+enum { OS_NET_STREAM = 1, OS_NET_DGRAM = 2 };
+int os_net_socket(int type);
+int os_net_close(int s);
+int os_net_bind(int s, uint32_t ip, uint16_t port);
+int os_net_listen(int s, int backlog);
+// The connection's own descriptor, non-blocking like every other; the peer's
+// address through ip/port when they are not NULL.
+int os_net_accept(int s, uint32_t *ip, uint16_t *port);
+// -1 with EINPROGRESS while a stream connects: poll for OS_NET_POLL_OUT and
+// read the outcome from os_net_pending_error.
+int os_net_connect(int s, uint32_t ip, uint16_t port);
+int os_net_local_address(int s, uint32_t *ip, uint16_t *port);
+int os_net_peer_address(int s, uint32_t *ip, uint16_t *port);
+int os_net_shutdown(int s, int how); // 0 receiving, 1 sending, 2 both
+enum { OS_NET_MSG_OOB = 1, OS_NET_MSG_PEEK = 2, OS_NET_MSG_DONTROUTE = 4 };
+int64_t os_net_send(int s, const void *buf, size_t n, int flags);
+int64_t os_net_recv(int s, void *buf, size_t n, int flags);
+// A datagram to ip:port. A nonzero `ifindex` sends it out of that interface
+// whatever the routing table prefers (a broadcast to 255.255.255.255 leaves
+// through the default route's interface otherwise); -1 with ENOTSUP where the
+// platform cannot.
+int64_t os_net_sendto(int s, const void *buf, size_t n, int flags, uint32_t ip, uint16_t port,
+                      unsigned ifindex);
+// What os_net_recvfrom learnt about a datagram besides its bytes. to_ip and
+// ifindex are known (nonzero) only on a socket with OS_NET_OPT_RECV_DESTINATION.
+typedef struct OsNetDatagram {
+    uint32_t from_ip;
+    uint16_t from_port;
+    uint32_t to_ip;   // the address it was sent to, a broadcast address included
+    unsigned ifindex; // the interface it arrived on
+    int truncated;    // longer than the buffer: the rest is lost
+} OsNetDatagram;
+int64_t os_net_recvfrom(int s, void *buf, size_t n, int flags, OsNetDatagram *info);
+int os_net_readable(int s, uint32_t *bytes); // bytes queued to read (FIONREAD); 0 or -1
+// The socket's pending error (SO_ERROR), cleared by the read: 0, or an errno.
+int os_net_pending_error(int s);
+enum {
+    OS_NET_OPT_BROADCAST = 1,
+    OS_NET_OPT_REUSEADDR,
+    OS_NET_OPT_REUSEPORT,
+    OS_NET_OPT_KEEPALIVE,
+    OS_NET_OPT_DONTROUTE,
+    OS_NET_OPT_OOBINLINE,
+    OS_NET_OPT_RCVBUF,
+    OS_NET_OPT_SNDBUF,
+    OS_NET_OPT_LINGER, // -1 off, otherwise the seconds a close may linger
+    OS_NET_OPT_NODELAY,
+    OS_NET_OPT_TTL,
+    OS_NET_OPT_TOS,
+    OS_NET_OPT_MULTICAST_TTL,
+    OS_NET_OPT_MULTICAST_LOOP,
+    OS_NET_OPT_MULTICAST_IF,     // an interface address
+    OS_NET_OPT_RECV_DESTINATION, // fill OsNetDatagram's to_ip and ifindex
+    OS_NET_OPT_TYPE,             // read only: OS_NET_STREAM or OS_NET_DGRAM
+    OS_NET_OPT_ACCEPTCONN        // read only: listening
+};
+int os_net_set_option(int s, int option, int64_t value);
+int os_net_get_option(int s, int option, int64_t *value);
+// Joins (join 1) or leaves a multicast group on the interface with address
+// `iface` (0: the system's choice).
+int os_net_membership(int s, int join, uint32_t group, uint32_t iface);
+enum {
+    OS_NET_POLL_IN = 1,
+    OS_NET_POLL_OUT = 2,
+    OS_NET_POLL_PRI = 4,
+    OS_NET_POLL_ERR = 8,
+    OS_NET_POLL_HUP = 16
+};
+typedef struct OsNetPoll {
+    int fd;
+    int want; // OS_NET_POLL_IN | OUT | PRI; ERR and HUP are always reported
+    int got;
+} OsNetPoll;
+// How many items have something in `got`; 0 when the timeout (milliseconds,
+// -1 for none) passed first; -1 on failure.
+int os_net_poll(OsNetPoll *items, size_t n, int timeout_ms);
+// A wake-up channel for a thread parked in os_net_poll: fds[0] polls
+// OS_NET_POLL_IN once os_net_wakeup_signal(fds[1]) has written to it. Both
+// ends are non-blocking. 0 or -1.
+int os_net_wakeup_pair(int fds[2]);
+void os_net_wakeup_signal(int write_fd);
+void os_net_wakeup_drain(int read_fd);
+
+// One IPv4 address of one interface. An interface with several addresses
+// appears once per address, in the system's order; one without IPv4 does not
+// appear at all.
+typedef struct OsNetInterface {
+    char name[32];
+    unsigned index;
+    uint32_t ip, netmask;
+    uint32_t broadcast; // the directed broadcast address, 0 when it has none
+    uint32_t peer;      // the far end of a point-to-point link, 0 when none
+    uint8_t mac[8];
+    int mac_len; // 0 for an interface without a hardware address
+    int mtu;
+    int up, running, loopback, point_to_point, can_broadcast;
+} OsNetInterface;
+// Fills up to `cap` entries and returns how many there are (which may be more
+// than `cap`), or -1.
+int os_net_interfaces(OsNetInterface *out, int cap);
+// The IPv4 default route's gateway and interface; -1 when there is none.
+int os_net_default_route(uint32_t *gateway, unsigned *ifindex);
+// The local address the routing table would send to `dest` from. Sends
+// nothing. 0 or -1.
+int os_net_route_source(uint32_t dest, uint32_t *source_ip);
+// This host's name, NUL-terminated and truncated to `cap`. 0 or -1.
+int os_net_hostname(char *buf, size_t cap);
+// The IPv4 addresses `name` resolves to through the system resolver, which
+// may block for as long as it likes: the count found (at most `cap` stored),
+// the canonical name through `canonical`, or an OS_NET_RESOLVE_* failure.
+enum {
+    OS_NET_RESOLVE_NOT_FOUND = -1, // no such name
+    OS_NET_RESOLVE_AGAIN = -2,     // a temporary failure: no answer yet
+    OS_NET_RESOLVE_NO_DATA = -3,   // the name exists without an IPv4 address
+    OS_NET_RESOLVE_FAIL = -4       // the resolver failed
+};
+int os_net_resolve(const char *name, uint32_t *ips, int cap, char *canonical, size_t canonical_cap);
+
+// ---------------------------------------------------------------------------
 // Environment. Values are copied; 0 or -1.
 // ---------------------------------------------------------------------------
 int os_setenv(const char *name, const char *value);

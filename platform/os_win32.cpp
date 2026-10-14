@@ -6,6 +6,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <io.h>
 #include <process.h>
@@ -635,4 +636,99 @@ int os_unsetenv(const char *name) {
     return _putenv_s(name, "") == 0 ? 0 : -1;
 }
 
+} // extern "C"
+
+// ---------------------------------------------------------------------------
+// Networking (os.h). Not yet on Windows: a Windows host would pass a guest's
+// Winsock calls to its own, which wants a layer of its own rather than these
+// POSIX-shaped calls. Every call fails with ENOSYS, and os_net_supported()
+// says so, so the runtime's Winsock reports the network as down.
+// ---------------------------------------------------------------------------
+namespace {
+int net_nosys() {
+    errno = ENOSYS;
+    return -1;
+}
+} // namespace
+extern "C" {
+int os_net_supported(void) {
+    return 0;
+}
+int os_net_socket(int) {
+    return net_nosys();
+}
+int os_net_close(int) {
+    return net_nosys();
+}
+int os_net_bind(int, uint32_t, uint16_t) {
+    return net_nosys();
+}
+int os_net_listen(int, int) {
+    return net_nosys();
+}
+int os_net_accept(int, uint32_t *, uint16_t *) {
+    return net_nosys();
+}
+int os_net_connect(int, uint32_t, uint16_t) {
+    return net_nosys();
+}
+int os_net_local_address(int, uint32_t *, uint16_t *) {
+    return net_nosys();
+}
+int os_net_peer_address(int, uint32_t *, uint16_t *) {
+    return net_nosys();
+}
+int os_net_shutdown(int, int) {
+    return net_nosys();
+}
+int64_t os_net_send(int, const void *, size_t, int) {
+    return net_nosys();
+}
+int64_t os_net_recv(int, void *, size_t, int) {
+    return net_nosys();
+}
+int64_t os_net_sendto(int, const void *, size_t, int, uint32_t, uint16_t, unsigned) {
+    return net_nosys();
+}
+int64_t os_net_recvfrom(int, void *, size_t, int, OsNetDatagram *) {
+    return net_nosys();
+}
+int os_net_readable(int, uint32_t *) {
+    return net_nosys();
+}
+int os_net_pending_error(int) {
+    return ENOSYS;
+}
+int os_net_set_option(int, int, int64_t) {
+    return net_nosys();
+}
+int os_net_get_option(int, int, int64_t *) {
+    return net_nosys();
+}
+int os_net_membership(int, int, uint32_t, uint32_t) {
+    return net_nosys();
+}
+int os_net_poll(OsNetPoll *, size_t, int) {
+    return net_nosys();
+}
+int os_net_wakeup_pair(int *) {
+    return net_nosys();
+}
+void os_net_wakeup_signal(int) {}
+void os_net_wakeup_drain(int) {}
+int os_net_interfaces(OsNetInterface *, int) {
+    return net_nosys();
+}
+int os_net_default_route(uint32_t *, unsigned *) {
+    return net_nosys();
+}
+int os_net_route_source(uint32_t, uint32_t *) {
+    return net_nosys();
+}
+int os_net_hostname(char *, size_t) {
+    return net_nosys();
+}
+int os_net_resolve(const char *, uint32_t *, int, char *, size_t) {
+    return OS_NET_RESOLVE_FAIL;
+}
 } // extern "C"
