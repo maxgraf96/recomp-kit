@@ -19,6 +19,8 @@ owns. Compile the runtime with `-I<repo root>` so `guest.h` can find it.
 | `imports.h/.cpp` | shim table, trampoline allocation, dispatch, coverage reporting |
 | `cpu.cpp` | the call-outs `x86.h` declares, plus the `_setjmp`/`_longjmp` intrinsics |
 | `intrinsics.h` | the intrinsic contract generated code uses for `_setjmp`/`_longjmp` |
+| `dispatch.cpp` | weak `recomp_call`/`recomp_jump` through the module registry when no image table is linked (freestanding bundles), and the `recomp_libm_*` functions `freestanding.h` maps to |
+| `freestanding.h` | the C library surface generated code uses, as builtins and runtime entry points, for `RECOMP_FREESTANDING` |
 | `kernel32.cpp` | heap, files, modules, TLS, sync objects, time, strings and locale |
 | `user32.cpp` | window classes and windows, the message queue, paint/DC/input stubs |
 | `misc.cpp` | GDI32, ADVAPI32 registry, SHELL32, ole32, IMM32, WSOCK32, WINMM (clock, mmio, MIDI out) |

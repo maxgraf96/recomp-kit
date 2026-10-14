@@ -49,14 +49,19 @@ For instruction-translation changes, use the original differential harness:
 .venv/bin/python -m pytest tools/recomp/tests/test_translate_hooks.py
 ```
 
-Three translator suites need no game and run in `tools/test.py`:
+Five translator suites need no game and run in `tools/test.py`:
 `test_translate_insns.py` runs synthetic listings of individual instruction
 forms through the translator, compiles them with the test harness and
 compares registers, flags and memory with Unicorn; `test_jumptables.py`
 decodes the jump-table shapes on synthetic functions over a fake image;
 `test_translate_driver.py` covers driver rules such as what a withdrawn block
-leaves behind. Add a case there first when the translator meets an
-instruction or table shape it does not handle.
+leaves behind. `test_function_db.py` covers a function database as the
+translator's authority and translating a module at another base;
+`test_freestanding.py` compiles the instruction vocabulary with no C library,
+links a translation into a bundle with `ld64.lld` and loads it into a stand-in
+host (it needs an LLVM clang and lld, and says so when they are missing).
+Add a case there first when the translator meets an instruction or table
+shape it does not handle.
 
 The differential harness compares translated routines with original instructions
 under Unicorn. Unicorn is a development tool, not part of the playable app.

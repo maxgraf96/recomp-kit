@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Take a function database as the authority on what is code
+  (`[translate] function_db`, `[modules.aux.<key>] function_db`, schema
+  `recomp-funcdb/1`): code ranges replace section flags, its entry points and
+  alternate entries are seeded, its data-in-code ranges stay out of every
+  scan, excluded functions are never translated, and the data-pointer,
+  relocation and immediate scans are off. The report lists anything exact
+  branch following found that the database lacks.
+
+- Build freestanding bundles (`tools/build.py --target bundles`,
+  `tools/recomp/bundle.py`): generated code compiles with `-ffreestanding
+  -nostdinc` under `RECOMP_FREESTANDING` and links with `ld64.lld` alone into
+  Mach-O bundles a host `dlopen()`s; the image's table then registers like a
+  module's and the runtime dispatches it. `--cmake-target` builds a game's own
+  CMake targets.
+
 - Add the Microsoft C and C++ runtime DLLs, `msvcrt.dll` and `msvcp60.dll`, as
   programs import them: CRT start-up and exit, a fast deterministic heap that
   logs and ignores frees of interior or foreign pointers, strings and the

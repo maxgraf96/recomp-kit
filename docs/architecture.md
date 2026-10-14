@@ -46,6 +46,34 @@ imports in dependency order before the entry point; `LoadLibrary` of the
 module's name (with any path) loads its dependencies and runs its DllMain,
 and `GetProcAddress` reads its export directory, which is all the game sees.
 
+The translator moves the Ghidra listings (exported at the preferred base,
+or at the base a function database names) by the same delta, rewriting
+exactly the operand field - displacement or immediate - each relocation
+covers, and every direct branch target.
+
+A game that has classified its binaries can make that classification
+authoritative with `function_db` (`translate.py` `FunctionDB`, schema
+`recomp-funcdb/1`): code ranges instead of section flags, every function start
+and alternate entry seeded, data inside code kept out of every scan, excluded
+regions never translated, and no speculative pointer scan at all. The
+translation report's `function_db` section lists what exact branch following
+found that the database lacks.
+
+## Freestanding bundles
+
+`tools/build.py --target bundles` (`tools/recomp/bundle.py`) compiles every
+translated module with `-ffreestanding -nostdinc` and `RECOMP_FREESTANDING`
+(`runtime/freestanding.h`: compiler builtins, plus `recomp_libm_*` runtime
+entry points for the library math) and links each with `ld64.lld -bundle
+-undefined dynamic_lookup` into `build/recomp/bundles/<key>.bundle`. No SDK
+header or library stub is involved, so an LLVM toolchain alone builds them. A
+host `dlopen()`s the bundles instead of linking the generated archives: every
+table, the image's included, registers itself as a `RecompModule`, and the
+runtime's weak `recomp_call`/`recomp_jump` (`runtime/dispatch.cpp`) dispatch
+through the registry. A bundle may ask the host only for runtime entry points,
+`memcpy`/`memmove`/`memset`/`memcmp` and `setjmp`; `bundle.py` fails the build
+otherwise.
+
 ## Threads and ownership
 
 Original game threads are cooperatively scheduled by `runtime/kernel32.cpp`.
