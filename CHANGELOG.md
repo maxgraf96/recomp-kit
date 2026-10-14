@@ -11,8 +11,12 @@
   guest heap; WS2_32 shares WSOCK32's `WSAStartup`/`WSACleanup` and gains the
   byte-order functions, `inet_addr` and a `gethostbyname` that never waits on
   DNS; and `com_register_guest_class` lets a host serve a COM class the kit
-  does not model through `CoCreateInstance`. `loader_tests` and `dx_tests`
-  cover them.
+  does not model through `CoCreateInstance`. Also `GetFileTime`,
+  `CompareFileTime`, `GetFileAttributesExA`, `GlobalSize`,
+  `GetWindowsDirectoryA`, `GetTempPathA`/`GetTempFileNameA`,
+  `GetShortPathNameA`, `WaitForSingleObjectEx`, `lstrcpynA`,
+  `RegDeleteKeyA`/`RegDeleteValueA`, and WINMM's aux functions reporting no
+  device. `loader_tests` and `dx_tests` cover them.
 
 - Serve DirectDraw 7 and Direct3D 7 to a game that opts in (`[runtime] ddraw7`
   in game.toml): `IDirectDraw7`, `IDirectDrawSurface7`, `IDirect3D7`, the HAL
