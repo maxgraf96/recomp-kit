@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Put guest memory at exact addresses for replay tools: `mem_open` opens a
+  range anywhere in the 32-bit space, above `[game] guest_size` included,
+  with `gm_valid`, `gm_str` and msvcrt's string scans accepting it
+  (`mem_readable_end`), and `heap_exclude` keeps the guest heap out of a
+  range in the base arena as well as in growth. `loader_tests` covers both.
+
 - Run MSVC exception handling: `_CxxThrowException`, `__CxxFrameHandler`
   (catch by type, reference, pointer and base class, `catch(...)`, copy
   constructors, unwinding, rethrow, try blocks inside catch blocks),

@@ -57,8 +57,12 @@ static const uint16_t GUEST_INITIAL_FPU_CW = 0x027f;
 // Memory accessors. Loads and stores use x86.h's rd8/rd16/rd32 and
 // wr8/wr16/wr32; the helpers here cover what x86.h does not.
 // ---------------------------------------------------------------------------
+// True when [a, a+n) lies in ranges mem_open opened above guest_size
+// (memory.cpp). Only gm_valid's slow path asks, and nothing is open unless a
+// tool opened it.
+bool mem_opened(uint32_t a, uint32_t n);
 static inline bool gm_valid(uint32_t a, uint32_t n) {
-    return a < GUEST_SIZE && n <= GUEST_SIZE - a;
+    return (a < GUEST_SIZE && n <= GUEST_SIZE - a) || mem_opened(a, n);
 }
 static inline uint8_t *gm_ptr(uint32_t a) {
     return g_mem + a;

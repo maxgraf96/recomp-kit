@@ -727,6 +727,73 @@ static void test_heap_growth(Config &cfg) {
           "freeing both leaves a consistent heap");
 }
 
+// What a replay of recorded guest calls needs: memory at the exact addresses
+// the recording names, above guest_size included, and a heap that keeps out
+// of it while guest code allocates around it.
+static void test_exact_ranges(Config &cfg) {
+    section("memory at exact addresses: mem_open, heap_exclude");
+    if (!load(cfg))
+        return;
+    if (!mem_guarded()) {
+        check(true, "no guarded arena on this host (skipped)");
+        return;
+    }
+    const uint32_t high = 0x40001234u;
+    check(!gm_valid(high, 4) && !mem_committed(high, 4) && mem_readable_end(high) == high,
+          "%08x, above guest_size, is shut", high);
+    check(mem_open(high, 0x2000), "mem_open opens %08x+0x2000", high);
+    check(gm_valid(high, 0x2000) && mem_committed(high, 0x2000),
+          "the shims' checks accept the opened range");
+    wr32(high, 0xfeedfaceu);
+    gm_put_str(high + 4, "replayed", 16);
+    check(rd32(high) == 0xfeedfaceu && gm_str(high + 4) == "replayed",
+          "it is ordinary guest memory, strings included");
+    check(mem_readable_end(high) == 0x40010000u, "readable to the end of its 64 KB grain (%08x)",
+          mem_readable_end(high));
+    check(!gm_valid(0x40010000u, 1) && !gm_valid(high, 0x10000) &&
+              mem_readable_end(0x50000000u) == 0x50000000u,
+          "and nothing past it");
+    check(mem_open(GUEST_SIZE - 0x10, 0x20) && gm_valid(GUEST_SIZE - 8, 16) &&
+              mem_readable_end(0x00400000u) > GUEST_SIZE,
+          "a range across guest_size continues the arena (readable to %08x)",
+          mem_readable_end(0x00400000u));
+    check(!mem_open(0xffff8000u, 0x100) && !mem_open(high, 0),
+          "nothing past 0xffff0000, and no empty range");
+
+    const uint32_t hole = heap_alloc(0x20000, false, 0x1000);
+    const uint64_t span = heap_span();
+    check(hole != 0 && heap_free(hole), "a free stretch of the base arena at %08x", hole);
+    check(heap_exclude(hole + 0x10, 0x1fff0) && heap_span() == span - 0x20000,
+          "heap_exclude takes it, in whole pages");
+    std::vector<uint32_t> blocks;
+    bool clear = true;
+    for (uint32_t i = 0; i < 96; ++i) {
+        const uint32_t size = 0x800u * (1 + i % 7);
+        const uint32_t b = heap_alloc(size);
+        blocks.push_back(b);
+        clear &= b != 0 && (b + size <= hole || b >= hole + 0x20000);
+    }
+    check(clear, "no allocation lands in it");
+    check(heap_check().empty(), "the heap is consistent around the hole: %s", heap_check().c_str());
+    check(!heap_exclude(blocks[5] + 0x10, 0x10), "a range over a live block is refused");
+    for (uint32_t b : blocks)
+        heap_free(b);
+    const uint32_t again = heap_alloc(0x20000);
+    check(heap_check().empty() && (again + 0x20000 <= hole || again >= hole + 0x20000),
+          "freeing everything never bridges it: %s", heap_check().c_str());
+    heap_free(again);
+    if (GUEST_SIZE > GUEST_SHIM_END) {
+        check(heap_exclude(GUEST_SHIM_END, GUEST_SIZE - GUEST_SHIM_END),
+              "excluding everything above the trampolines");
+        check(heap_alloc(HEAP_LIMIT - HEAP_BASE) == 0,
+              "leaves growth nowhere to go for a block the base arena cannot hold");
+    }
+    load(cfg);
+    check(!gm_valid(high, 4) && !mem_committed(high, 4), "mem_init shuts what was opened");
+    check(heap_span() == (uint64_t)(HEAP_LIMIT - HEAP_BASE) && heap_check().empty(),
+          "and gives the heap its whole base arena back");
+}
+
 // ---------------------------------------------------------------------------
 // Children: the guarded arena and strict mode end the process by design, so
 // they run in a copy of this binary. A stop through abort() would also wake
@@ -920,6 +987,7 @@ int main(int argc, char **argv) {
     test_static_attach(c);
     test_dynamic_load(c);
     test_heap_growth(cfg);
+    test_exact_ranges(cfg);
     test_import_cycle(cfg);
     test_dll_main_image(cfg);
     test_guards_and_strict(argv[0]);

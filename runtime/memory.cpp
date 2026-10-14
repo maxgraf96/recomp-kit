@@ -174,7 +174,8 @@ std::string gm_str(uint32_t a, size_t max_len) {
     if (a == 0)
         return std::string();
     std::string out;
-    for (size_t i = 0; i < max_len && a + i < GUEST_SIZE; ++i) {
+    const uint32_t end = mem_readable_end(a);
+    for (size_t i = 0; i < max_len && a + i < end; ++i) {
         char ch = (char)g_mem[a + i];
         if (!ch)
             break;
@@ -200,7 +201,7 @@ std::string gm_wstr(uint32_t a, size_t max_chars) {
     if (!a || !gm_valid(a, 2))
         return out;
     // Clamp before address arithmetic, including the lookahead for a low surrogate.
-    max_chars = std::min(max_chars, (size_t)(GUEST_SIZE - a) / 2);
+    max_chars = std::min(max_chars, (size_t)(mem_readable_end(a) - a) / 2);
     for (size_t i = 0; i < max_chars; ++i) {
         uint32_t u = rd16(a + 2 * (uint32_t)i);
         if (!u)
@@ -236,7 +237,7 @@ std::string gm_wstr(uint32_t a, size_t max_chars) {
 uint32_t gm_put_wstr(uint32_t a, const std::string &s, uint32_t cap) {
     if (!a || !cap || !gm_valid(a, 2))
         return 0;
-    cap = std::min(cap, (GUEST_SIZE - a) / 2);
+    cap = std::min(cap, (mem_readable_end(a) - a) / 2);
     uint32_t n = 0;
     size_t i = 0;
     while (i < s.size() && n + 1 < cap) {
@@ -414,7 +415,7 @@ bool mem_commit(uint32_t addr, uint32_t size) {
 
 bool mem_committed(uint32_t addr, uint32_t size) {
     if (!g_mem || addr >= GUEST_SIZE || size > GUEST_SIZE - addr)
-        return false;
+        return mem_opened(addr, size);
     return !(g_null_guard && addr < GUEST_NULL_LIMIT);
 }
 
@@ -423,6 +424,72 @@ void mem_reserve_range(uint32_t addr, uint32_t size) {
         add_span(reserved_ranges(), page_down(addr),
                  (uint32_t)std::min<uint64_t>(((uint64_t)addr + size + 0xfffu) & ~0xfffull,
                                               0xfffff000u));
+}
+
+namespace {
+// Spans mem_open committed above GUEST_SIZE, merged, in address order. Ends
+// are at most OPEN_LIMIT, so they fit a uint32_t.
+std::vector<std::pair<uint32_t, uint32_t>> &opened_ranges() {
+    static auto *v = new std::vector<std::pair<uint32_t, uint32_t>>();
+    return *v;
+}
+const uint64_t OPEN_LIMIT = 0xffff0000ull;
+const uint32_t OPEN_GRAIN = 0x10000u; // a multiple of every host page size
+
+// The opened span holding `a`, or end().
+std::vector<std::pair<uint32_t, uint32_t>>::const_iterator opened_span(uint32_t a) {
+    const auto &v = opened_ranges();
+    auto it = std::upper_bound(v.begin(), v.end(), std::make_pair(a, 0xffffffffu));
+    if (it == v.begin())
+        return v.end();
+    --it;
+    return a < it->second ? it : v.end();
+}
+} // namespace
+
+bool mem_opened(uint32_t a, uint32_t n) {
+    if (opened_ranges().empty() || !g_mem)
+        return false;
+    // Spans are merged, so a range is covered only by the one span holding
+    // its first byte - or, when it starts in the arena, by the span that
+    // continues the arena at GUEST_SIZE.
+    const uint64_t end = (uint64_t)a + n;
+    if (a < GUEST_SIZE) {
+        if (g_null_guard && a < GUEST_NULL_LIMIT)
+            return false;
+        auto it = opened_span(GUEST_SIZE);
+        return it != opened_ranges().end() && end <= it->second;
+    }
+    auto it = opened_span(a);
+    return it != opened_ranges().end() && end <= it->second;
+}
+
+uint32_t mem_readable_end(uint32_t a) {
+    if (!g_mem)
+        return a;
+    const uint32_t from = a < GUEST_SIZE ? GUEST_SIZE : a;
+    auto it = opened_span(from);
+    if (it == opened_ranges().end())
+        return from;
+    return it->second;
+}
+
+bool mem_open(uint32_t addr, uint32_t size) {
+    if (!g_mem || !size || (uint64_t)addr + size > OPEN_LIMIT)
+        return false;
+    if (g_null_guard && addr < GUEST_NULL_LIMIT)
+        return false;
+    if ((uint64_t)addr + size <= GUEST_SIZE)
+        return mem_commit(addr, size);
+    if (!g_guarded)
+        return false;
+    // Whole grains: committing the arena's own last grain again is harmless.
+    const uint32_t lo = std::max<uint32_t>(addr, GUEST_SIZE) & ~(OPEN_GRAIN - 1);
+    const uint64_t hi = ((uint64_t)addr + size + OPEN_GRAIN - 1) & ~(uint64_t)(OPEN_GRAIN - 1);
+    if (os_vm_commit(g_mem + lo, (size_t)(hi - lo)) != 0)
+        return false;
+    add_span(opened_ranges(), std::max<uint32_t>(lo, GUEST_SIZE), (uint32_t)hi);
+    return true;
 }
 
 namespace {
@@ -558,6 +625,7 @@ void mem_init() {
         g_reserved = 0;
     }
     reserved_ranges().clear();
+    opened_ranges().clear(); // a fresh reservation has none of them open
     // The guarded arena: reserve all 4 GB, open [0, GUEST_SIZE). Without it,
     // the plain mapping the kit always had.
     g_guarded = false;
@@ -614,6 +682,7 @@ void mem_shutdown() {
     }
     g_guarded = g_null_guard = false;
     reserved_ranges().clear();
+    opened_ranges().clear();
     if (g_blocks) {
         delete g_blocks;
         g_blocks = nullptr;
@@ -764,6 +833,55 @@ bool heap_free(uint32_t addr) {
     return true;
 }
 
+// The range leaves the heap as a hole: free blocks across it are cut back to
+// its edges and the segments they tile are split there, so the blocks still
+// tile every segment (heap_check) and coalescing, which joins only blocks
+// that touch, never bridges it. Growth skips it as it skips a module range.
+bool heap_exclude(uint32_t addr, uint32_t size) {
+    if (!size)
+        return true;
+    const uint32_t lo = page_down(addr);
+    const uint32_t hi =
+        (uint32_t)std::min<uint64_t>(((uint64_t)addr + size + 0xfffu) & ~0xfffull, 0xfffff000u);
+    if (hi <= lo)
+        return false;
+    if (g_blocks && g_segments) {
+        // The first block that can reach lo: the last one starting at or below it.
+        auto first = g_blocks->upper_bound(lo);
+        if (first != g_blocks->begin())
+            --first;
+        for (auto it = first; it != g_blocks->end() && it->first < hi; ++it)
+            if (it->second.used && it->first + it->second.size > lo)
+                return false;
+        for (auto it = first; it != g_blocks->end() && it->first < hi;) {
+            const uint32_t b = it->first, e = b + it->second.size;
+            auto next = std::next(it);
+            if (e > lo) {
+                drop_block(it);
+                if (b < lo)
+                    put_block(b, lo - b, 0, false);
+                if (e > hi)
+                    put_block(hi, e - hi, 0, false);
+            }
+            it = next;
+        }
+        std::vector<std::pair<uint32_t, uint32_t>> kept;
+        for (const auto &s : *g_segments) {
+            if (s.second <= lo || s.first >= hi) {
+                kept.push_back(s);
+                continue;
+            }
+            if (s.first < lo)
+                kept.push_back({s.first, lo});
+            if (s.second > hi)
+                kept.push_back({hi, s.second});
+        }
+        g_segments->swap(kept);
+    }
+    mem_reserve_range(lo, hi - lo);
+    return true;
+}
+
 // Resize a guest heap allocation in place when possible, otherwise copy into a new block.
 // Reject arena-sized overflow requests and leave the original allocation live if growth fails.
 uint32_t heap_realloc(uint32_t addr, uint32_t new_size, bool zero) {
@@ -865,6 +983,9 @@ HeapStats heap_stats() {
 std::string heap_check() {
     if (!g_blocks)
         return "heap not initialised";
+    // heap_exclude can take the base arena whole before anything has grown.
+    if (g_segments->empty())
+        return g_blocks->empty() ? std::string() : std::string("blocks outside every segment");
     // Blocks tile each heap segment exactly, in address order.
     size_t segment = 0;
     uint32_t cursor = (*g_segments)[0].first;

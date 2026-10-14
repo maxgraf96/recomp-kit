@@ -27,6 +27,22 @@ bool mem_committed(uint32_t addr, uint32_t size);
 // must stay free whether or not the module is loaded yet. Call before guest
 // code runs.
 void mem_reserve_range(uint32_t addr, uint32_t size);
+// Opens [addr, addr+size) at exactly those guest addresses, for a tool that
+// must put recorded guest memory back where it was (a replay of calls
+// captured from the original program, whose heap can lie anywhere in the
+// 4 GB). Below guest_size this is mem_commit. Above it, on a guarded arena,
+// the enclosing 64 KB-aligned span is committed inside the reservation and
+// reads as zeros until written; generated code reaches it like any guest
+// memory, and the shims' address checks (gm_valid, gm_str, the C runtime's
+// string scans) accept it as they accept the arena. mem_init closes it again.
+// False when the range cannot be opened: no guarded arena, the null page
+// while it is guarded, or past 0xffff0000 (Windows maps nothing there either).
+bool mem_open(uint32_t addr, uint32_t size);
+// One past the last byte of the readable run that starts at `a`: guest_size
+// for an address in the arena (further when an opened range continues it),
+// the end of the opened range holding `a`, or `a` itself when none does.
+// What a scan for a terminator may read up to.
+uint32_t mem_readable_end(uint32_t a);
 // The first 64 KB fault, as on Windows, instead of reading as zeros. Armed by
 // mem_init under strict mode (recomp_strict()) or RECOMP_NULL_GUARD=1, and off
 // with RECOMP_NULL_GUARD=0; only a guarded arena can do it.
@@ -48,6 +64,13 @@ uint32_t heap_alloc(uint32_t size, bool zero = false, uint32_t align = 16);
 // Returns the new address or 0 (in which case the old block is untouched).
 uint32_t heap_realloc(uint32_t addr, uint32_t new_size, bool zero = false);
 bool heap_free(uint32_t addr);
+// Takes [addr, addr+size), widened to whole 4 KB pages, away from the heap
+// until the next mem_init: neither the base arena nor growth hands out a byte
+// of it. For memory a caller places at exact addresses (mem_open) while guest
+// code goes on allocating around it; call it before anything is allocated
+// there, e.g. from a mem_add_reset_hook callback. False, with the heap
+// unchanged, when a live block overlaps the range.
+bool heap_exclude(uint32_t addr, uint32_t size);
 // Requested (not rounded) size of a live block, or 0xffffffff if `addr` is not
 // the start of a live allocation.
 uint32_t heap_size(uint32_t addr);

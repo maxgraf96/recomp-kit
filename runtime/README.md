@@ -58,6 +58,17 @@ WebAssembly and other hosts that cannot reserve 4 GB keep the plain mapping.
 configured module occupies (`mem_reserve_range`), so `[game] guest_size =
 0x40000000` gives a game about a gigabyte more heap.
 
+**Memory at exact addresses.** A tool that puts recorded guest memory back
+where the original program had it - a replay of calls captured on Windows,
+whose heap can lie anywhere in the 4 GB - uses two calls. `mem_open(addr,
+size)` opens a range at exactly those addresses, above `GUEST_SIZE` included
+(whole 64 KB grains, guarded arena only): generated code reaches it like any
+guest memory, and `gm_valid`, `gm_str` and the C runtime's string scans
+(`mem_readable_end`) accept it as they accept the arena. `heap_exclude(addr,
+size)` takes a range away from the heap, base arena and growth alike, before
+anything is allocated there - typically from a `mem_add_reset_hook` callback,
+so the DllMains and the runtime allocate around it. `mem_init` undoes both.
+
 **Modules sit at configured bases, relocated.** A DLL's `[modules.aux.*] base`
 need not be its preferred ImageBase: the loader applies the PE's base
 relocations as it maps it, exactly as the translator does to the bytes and

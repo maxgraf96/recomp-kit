@@ -13,16 +13,20 @@
 
 namespace crt {
 
+// Scans stop where readable guest memory does: the arena's end, or the end of
+// a range mem_open opened above it.
 uint32_t gstrlen(uint32_t a) {
-    if (a >= GUEST_SIZE)
+    const uint32_t limit = mem_readable_end(a);
+    if (a >= limit)
         return 0;
-    const void *end = memchr(g_mem + a, 0, GUEST_SIZE - a);
-    return end ? uint32_t((const uint8_t *)end - (g_mem + a)) : GUEST_SIZE - a;
+    const void *end = memchr(g_mem + a, 0, limit - a);
+    return end ? uint32_t((const uint8_t *)end - (g_mem + a)) : limit - a;
 }
 
 uint32_t gwcslen(uint32_t a) {
+    const uint32_t limit = mem_readable_end(a);
     uint32_t n = 0;
-    while (a + 2 * n + 1 < GUEST_SIZE && rd16(a + 2 * n))
+    while ((uint64_t)a + 2 * n + 1 < limit && rd16(a + 2 * n))
         ++n;
     return n;
 }
