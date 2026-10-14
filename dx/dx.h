@@ -64,8 +64,8 @@ void dsound_reset();
 void dshow_reset();
 void dinput_reset();
 void bink_reset();
-// Drops Miles drivers, sample and stream handles and the static strings it
-// hands out, and restores the preference defaults.
+// Drops Miles drivers, sample and stream handles, the static strings it hands
+// out and the decoded-sample cache, and restores the preference defaults.
 void mss32_reset();
 void fmod_reset();
 void soundlib_reset();
@@ -125,6 +125,8 @@ uint32_t dsound_shared_device();
 void qmixer_frame_pump(X86 *c);
 // Refills Miles streams on the guest frame seam.
 void mss32_frame_pump(X86 *c);
+// Test only: compressed Miles samples decoded, and loads served from that cache.
+void mss32_decode_stats(uint64_t *decodes, uint64_t *hits);
 // Decode FMOD streams and schedule Soundlib MIDI events on the guest thread.
 void fmod_frame_pump(X86 *c);
 void soundlib_frame_pump(X86 *c);

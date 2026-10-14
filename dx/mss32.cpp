@@ -118,15 +118,65 @@ void set_error(const char *text) {
     LOGV("mss32: %s", text);
 }
 
-// A compressed sample: the whole image decoded to PCM the host can play.
+// A compressed sample decodes once per distinct image. A mixer plugin hands
+// the same image to set_named_sample_file on every load and on every play,
+// and a three-minute MP3 takes a perceptible moment to decode, so the PCM is
+// kept by content - not by guest address, which a freed image's successor
+// may reuse - and shared by every sample playing it. Entries no sample holds
+// are dropped oldest first beyond the budget.
 struct Decoded {
     std::vector<int16_t> pcm;
     uint32_t rate = 0, channels = 0;
 };
+struct DecodedEntry {
+    uint64_t hash = 0, used = 0;
+    uint32_t bytes = 0;
+    std::shared_ptr<const Decoded> data;
+};
+std::vector<DecodedEntry> g_decoded;
+uint64_t g_decode_clock = 0, g_decodes = 0, g_decode_hits = 0;
+constexpr size_t kDecodedBudget = 256u << 20;
 constexpr size_t kDecodedLimit = 64u << 20; // samples of one image, as before
+
+uint64_t image_hash(const uint8_t *p, uint32_t n) {
+    uint64_t h = 0x9e3779b97f4a7c15ull ^ n;
+    uint32_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        uint64_t w;
+        memcpy(&w, p + i, 8);
+        h = (h ^ w) * 0x100000001b3ull;
+        h ^= h >> 29;
+    }
+    for (; i < n; ++i)
+        h = (h ^ p[i]) * 0x100000001b3ull;
+    return h;
+}
+
+void decoded_trim() {
+    size_t total = 0;
+    for (const auto &e : g_decoded)
+        total += e.data->pcm.size() * 2;
+    while (total > kDecodedBudget) {
+        auto victim = g_decoded.end();
+        for (auto it = g_decoded.begin(); it != g_decoded.end(); ++it)
+            if (it->data.use_count() == 1 && (victim == g_decoded.end() || it->used < victim->used))
+                victim = it;
+        if (victim == g_decoded.end())
+            return; // everything left is playing
+        total -= victim->data->pcm.size() * 2;
+        g_decoded.erase(victim);
+    }
+}
 
 std::shared_ptr<const Decoded> decode_mp3(uint32_t image, uint32_t bytes) {
     const uint8_t *p = g_mem + image;
+    uint64_t hash = image_hash(p, bytes);
+    for (auto &e : g_decoded)
+        if (e.hash == hash && e.bytes == bytes) {
+            e.used = ++g_decode_clock;
+            ++g_decode_hits;
+            return e.data;
+        }
     Mp3Source source;
     if (!source.open(std::vector<uint8_t>(p, p + bytes)))
         return nullptr;
@@ -141,6 +191,9 @@ std::shared_ptr<const Decoded> decode_mp3(uint32_t image, uint32_t bytes) {
     }
     if (out->pcm.empty())
         return nullptr;
+    ++g_decodes;
+    g_decoded.push_back({hash, ++g_decode_clock, bytes, out});
+    decoded_trim();
     return out;
 }
 
@@ -450,7 +503,7 @@ void ail_set_sample_file(X86 *c) {
 // decoder by the name (an MP3 decoder provider claims "*.mp3"; ".wav" goes to
 // its own RIFF reader); this reads the image itself, which agrees on every
 // image Miles plays and also takes packed MP3 effects under other names.
-// RIFF PCM plays from guest memory; MP3 decodes here, whole.
+// RIFF PCM plays from guest memory; MP3 decodes once per image (above).
 void ail_set_named_sample_file(X86 *c) {
     Sample *s = sample_for(arg(c, 0));
     set_eax(c, 0);
@@ -1074,6 +1127,13 @@ void mss32_frame_pump(X86 *c) {
     service(c);
 }
 
+void mss32_decode_stats(uint64_t *decodes, uint64_t *hits) {
+    if (decodes)
+        *decodes = g_decodes;
+    if (hits)
+        *hits = g_decode_hits;
+}
+
 void mss32_reset() {
     // The samples' channels went with dx_reset's channel table, and their
     // images, the static strings and every stream's channel with the arena.
@@ -1084,6 +1144,8 @@ void mss32_reset() {
     g_drivers.clear();
     g_next_driver = 0x10000;
     g_last_error = g_redist = 0;
+    g_decoded.clear();
+    g_decodes = g_decode_hits = 0;
     preferences_default();
 }
 

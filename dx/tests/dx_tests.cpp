@@ -7705,6 +7705,73 @@ static void test_mss32_sample_calls() {
     g_sample_tracking = false;
 }
 
+// An MP3 sample: decoded once per image whatever its address, positions in
+// the image's own bytes, granularity 1, ms from the decoded length.
+static void test_mss32_mp3_sample() {
+    cpu_reset();
+    mss32_fresh();
+    g_sample_tracking = true;
+    g_plays.clear();
+    g_test_audio_pos = 0;
+    const uint32_t size = sizeof kToneMp3;
+    uint32_t drv = ail("_AIL_open_digital_driver@16", {22050, 16, 2, 1});
+    uint32_t h = ail("_AIL_allocate_sample_handle@4", {drv});
+    uint32_t h2 = ail("_AIL_allocate_sample_handle@4", {drv});
+    uint32_t img = heap_alloc(size), img2 = heap_alloc(size);
+    memcpy(g_mem + img, kToneMp3, size);
+    memcpy(g_mem + img2, kToneMp3, size);
+    uint32_t name = sc(0x300);
+    gm_put_str(name, "music\\tone.mp3", 0x100);
+    CHECK_EQ(ail("_AIL_set_named_sample_file@20", {h, name, img, size, 0}), 1u);
+    uint64_t decodes = 0, hits = 0;
+    mss32_decode_stats(&decodes, &hits);
+    CHECK_EQ(decodes, 1u);
+    CHECK_EQ(hits, 0u);
+    CHECK_EQ(ail("_AIL_sample_granularity@4", {h}), 1u);
+    CHECK_EQ(ail("_AIL_sample_playback_rate@4", {h}), 44100u);
+    ail("_AIL_sample_ms_position@12", {h, sc(0), sc(4)});
+    CHECK_EQ(rd32(sc(0)), 157u); // 6912 frames at 44100 Hz
+    CHECK_EQ(rd32(sc(4)), 0u);
+
+    // The same image, here at another address, is served from the cache.
+    CHECK_EQ(ail("_AIL_set_named_sample_file@20", {h2, name, img2, size, 0}), 1u);
+    mss32_decode_stats(&decodes, &hits);
+    CHECK_EQ(decodes, 1u);
+    CHECK_EQ(hits, 1u);
+    // A different image decodes on its own.
+    CHECK_EQ(ail("_AIL_set_named_sample_file@20", {h2, name, img2, size / 2, 0}), 1u);
+    mss32_decode_stats(&decodes, &hits);
+    CHECK_EQ(decodes, 2u);
+
+    ail("_AIL_start_sample@4", {h});
+    CHECK_EQ(g_plays.size(), 1u);
+    if (!g_plays.empty()) {
+        CHECK_EQ(g_plays.back().bits, 16);
+        CHECK_EQ(g_plays.back().channels, 2);
+        CHECK_EQ(g_plays.back().rate, 44100);
+        CHECK_EQ(g_plays.back().bytes, 27648u);
+        CHECK(g_plays.back().pcm.size() == 27648u);
+    }
+    // Half way through the PCM is half way through the image.
+    g_test_audio_pos = 27648 / 2;
+    CHECK_EQ(ail("_AIL_sample_position@4", {h}), 1589u);
+    ail("_AIL_sample_ms_position@12", {h, sc(0), sc(4)});
+    CHECK_EQ(rd32(sc(0)), 157u);
+    CHECK_EQ(rd32(sc(4)), 78u);
+    ail("_AIL_set_sample_position@8", {h, size / 4});
+    CHECK_EQ(g_plays.back().start_offset, 6904u); // 794 image bytes, as whole PCM frames
+    ail("_AIL_end_sample@4", {h});
+    g_test_audio_pos = 0;
+
+    ail("_AIL_release_sample_handle@4", {h});
+    ail("_AIL_release_sample_handle@4", {h2});
+    ail("_AIL_close_digital_driver@4", {drv});
+    heap_free(img);
+    heap_free(img2);
+    g_sample_playing.clear();
+    g_sample_tracking = false;
+}
+
 static void test_bink_smack_stubs() {
     cpu_reset();
     uint32_t name = sc(0x100);
@@ -13319,6 +13386,7 @@ int main() {
         {"Miles DirectSound", test_mss32_directsound},
         {"DirectSound shared device", test_dsound_shared_device},
         {"Miles sample calls", test_mss32_sample_calls},
+        {"Miles MP3 samples", test_mss32_mp3_sample},
         {"Bink/Smacker stubs", test_bink_smack_stubs},
         {"Bink entry points resolve", test_bink_entry_points_resolve},
         {"video frame conversion", test_video_frame_convert},
