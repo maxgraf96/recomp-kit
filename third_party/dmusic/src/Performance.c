@@ -795,6 +795,12 @@ static void DmPerformance_handleMessage(DmPerformance* slf, DmMessage* msg) {
 		DmPerformance_handleSegmentMessage(slf, &msg->segment);
 		break;
 	case DmMessage_STYLE:
+		if (msg->style.style == NULL) {
+			// The style was not downloaded (its file is missing): there is nothing to compose from.
+			Dm_report(DmLogLevel_WARN, "DmPerformance: Style change without a loaded style ignored");
+			break;
+		}
+
 		Dm_report(DmLogLevel_TRACE,
 		          "DmPerformance(Message): time=%d type=style-change name=\"%s\"",
 		          slf->time,

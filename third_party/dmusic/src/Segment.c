@@ -55,24 +55,25 @@ DmResult DmSegment_download(DmSegment* slf, DmLoader* loader) {
 		return DmResult_SUCCESS;
 	}
 
+	// Every band and style is downloaded even when one fails, so that one missing file costs only what depends
+	// on it; the first failure is reported.
 	DmResult rv = DmResult_SUCCESS;
 	for (size_t i = 0; i < slf->messages.length; ++i) {
 		DmMessage* msg = slf->messages.data + i;
+		DmResult res = DmResult_SUCCESS;
 
 		if (msg->type == DmMessage_BAND) {
-			rv = DmBand_download(msg->band.band, loader);
+			res = DmBand_download(msg->band.band, loader);
 		} else if (msg->type == DmMessage_STYLE) {
-			rv = DmLoader_getStyle(loader, &msg->style.reference, &msg->style.style);
+			res = DmLoader_getStyle(loader, &msg->style.reference, &msg->style.style);
 
-			if (rv != DmResult_SUCCESS) {
-				break;
+			if (res == DmResult_SUCCESS) {
+				res = DmStyle_download(msg->style.style, loader);
 			}
-
-			rv = DmStyle_download(msg->style.style, loader);
 		}
 
-		if (rv != DmResult_SUCCESS) {
-			break;
+		if (rv == DmResult_SUCCESS) {
+			rv = res;
 		}
 	}
 

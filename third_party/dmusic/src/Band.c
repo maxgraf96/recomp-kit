@@ -149,8 +149,23 @@ DmResult DmBand_download(DmBand* slf, DmLoader* loader) {
 			          instrument->reference.name);
 		}
 
-		rv = DmLoader_getDownloadableSound(loader, &instrument->reference, &instrument->dls);
-		if (rv != DmResult_SUCCESS || instrument->dls == NULL) {
+		DmResult res = DmLoader_getDownloadableSound(loader, &instrument->reference, &instrument->dls);
+		if (res == DmResult_NOT_FOUND || res == DmResult_FILE_CORRUPT) {
+			// Like a partial download in DirectMusic: this instrument stays silent, the rest of the band plays.
+			Dm_report(DmLogLevel_WARN,
+			          "DmBand: DLS collection '%s' for instrument '%s' of band '%s' is not available",
+			          instrument->reference.file != NULL ? instrument->reference.file : "",
+			          instrument->reference.name != NULL ? instrument->reference.name : "",
+			          slf->info.unam != NULL ? slf->info.unam : "");
+			continue;
+		}
+
+		if (res != DmResult_SUCCESS) {
+			rv = res;
+			continue;
+		}
+
+		if (instrument->dls == NULL) {
 			continue;
 		}
 

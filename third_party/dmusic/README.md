@@ -59,6 +59,7 @@ git format-patch --relative=third_party/dmusic <commit>^!   # one upstream-ready
 | Segment repeats setter (`DmSegment_setRepeats`) | `IDirectMusicSegment::SetRepeats`: a game sets how often a segment loops, whatever its file says. |
 | Read the playing state under the lock | `playSegment` computed its boundary and `playTransition` composed from the playing style, band and chord without the performance lock, racing the render thread that changes them; a transition from a segment without a style dereferenced a null style. |
 | A segment ends after its last repeat; `DmPerformance_isPlaying` | A DirectMusic segment state ends after its length times (repeats + 1); upstream let the style choose patterns for ever. **Changes behaviour** for a player that relied on endless playback: it should set the repeats (DirectMusic's `DMUS_SEG_REPEAT_INFINITE` is `0xFFFFFFFF`). `isPlaying` tells an API layer when the segment has ended. |
+| A missing DLS collection leaves its instruments silent | A band whose collection is missing (a system GM bank that is not installed) failed the whole download, and with automatic download the segment would not load; the first failure also stopped the remaining bands and the style downloading. Now each missing collection is a warning, every band and style is still downloaded, and a style that could not be loaded is skipped at play time instead of dereferenced. |
 
 To move to a newer upstream commit, replace the files listed under *What is
 here*, re-apply the patches that upstream has not taken, and run

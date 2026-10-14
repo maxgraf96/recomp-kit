@@ -54,11 +54,12 @@ DmResult DmStyle_download(DmStyle* slf, DmLoader* loader) {
 		return DmResult_INVALID_ARGUMENT;
 	}
 
+	// Every band is downloaded even when one fails; the first failure is reported.
 	DmResult rv = DmResult_SUCCESS;
 	for (size_t i = 0; i < slf->bands.length; ++i) {
-		rv = DmBand_download(slf->bands.data[i], loader);
-		if (rv != DmResult_SUCCESS) {
-			break;
+		DmResult res = DmBand_download(slf->bands.data[i], loader);
+		if (rv == DmResult_SUCCESS) {
+			rv = res;
 		}
 	}
 
