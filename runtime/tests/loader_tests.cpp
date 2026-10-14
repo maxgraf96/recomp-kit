@@ -2,7 +2,7 @@
 // relocation to a configured base, import binding across modules in any
 // configuration order, dependency-ordered DllMain and static TLS for static and
 // LoadLibrary'd modules, thread notifications, reference counts and failure
-// paths; a mapped DLL's resources; file views; then the
+// paths; a mapped DLL's resources; file views; Winsock start-up; then the
 // guarded arena, heap growth, strict mode, the initial x87 control word and
 // the import argument counts. Needs no game: every image is
 // written to a temporary directory and its DllMain is a native stand-in
@@ -790,6 +790,51 @@ static void test_file_views(X86 *c) {
     call_import(c, "KERNEL32.dll", "CloseHandle", {h});
 }
 
+// ---------------------------------------------------------------------------
+// Winsock start-up, byte order and name resolution without DNS.
+// ---------------------------------------------------------------------------
+static void test_winsock_startup(X86 *c) {
+    section("Winsock: start-up, clean-up, byte order, addresses, no-DNS resolution");
+    const uint32_t data = g_scratch;
+    g_scratch += 512;
+    for (const char *dll : {"WS2_32.dll", "WSOCK32.dll"}) {
+        check(call_import(c, dll, "WSAStartup", {0x0002, data}) == 0 && rd16(data) == 0x0002 &&
+                  rd16(data + 2) == 0x0202,
+              "%s: WSAStartup(2.0) grants 2.0, the highest 2.2", dll);
+        check(call_import(c, dll, "WSAStartup", {0x0101, data}) == 0 && rd16(data) == 0x0101,
+              "%s: WSAStartup(1.1) grants 1.1", dll);
+        check(call_import(c, dll, "WSAStartup", {0x0303, data}) == 0 && rd16(data) == 0x0202,
+              "%s: WSAStartup(3.3) grants 2.2", dll);
+        check(call_import(c, dll, "WSAStartup", {0x0000, data}) == 10092,
+              "%s: WSAStartup(0.0) is WSAVERNOTSUPPORTED", dll);
+        bool cleaned = true;
+        for (int i = 0; i < 3; ++i)
+            cleaned &= call_import(c, dll, "WSACleanup", {}) == 0;
+        check(cleaned && call_import(c, dll, "WSACleanup", {}) == 0xffffffffu &&
+                  call_import(c, dll, "WSAGetLastError", {}) == 10093,
+              "%s: one WSACleanup per start-up, then WSANOTINITIALISED", dll);
+        check(call_import(c, dll, "htons", {0x1234}) == 0x3412 &&
+                  call_import(c, dll, "ntohs", {0x3412}) == 0x1234 &&
+                  call_import(c, dll, "htonl", {0x11223344}) == 0x44332211u &&
+                  call_import(c, dll, "ntohl", {0x44332211}) == 0x11223344u,
+              "%s: byte order", dll);
+        check(call_import(c, dll, "inet_addr", {guest_str("192.168.1.2")}) == 0x0201a8c0u &&
+                  call_import(c, dll, "inet_addr", {guest_str("1.2.3")}) == 0xffffffffu &&
+                  call_import(c, dll, "inet_addr", {guest_str("256.1.1.1")}) == 0xffffffffu,
+              "%s: inet_addr takes dotted quads and nothing else", dll);
+        const uint32_t he = call_import(c, dll, "gethostbyname", {guest_str("10.0.0.7")});
+        check(he && rd16(he + 8) == 2 && rd16(he + 10) == 4 &&
+                  rd32(rd32(rd32(he + 12))) == 0x0700000au && rd32(rd32(he + 12) + 4) == 0,
+              "%s: gethostbyname of a dotted quad is that address, without DNS", dll);
+        const uint64_t t0 = os_monotonic_ns();
+        const uint32_t gone =
+            call_import(c, dll, "gethostbyname", {guest_str("empireearth.m1.sierra.com")});
+        const double ms = (os_monotonic_ns() - t0) / 1e6;
+        check(gone == 0 && call_import(c, dll, "WSAGetLastError", {}) == 11001 && ms < 50,
+              "%s: any other name fails at once with WSAHOST_NOT_FOUND (%.2f ms)", dll, ms);
+    }
+}
+
 static void test_import_cycle(Config &cfg) {
     section("an import cycle");
     const std::string saved = g_dir;
@@ -1173,6 +1218,7 @@ int main(int argc, char **argv) {
     test_dynamic_load(c);
     test_module_resources(c);
     test_file_views(c);
+    test_winsock_startup(c);
     test_heap_growth(cfg);
     test_exact_ranges(cfg);
     test_import_cycle(cfg);

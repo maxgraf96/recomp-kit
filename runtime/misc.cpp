@@ -1040,34 +1040,144 @@ void i_ImmNotifyIME(X86 *c) {
 }
 
 // -------------------------------------------------------------------------
-// WSOCK32: enough for startup probing; real networking is a later task.
+// Winsock (WSOCK32 1.1 and WS2_32 2.x share one implementation, as they do on
+// Windows): start-up and clean-up, the error code, byte order, address
+// parsing and name resolution without DNS. Sockets are a later task.
 // -------------------------------------------------------------------------
+const uint32_t WSAVERNOTSUPPORTED_ = 10092, WSANOTINITIALISED_ = 10093;
+const uint32_t WSAHOST_NOT_FOUND_ = 11001, WSAEFAULT_ = 10014;
+uint32_t g_wsa_starts = 0; // WSAStartup calls not yet matched by WSACleanup
+
+// WSAStartup(wVersionRequested, lpWSAData): any version from 1.0 is accepted
+// and the one granted is min(requested, 2.2), the highest 2.2; WSADATA is 400
+// bytes on a 32-bit guest. Each success needs its own WSACleanup.
 void w_WSAStartup(X86 *c) {
-    uint32_t version = arg(c, 0), pdata = arg(c, 1);
-    if (pdata) {
-        memset(g_mem + pdata, 0, 400);
-        wr16(pdata + 0, (uint16_t)version);
-        wr16(pdata + 2, 0x0202);
-        gm_put_str(pdata + 4, "pop-metal recomp sockets", 257);
-        gm_put_str(pdata + 4 + 257, "Running", 129);
-        wr16(pdata + 4 + 257 + 129, 32);       // iMaxSockets
-        wr16(pdata + 4 + 257 + 129 + 2, 1024); // iMaxUdpDg
+    uint32_t version = arg(c, 0) & 0xffff, pdata = arg(c, 1);
+    uint32_t major = version & 0xff, minor = version >> 8;
+    if (major < 1) {
+        set_eax(c, WSAVERNOTSUPPORTED_);
+        return;
     }
+    if (!pdata || !gm_valid(pdata, 400)) {
+        set_eax(c, WSAEFAULT_);
+        return;
+    }
+    if (major > 2 || (major == 2 && minor > 2))
+        version = 0x0202;
+    memset(g_mem + pdata, 0, 400);
+    wr16(pdata + 0, (uint16_t)version);
+    wr16(pdata + 2, 0x0202);
+    gm_put_str(pdata + 4, "recomp-kit sockets", 257);
+    gm_put_str(pdata + 4 + 257, "Running", 129);
+    wr16(pdata + 4 + 257 + 129, 32767);     // iMaxSockets
+    wr16(pdata + 4 + 257 + 129 + 2, 65467); // iMaxUdpDg
+    ++g_wsa_starts;
     set_eax(c, 0);
 }
 void w_WSACleanup(X86 *c) {
+    if (!g_wsa_starts) {
+        set_last_error(WSANOTINITIALISED_);
+        set_eax(c, 0xffffffffu); // SOCKET_ERROR
+        return;
+    }
+    --g_wsa_starts;
     set_eax(c, 0);
+}
+// The Winsock error is the thread's last error, as on Windows.
+void w_WSAGetLastError(X86 *c) {
+    set_eax(c, get_last_error());
+}
+void w_WSASetLastError(X86 *c) {
+    set_last_error(arg(c, 0));
+}
+void w_htons(X86 *c) {
+    uint32_t v = arg(c, 0) & 0xffff;
+    set_eax(c, ((v & 0xff) << 8) | (v >> 8));
+}
+void w_htonl(X86 *c) {
+    uint32_t v = arg(c, 0);
+    set_eax(c, (v >> 24) | ((v >> 8) & 0xff00) | ((v << 8) & 0xff0000) | (v << 24));
+}
+// The address in a dotted quad (each part decimal, 0-255), in network order.
+bool parse_dotted_quad(const std::string &s, uint32_t *out) {
+    uint32_t parts[4], n = 0, v = 0;
+    bool digit = false;
+    for (size_t i = 0; i <= s.size(); ++i) {
+        char ch = i < s.size() ? s[i] : '.';
+        if (ch >= '0' && ch <= '9') {
+            v = v * 10 + (uint32_t)(ch - '0');
+            if (v > 255)
+                return false;
+            digit = true;
+        } else if (ch == '.' && digit && n < 4) {
+            parts[n++] = v;
+            v = 0;
+            digit = false;
+        } else {
+            return false;
+        }
+    }
+    if (n != 4)
+        return false;
+    *out = parts[0] | parts[1] << 8 | parts[2] << 16 | parts[3] << 24;
+    return true;
+}
+// inet_addr(cp): INADDR_NONE (0xffffffff) for anything but a dotted quad.
+void w_inet_addr(X86 *c) {
+    uint32_t a = 0;
+    set_eax(c, arg(c, 0) && parse_dotted_quad(gm_str(arg(c, 0), 64), &a) ? a : 0xffffffffu);
 }
 void w_gethostname(X86 *c) {
     uint32_t buf = arg(c, 0), len = arg(c, 1);
-    if (buf && len)
-        gm_put_str(buf, RECOMP_GAME_ID, len);
+    if (!buf || len < sizeof RECOMP_GAME_ID) {
+        set_last_error(WSAEFAULT_);
+        set_eax(c, 0xffffffffu);
+        return;
+    }
+    gm_put_str(buf, RECOMP_GAME_ID, len);
     set_eax(c, 0);
 }
+// gethostbyname(name) answers without DNS, at once: a dotted quad is that
+// address, this host's own name (and "localhost") is the loopback address, and
+// every other name is WSAHOST_NOT_FOUND. A game that looks up a long-gone
+// server at start-up must not wait for a resolver. The HOSTENT lives in one
+// static guest block, reused by the next call, as Winsock's per-thread one is.
 void w_gethostbyname(X86 *c) {
-    log_once("gethostbyname", "gethostbyname(\"%s\"): name resolution is not implemented",
-             gm_str(arg(c, 0), 256).c_str());
-    set_eax(c, 0);
+    std::string name = arg(c, 0) ? gm_str(arg(c, 0), 256) : std::string();
+    uint32_t addr = 0;
+    bool known = parse_dotted_quad(name, &addr);
+    if (!known && (name == RECOMP_GAME_ID || os_strcasecmp(name.c_str(), "localhost") == 0)) {
+        addr = 0x0100007fu; // 127.0.0.1
+        known = true;
+    }
+    if (!known) {
+        log_once(("gethostbyname:" + name).c_str(),
+                 "gethostbyname(\"%s\"): no DNS here, WSAHOST_NOT_FOUND", name.c_str());
+        set_last_error(WSAHOST_NOT_FOUND_);
+        set_eax(c, 0);
+        return;
+    }
+    // HOSTENT {h_name, h_aliases, h_addrtype:16, h_length:16, h_addr_list}
+    // at +0, the alias list (empty) at +16, the address list at +20, the
+    // address at +28 and the name at +32.
+    static uint32_t block = 0;
+    if (!block || !heap_owns(block))
+        block = heap_alloc(32 + 256, true);
+    if (!block) {
+        set_eax(c, 0);
+        return;
+    }
+    gm_put_str(block + 32, name.c_str(), 256);
+    wr32(block + 0, block + 32);
+    wr32(block + 4, block + 16);
+    wr16(block + 8, 2); // AF_INET
+    wr16(block + 10, 4);
+    wr32(block + 12, block + 20);
+    wr32(block + 16, 0);
+    wr32(block + 20, block + 28);
+    wr32(block + 24, 0);
+    wr32(block + 28, addr);
+    set_eax(c, block);
 }
 void w_inet_ntoa(X86 *c) {
     // The returned pointer is reused across calls, as the real inet_ntoa does.
@@ -2073,6 +2183,25 @@ const ImportShim g_misc_shims[] = {
     {"WSOCK32.dll", "ord52", 1, w_gethostbyname},
     {"WSOCK32.dll", "inet_ntoa", 1, w_inet_ntoa},
     {"WSOCK32.dll", "ord11", 1, w_inet_ntoa},
+    {"WSOCK32.dll", "WSAGetLastError", 0, w_WSAGetLastError},
+    {"WSOCK32.dll", "WSASetLastError", 1, w_WSASetLastError},
+    {"WSOCK32.dll", "htons", 1, w_htons},
+    {"WSOCK32.dll", "ntohs", 1, w_htons},
+    {"WSOCK32.dll", "htonl", 1, w_htonl},
+    {"WSOCK32.dll", "ntohl", 1, w_htonl},
+    {"WSOCK32.dll", "inet_addr", 1, w_inet_addr},
+    {"WS2_32.dll", "WSAStartup", 2, w_WSAStartup},
+    {"WS2_32.dll", "WSACleanup", 0, w_WSACleanup},
+    {"WS2_32.dll", "WSAGetLastError", 0, w_WSAGetLastError},
+    {"WS2_32.dll", "WSASetLastError", 1, w_WSASetLastError},
+    {"WS2_32.dll", "gethostname", 2, w_gethostname},
+    {"WS2_32.dll", "gethostbyname", 1, w_gethostbyname},
+    {"WS2_32.dll", "inet_ntoa", 1, w_inet_ntoa},
+    {"WS2_32.dll", "inet_addr", 1, w_inet_addr},
+    {"WS2_32.dll", "htons", 1, w_htons},
+    {"WS2_32.dll", "ntohs", 1, w_htons},
+    {"WS2_32.dll", "htonl", 1, w_htonl},
+    {"WS2_32.dll", "ntohl", 1, w_htonl},
     // WINMM: implemented
     {"WINMM.dll", "timeGetTime", 0, m_timeGetTime},
     {"WINMM.dll", "timeGetDevCaps", 2, m_timeGetDevCaps},
@@ -2174,9 +2303,6 @@ const ImportShim g_misc_shims[] = {
     {"WINMM.dll", "waveInReset", 1, nullptr},
     {"WINMM.dll", "waveInGetPosition", 3, nullptr},
     // Winsock 2: networking is out of scope, but the pop counts are not.
-    {"WS2_32.dll", "WSAStartup", 2, nullptr},
-    {"WS2_32.dll", "WSACleanup", 0, nullptr},
-    {"WS2_32.dll", "WSAGetLastError", 0, nullptr},
     {"WS2_32.dll", "WSAIoctl", 9, nullptr},
     {"WS2_32.dll", "WSACreateEvent", 0, nullptr},
     {"WS2_32.dll", "WSACloseEvent", 1, nullptr},
@@ -2203,8 +2329,6 @@ const ImportShim g_misc_shims[] = {
     {"WS2_32.dll", "setsockopt", 5, nullptr},
     {"WS2_32.dll", "getpeername", 3, nullptr},
     {"WS2_32.dll", "getsockname", 3, nullptr},
-    {"WS2_32.dll", "gethostbyname", 1, nullptr},
-    {"WS2_32.dll", "gethostname", 2, nullptr},
     {"NETAPI32.dll", "Netbios", 1, nullptr},
     {"DDRAW.dll", "DirectDrawCreate", 3, nullptr},
     {"DDRAW.dll", "DirectDrawEnumerateA", 2, nullptr},
