@@ -229,9 +229,13 @@ Vertices, the expanded index list and upload staging go into 4 MB transient
 buffers recycled once their command buffer completes; uniforms go inline.
 
 The vertex program fetches the guest's vertex bytes by index (any FVF) and
-runs the fixed-function transform and lighting; Direct3D's integer pixel
-centres are met by moving every vertex half a pixel right and down, and the
-Direct3D viewport is remapped onto its intersection with the target. Present
+runs the fixed-function transform and lighting. Direct3D's integer pixel
+centres are met by moving every vertex half a pixel right and down, less one
+subpixel step (1/256): a centre on an axis-aligned edge of a quad drawn at
+integer coordinates then falls inside or outside as the top-left rule says
+without a tie for float rounding to break, and attributes there are
+evaluated just inside (the reference renderer samples at the same point).
+The Direct3D viewport is remapped onto its intersection with the target. Present
 copies the presented rectangle into the presenter's frame on the same command
 buffer (`host_d7_show` in `present.cpp`); a host without a GPU presenter gets
 the pixels read back into `host_display_present_window`.

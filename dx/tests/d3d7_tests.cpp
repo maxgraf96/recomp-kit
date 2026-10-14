@@ -12,6 +12,7 @@
 #include "../../runtime/display_seam.h"
 #include "../../runtime/memory.h"
 
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
