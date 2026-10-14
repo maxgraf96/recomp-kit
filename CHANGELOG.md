@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Boot a multi-module game further without stand-ins. kernel32's resource
+  functions take any mapped module (a resource-only DLL relocated like any
+  other, which the translator now places too), with `FindResourceA`,
+  `FindResourceExA/W`, `EnumResourceNamesA`, `EnumResourceLanguagesA/W` and
+  `GetUserDefaultLangID`/`GetSystemDefaultLangID`; `MapViewOfFile` maps the
+  file's pages at the view's address instead of copying the view into the
+  guest heap; WS2_32 shares WSOCK32's `WSAStartup`/`WSACleanup` and gains the
+  byte-order functions, `inet_addr` and a `gethostbyname` that never waits on
+  DNS; and `com_register_guest_class` lets a host serve a COM class the kit
+  does not model through `CoCreateInstance`. `loader_tests` and `dx_tests`
+  cover them.
+
 - Serve DirectDraw 7 and Direct3D 7 to a game that opts in (`[runtime] ddraw7`
   in game.toml): `IDirectDraw7`, `IDirectDrawSurface7`, `IDirect3D7`, the HAL
   and T&L HAL `IDirect3DDevice7`, and `IDirect3DVertexBuffer7`
