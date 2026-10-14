@@ -7238,6 +7238,9 @@ static void test_mss32_driver() {
         {"_AIL_sample_position@4", 1},
         {"_AIL_set_sample_position@8", 2},
         {"_AIL_sample_ms_position@12", 3},
+        {"_AIL_register_EOS_callback@8", 2},
+        {"_AIL_set_sample_user_data@12", 3},
+        {"_AIL_sample_user_data@8", 2},
         {"_AIL_get_preference@4", 1},
         {"_AIL_set_named_sample_file@20", 5},
         {"_AIL_set_digital_master_volume@8", 2},
@@ -7701,6 +7704,84 @@ static void test_mss32_sample_calls() {
     ail("_AIL_close_digital_driver@4", {drv});
     heap_free(wav);
     heap_free(wav2);
+    g_sample_playing.clear();
+    g_sample_tracking = false;
+}
+
+// The end-of-sample callback runs on a guest thread holding the baton: the
+// frame pump, AIL_serve, or AIL_end_sample itself - never a status query.
+static uint32_t g_eos_calls = 0, g_eos_sample = 0;
+
+static void test_mss32_eos_callback() {
+    cpu_reset();
+    mss32_fresh();
+    g_sample_tracking = true;
+    g_plays.clear();
+    static uint32_t cb = imports_alloc_trampoline(
+        "TEST", "MilesEOS",
+        [](X86 *c) {
+            ++g_eos_calls;
+            g_eos_sample = arg(c, 0);
+            set_eax(c, 0);
+        },
+        1);
+    g_eos_calls = g_eos_sample = 0;
+    uint32_t drv = ail("_AIL_open_digital_driver@16", {22050, 16, 2, 1});
+    uint32_t h = ail("_AIL_allocate_sample_handle@4", {drv});
+    uint32_t bytes = 0;
+    uint32_t wav = build_wave(22050, 1, 8, 2205, &bytes);
+    CHECK_EQ(ail("_AIL_set_named_sample_file@20", {h, 0, wav, bytes, 0}), 1u);
+    CHECK_EQ(ail("_AIL_register_EOS_callback@8", {h, cb}), 0u);
+    CHECK_EQ(ail("_AIL_register_EOS_callback@8", {h, cb}), cb);
+
+    ail("_AIL_start_sample@4", {h});
+    int32_t ch = g_plays.empty() ? -1 : g_plays.back().channel;
+    g_sample_playing[ch] = false;
+    CHECK_EQ(ail("_AIL_sample_status@4", {h}), 2u);
+    CHECK_EQ(g_eos_calls, 0u);
+    host_pump_timers(&g_cpu);
+    CHECK_EQ(g_eos_calls, 1u);
+    CHECK_EQ(g_eos_sample, h);
+    host_pump_timers(&g_cpu);
+    CHECK_EQ(g_eos_calls, 1u);
+
+    // Ending a playing sample is an end of sample; ending a finished one is not.
+    ail("_AIL_start_sample@4", {h});
+    ail("_AIL_end_sample@4", {h});
+    CHECK_EQ(g_eos_calls, 2u);
+    ail("_AIL_end_sample@4", {h});
+    CHECK_EQ(g_eos_calls, 2u);
+    // A loop point is not the end of the sample.
+    ail("_AIL_set_sample_loop_count@8", {h, 2});
+    ail("_AIL_start_sample@4", {h});
+    g_sample_playing[ch] = false;
+    ail("_AIL_serve@0", {});
+    CHECK_EQ(g_eos_calls, 2u);
+    g_sample_playing[ch] = false;
+    ail("_AIL_serve@0", {});
+    CHECK_EQ(g_eos_calls, 3u);
+    // A restart before the pump forgets the end that was due.
+    ail("_AIL_start_sample@4", {h});
+    g_sample_playing[ch] = false;
+    ail("_AIL_sample_status@4", {h});
+    ail("_AIL_start_sample@4", {h});
+    host_pump_timers(&g_cpu);
+    CHECK_EQ(g_eos_calls, 3u);
+    ail("_AIL_end_sample@4", {h});
+    CHECK_EQ(g_eos_calls, 4u);
+
+    // Eight words of user data; init forgets the callback.
+    ail("_AIL_set_sample_user_data@12", {h, 3, 0xfeed});
+    ail("_AIL_set_sample_user_data@12", {h, 8, 0xbad});
+    CHECK_EQ(ail("_AIL_sample_user_data@8", {h, 3}), 0xfeedu);
+    CHECK_EQ(ail("_AIL_sample_user_data@8", {h, 8}), 0u);
+    CHECK_EQ(ail("_AIL_sample_user_data@8", {0, 3}), 0u);
+    ail("_AIL_init_sample@4", {h});
+    CHECK_EQ(ail("_AIL_register_EOS_callback@8", {h, 0}), 0u);
+
+    ail("_AIL_release_sample_handle@4", {h});
+    ail("_AIL_close_digital_driver@4", {drv});
+    heap_free(wav);
     g_sample_playing.clear();
     g_sample_tracking = false;
 }
@@ -13386,6 +13467,7 @@ int main() {
         {"Miles DirectSound", test_mss32_directsound},
         {"DirectSound shared device", test_dsound_shared_device},
         {"Miles sample calls", test_mss32_sample_calls},
+        {"Miles end-of-sample callback", test_mss32_eos_callback},
         {"Miles MP3 samples", test_mss32_mp3_sample},
         {"Bink/Smacker stubs", test_bink_smack_stubs},
         {"Bink entry points resolve", test_bink_entry_points_resolve},

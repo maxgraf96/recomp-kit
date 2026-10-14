@@ -214,6 +214,9 @@ struct Sample {
     uint32_t position = 0; // PCM bytes: where a sample that is not playing stands
     bool playing = false;
     bool retuned = false; // the host channel's rate was changed under a playing sound
+    uint32_t eos = 0;     // guest end-of-sample callback, stdcall (HSAMPLE)
+    bool eos_due = false;
+    uint32_t user[8] = {};
 };
 std::vector<Sample> g_samples(64);
 
@@ -290,11 +293,13 @@ void sample_init(Sample &s) {
     sample_stop(s);
     sample_untune(s);
     dx_free_audio_channel(s.channel);
-    uint32_t handle = s.handle, driver = s.driver;
+    uint32_t handle = s.handle, driver = s.driver, user[8];
+    std::copy(std::begin(s.user), std::end(s.user), user);
     s = Sample{};
     s.handle = handle;
     s.driver = driver;
     s.alive = true;
+    std::copy(std::begin(user), std::end(user), s.user);
     // AIL_init_sample's defaults: DIG_DEFAULT_VOLUME, centred on a stereo
     // driver, one pass, 11025 Hz until a file states its own rate.
     s.volume = std::clamp(g_preferences[2], 0, 127);
@@ -330,9 +335,9 @@ uint32_t sample_cursor(const Sample &s) {
 }
 
 // A pass reached the end of the data. Miles counts the loop field down and
-// goes round again, or finishes: status DONE, the position at the end. The
-// host loop flag is boolean, so finite repeats restart here on the runtime's
-// frame seam (also observed by status).
+// goes round again, or finishes: status DONE, the position at the end, and
+// the end-of-sample callback due. The host loop flag is boolean, so finite
+// repeats restart here on the runtime's frame seam (also observed by status).
 void sample_pass_ended(Sample &s) {
     if (s.loops > 1) {
         --s.loops;
@@ -341,11 +346,23 @@ void sample_pass_ended(Sample &s) {
     }
     s.playing = false;
     s.position = s.wave.pcm_bytes;
+    s.eos_due = s.eos != 0;
 }
 
 void sample_update(Sample &s) {
     if (s.playing && !host_audio_is_playing(s.channel))
         sample_pass_ended(s);
+}
+
+// The callback runs on a guest thread that holds the scheduler baton: the
+// frame pump, AIL_serve or AIL_end_sample. Never from a status query, which a
+// game may make with its own locks held. Miles runs it from its mixer thread.
+void sample_fire_eos(X86 *c, Sample &s) {
+    if (!s.eos_due || !c)
+        return;
+    s.eos_due = false;
+    if (s.eos)
+        guest_call(c, s.eos, s.handle);
 }
 
 // The loop flag of a playing sound is fixed when it is scheduled. A change
@@ -697,20 +714,24 @@ void ail_start_sample(X86 *c) {
         if (s->channel < 0)
             s->channel = dx_alloc_audio_channel();
         if (s->channel >= 0) {
+            s->eos_due = false;
             sample_play(*s, 0);
         }
     }
     set_eax(c, 0);
 }
 
-// A sample ended where it stands keeps that position.
+// Ending a sample that is still playing is an end of sample to Miles, so the
+// callback runs before this returns.
 void ail_end_sample(X86 *c) {
     if (Sample *s = sample_for(arg(c, 0))) {
         sample_update(*s);
         if (s->playing) {
             s->position = sample_cursor(*s);
             sample_stop(*s);
+            s->eos_due = s->eos != 0;
         }
+        sample_fire_eos(c, *s);
     }
     set_eax(c, 0);
 }
@@ -841,6 +862,25 @@ void ail_sample_ms_position(X86 *c) {
         wr32(total_out, ms(length));
     if (current_out && gm_valid(current_out, 4))
         wr32(current_out, ms(at));
+}
+
+// AIL_register_EOS_callback(S, callback) -> the previous callback.
+void ail_register_eos_callback(X86 *c) {
+    Sample *s = sample_for(arg(c, 0));
+    set_eax(c, s ? s->eos : 0);
+    if (s)
+        s->eos = arg(c, 1);
+}
+
+// Eight words of the application's own per sample, as Miles keeps them.
+void ail_set_sample_user_data(X86 *c) {
+    if (Sample *s = sample_for(arg(c, 0)); s && arg(c, 1) < 8)
+        s->user[arg(c, 1)] = arg(c, 2);
+    set_eax(c, 0);
+}
+void ail_sample_user_data(X86 *c) {
+    Sample *s = sample_for(arg(c, 0));
+    set_eax(c, s && arg(c, 1) < 8 ? s->user[arg(c, 1)] : 0);
 }
 
 // Stream handles own the encoded image, decoder and shared host channel.
@@ -1024,12 +1064,16 @@ void streams_close() {
         }
 }
 
-// Ends passes, restarts finite loops and keeps streams fed. From the frame
-// pump and from AIL_serve, both on a guest thread holding the baton.
+// Ends passes, restarts finite loops, runs the end-of-sample callbacks that
+// fell due and keeps streams fed. From the frame pump and from AIL_serve,
+// both on a guest thread holding the baton.
 void service(X86 *c) {
     for (auto &s : g_samples)
         if (s.alive)
             sample_update(s);
+    for (auto &s : g_samples)
+        if (s.alive && s.eos_due)
+            sample_fire_eos(c, s);
     for (auto &s : g_streams)
         if (s.alive)
             stream_update(s);
@@ -1094,6 +1138,9 @@ const ImportShim g_mss32_shims[] = {
     AIL(sample_position, 4, ail_sample_position),
     AIL(set_sample_position, 8, ail_set_sample_position),
     AIL(sample_ms_position, 12, ail_sample_ms_position),
+    AIL(register_EOS_callback, 8, ail_register_eos_callback),
+    AIL(set_sample_user_data, 12, ail_set_sample_user_data),
+    AIL(sample_user_data, 8, ail_sample_user_data),
     AIL(open_stream, 12, ail_open_stream),
     AIL(start_stream, 4, ail_start_stream),
     AIL(close_stream, 4, ail_close_stream),
