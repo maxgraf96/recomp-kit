@@ -314,7 +314,11 @@ static void DmDls_parseWaveTableItemFormat(DmDlsWave* slf, DmRiff* rif) {
 
 	if (slf->format == DmDlsWaveFormat_PCM) {
 		DmRiff_readWord(rif, &slf->bits_per_sample);
-		DmRiff_read(rif, &tmp, 2); // Padding
+
+		// WAVEFORMATEX's cbSize, which a 16-byte PCMWAVEFORMAT does not have.
+		if (rif->len - rif->pos >= 2) {
+			DmRiff_read(rif, &tmp, 2);
+		}
 	} else if (slf->format == DmDlsWaveFormat_ADPCM) {
 		uint16_t size = 0;
 		DmRiff_readWord(rif, &slf->bits_per_sample);
