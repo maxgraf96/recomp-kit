@@ -173,6 +173,11 @@ def load(game_dir):
     tracks = cfg.setdefault("media", {}).setdefault("cd_tracks", [])
     if not isinstance(tracks, list) or not all(isinstance(v, str) for v in tracks):
         raise ValueError("%s: [media] cd_tracks must be a list of strings" % source)
+    # [network] offline_hosts: names gethostbyname fails at once rather than
+    # ask a resolver about, such as a long-gone server (runtime/winsock.cpp).
+    offline = cfg.setdefault("network", {}).setdefault("offline_hosts", [])
+    if not isinstance(offline, list) or not all(isinstance(v, str) and v for v in offline):
+        raise ValueError("%s: [network] offline_hosts must be a list of host names" % source)
     cfg.setdefault("hooks", {})
     cfg.setdefault("bundle", {}).setdefault("exclude", [])
     touch = cfg.setdefault("touch", {})

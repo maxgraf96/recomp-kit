@@ -628,4 +628,8 @@ void imports_init() {
     gdi::register_text();
     extern void msimg32_register();
     msimg32_register();
+    // Winsock (winsock.cpp) after the misc table, whose older WSOCK32
+    // stand-ins it replaces.
+    extern void winsock_register();
+    winsock_register();
 }

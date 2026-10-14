@@ -59,6 +59,11 @@ relative_mouse = false
 # (RECOMP_SYSTEM_FONTS=0/1 overrides).
 system_fonts = false
 
+# [network] offline_hosts = ["old.example.com"]: host names gethostbyname fails
+# at once (WSAHOST_NOT_FOUND) instead of asking a resolver, for a server long
+# gone whose lookup would otherwise wait on DNS (RECOMP_NET_OFFLINE_HOSTS adds
+# more, comma separated).
+
 # [imports.argc] "DLL!name" = the stdcall argument count (dwords) or "cdecl" of
 # an import that no shim and no built-in table describes, e.g.
 #   "ENGINE.dll!SomeExport" = 2

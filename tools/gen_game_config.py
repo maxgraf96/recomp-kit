@@ -78,6 +78,8 @@ def render_header(cfg):
     lines.append("#define RECOMP_RESUMABLE_STACKS %d" %
                  int(cfg["translate"].get("resumable_stacks", False)))
     lines.append("#define RECOMP_CD_AUDIO_TRACKS %s" % c_string_list(cfg.get("media", {}).get("cd_tracks", [])))
+    lines.append("#define RECOMP_NET_OFFLINE_HOSTS %s" %
+                 c_string_list(cfg.get("network", {}).get("offline_hosts", [])))
     # Auxiliary modules the loader maps beside the image: {name, developer path, sha256, base, size}.
     lines.append("#define RECOMP_AUX_MODULE_COUNT %d" % len(cfg["aux_modules"]))
     lines.append("#define RECOMP_AUX_MODULES {%s}" % ", ".join(

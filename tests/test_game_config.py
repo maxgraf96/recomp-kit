@@ -35,6 +35,22 @@ class LoadTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "cd_tracks"):
                     game_config.load(game)
 
+    def test_offline_hosts_render_and_reject_non_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            stub = (ROOT / "games/stub/game.toml").read_text()
+            (game / "globals.toml").write_text("")
+            (game / "game.toml").write_text(stub)
+            self.assertIn("#define RECOMP_NET_OFFLINE_HOSTS {0}",
+                          gen_game_config.render_header(game_config.load(game)))
+            (game / "game.toml").write_text(stub + '\n[network]\noffline_hosts = ["old.example.com"]\n')
+            self.assertIn('#define RECOMP_NET_OFFLINE_HOSTS {"old.example.com", 0}',
+                          gen_game_config.render_header(game_config.load(game)))
+            for bad in ('"old.example.com"', '[""]', '[1]'):
+                (game / "game.toml").write_text(stub + '\n[network]\noffline_hosts = ' + bad + '\n')
+                with self.assertRaisesRegex(ValueError, "offline_hosts"):
+                    game_config.load(game)
+
     def test_runtime_booleans_default_false_and_render(self):
         with tempfile.TemporaryDirectory() as tmp:
             game = Path(tmp)
