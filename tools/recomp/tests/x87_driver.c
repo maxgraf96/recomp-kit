@@ -43,8 +43,7 @@ uint8_t *harness_mem(void);
 static X86 ctx;
 static int ctx_ready;
 
-/* A fresh thread's x87, as the runtime creates one: the control word set
- * directly, fp_mode left for the first out-of-line call to derive. */
+/* A fresh thread's x87, as the runtime creates one. */
 void x87_driver_reset(uint16_t cw) {
     memset(&ctx, 0, sizeof ctx);
     ctx.fpu_cw = cw;

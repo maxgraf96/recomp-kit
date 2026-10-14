@@ -431,9 +431,9 @@ uint32_t harness_header_selftest(void) {
     /* PC=53 keeps the 15-bit exponent: DBL_MAX * 2 / 4 is DBL_MAX / 2, not infinity */
     h_load(&c, 0x027f, 1.7976931348623157e308);
     x87_arith_m(&c, X87_MUL, 2.0);
-    CHECK(c.ext_live == 1 && c.fp_mode == X87_MODE_EXACT); /* now an extended register */
+    CHECK(c.ext_live == 1 && x87_mode(&c) == X87_MODE_EXACT); /* now an extended register */
     x87_arith_m(&c, X87_DIV, 4.0);
-    CHECK(c.ext_live == 0 && c.fp_mode == X87_MODE_FAST && ST(&c, 0) == 1.7976931348623157e308 / 2);
+    CHECK(c.ext_live == 0 && x87_mode(&c) == X87_MODE_FAST && ST(&c, 0) == 1.7976931348623157e308 / 2);
     fdrop(&c);
 
     /* Rounding reads fpu_cw directly, so it cannot drift with the host mode.
@@ -537,9 +537,9 @@ uint32_t harness_header_selftest(void) {
      * 0x027f. */
     x87_set_cw(&c, 0x037f);
     CHECK(x87_controlfp(&c, 0x10000u, 0x30000u) == 0x9001fu && c.fpu_cw == 0x027f);
-    CHECK(c.fp_mode == X87_MODE_FAST);
+    CHECK(x87_mode(&c) == X87_MODE_FAST);
     CHECK(x87_controlfp(&c, 0x20000u, 0x30000u) == 0xa001fu && c.fpu_cw == 0x007f);
-    CHECK(x87_controlfp(&c, 0, 0) == 0xa001fu && c.fp_mode == X87_MODE_PC24);
+    CHECK(x87_controlfp(&c, 0, 0) == 0xa001fu && x87_mode(&c) == X87_MODE_PC24);
     x87_set_cw(&c, 0x037f);
 
     /* 2^x - 1 and y*log2(x+1) keep their significant bits near zero */

@@ -227,11 +227,9 @@ static void host_env_restore(void) {
 
 static _Thread_local int env_checked;
 
-/* Every out-of-line entry: derive fp_mode for a context that was given its
- * control word directly, and check the host environment once per thread. */
+/* Every out-of-line entry: check the host environment once per thread. */
 static void x87_enter(X86 *c) {
-    if (RECOMP_UNLIKELY(!c->fp_mode))
-        x87_mode_refresh(c);
+    (void)c;
     if (RECOMP_UNLIKELY(!env_checked)) {
         env_checked = 1;
         if (!x87_host_env_ok()) {
@@ -419,7 +417,7 @@ static int pc24_settle(int op, double a, double b, double *out) {
 void x87_arith_slow_st(X86 *c, int op, unsigned pd, unsigned ps) {
     double r;
     x87_enter(c);
-    if (c->fp_mode == X87_MODE_PC24 && pc24_settle(op, c->st[pd], c->st[ps], &r)) {
+    if (x87_mode(c) == X87_MODE_PC24 && pc24_settle(op, c->st[pd], c->st[ps], &r)) {
         c->st[pd] = r;
         ftag_put(c, pd, ftag_classify(r));
         return;
@@ -431,7 +429,7 @@ void x87_arith_slow_m(X86 *c, int op, double m) {
     unsigned p = top_slot(c, 0);
     double r;
     x87_enter(c);
-    if (c->fp_mode == X87_MODE_PC24 && pc24_settle(op, c->st[p], m, &r)) {
+    if (x87_mode(c) == X87_MODE_PC24 && pc24_settle(op, c->st[p], m, &r)) {
         c->st[p] = r;
         ftag_put(c, p, ftag_classify(r));
         return;
@@ -443,7 +441,7 @@ void x87_fsqrt_slow(X86 *c) {
     unsigned p = top_slot(c, 0);
     double r;
     x87_enter(c);
-    if (c->fp_mode == X87_MODE_PC24 && pc24_settle(X87_SQRT, c->st[p], 0.0, &r)) {
+    if (x87_mode(c) == X87_MODE_PC24 && pc24_settle(X87_SQRT, c->st[p], 0.0, &r)) {
         c->st[p] = r;
         ftag_put(c, p, ftag_classify(r));
         return;

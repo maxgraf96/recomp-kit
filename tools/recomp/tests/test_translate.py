@@ -205,7 +205,7 @@ class X86(C.Structure):
         ("eflags_df", C.c_uint32), ("eflags_misc", C.c_uint32),
         ("st", C.c_double * 8), ("stx", X87Ext * 8),
         ("st_kind", C.c_uint8 * 8), ("ext_live", C.c_uint8),
-        ("fp_mode", C.c_uint8), ("fpu_top", C.c_uint32),
+        ("fpu_top", C.c_uint32),
         ("fpu_cw", C.c_uint16), ("fpu_sw", C.c_uint16),
         ("fpu_tag", C.c_uint16),
         ("fs_base", C.c_uint32),

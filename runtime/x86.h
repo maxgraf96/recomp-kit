@@ -238,13 +238,10 @@ struct X86 {
     double st[8]; /* x87 stack, physical slots */
     /* A slot whose value is not exactly a double (st_kind 1) holds it here,
      * and st[] holds it rounded to double for readers outside the x87.
-     * ext_live counts those slots; every one of them is in use. fp_mode is
-     * the arithmetic path, X87_MODE_*, derived from fpu_cw and ext_live;
-     * zero means not derived yet. */
+     * ext_live counts those slots; every one of them is in use. */
     X87Ext stx[8];
     uint8_t st_kind[8];
     uint8_t ext_live;
-    uint8_t fp_mode;
     uint32_t fpu_top; /* ST(i) == st[(fpu_top + i) & 7] */
     uint16_t fpu_cw, fpu_sw;
     /* x87 tag word, 2 bits per PHYSICAL register st[i]: 3 = empty, else in
@@ -1078,7 +1075,7 @@ X86_CMPS_SCAS(d, 32, 0xffffffffu)
  * 80-bit extended (stx[], st_kind 1) otherwise. Every extended slot is in
  * use, and ext_live counts them, so a free slot always has kind 0.
  *
- * Arithmetic takes one of three paths, chosen by fp_mode:
+ * Arithmetic takes one of three paths, chosen by the mode word x87_mode():
  *   X87_MODE_FAST  PC=53, RC=nearest, no extended register: the host's own
  *                  double operation, which is the x87 result unless the
  *                  result leaves the double's normal range (where the x87's
@@ -1089,9 +1086,10 @@ X86_CMPS_SCAS(d, 32, 0xffffffffu)
  *                  rounded again to 24 bits, out of line (runtime/x87.c);
  *   X87_MODE_EXACT anything else: SoftFloat's 80-bit arithmetic at the
  *                  control word's precision and rounding, out of line.
- * x87_set_cw and every change of ext_live keep fp_mode current. Zero means
- * not derived yet: a context the runtime zeroes and gives a control word
- * directly takes the out-of-line path once, which derives it.
+ * The mode is derived from fpu_cw and ext_live where it is used - two loads,
+ * an OR and a compare - rather than cached, so code that assigns fpu_cw
+ * directly (a thread's start, a test, a mod hook) can never leave a stale
+ * path behind.
  *
  * ST(i) is st[(fpu_top + i) & 7]; a push predecrements fpu_top. Status-word
  * bits: C0=8 C1=9 C2=10 TOP=11..13 C3=14. ST() reads the double, which for
@@ -1104,7 +1102,6 @@ X86_CMPS_SCAS(d, 32, 0xffffffffu)
 #define FTAG_SPECIAL 2u /* NaN, infinity, denormal, unsupported */
 #define FTAG_EMPTY 3u
 
-#define X87_MODE_UNSET 0u
 #define X87_MODE_FAST 1u
 #define X87_MODE_PC24 2u
 #define X87_MODE_EXACT 3u
@@ -1144,21 +1141,20 @@ RECOMP_HOT_INLINE unsigned fempty(const X86 *c, unsigned i) {
     return ftag_of(c, (c->fpu_top + i) & 7u) == FTAG_EMPTY;
 }
 
-/* The arithmetic path for a control word and extended-register count. */
-RECOMP_HOT_INLINE uint8_t x87_mode_of(uint16_t cw, unsigned ext_live) {
-    unsigned pcrc = cw & 0x0f00u; /* RC (11:10) and PC (9:8) */
-    if (ext_live)
-        return X87_MODE_EXACT;
-    return pcrc == 0x0200u ? X87_MODE_FAST : pcrc == 0x0000u ? X87_MODE_PC24 : X87_MODE_EXACT;
+/* RC (11:10) and PC (9:8) of the control word with the extended-register
+ * count in the low bits: 0x200 is the fast path, 0 the PC=24 one. */
+RECOMP_HOT_INLINE unsigned x87_mode_key(const X86 *c) {
+    return (c->fpu_cw & 0x0f00u) | c->ext_live;
 }
-RECOMP_HOT_INLINE void x87_mode_refresh(X86 *c) {
-    c->fp_mode = x87_mode_of(c->fpu_cw, c->ext_live);
+/* The arithmetic path, X87_MODE_*. */
+RECOMP_HOT_INLINE unsigned x87_mode(const X86 *c) {
+    unsigned key = x87_mode_key(c);
+    return key == 0x0200u ? X87_MODE_FAST : key == 0u ? X87_MODE_PC24 : X87_MODE_EXACT;
 }
 
-/* FLDCW, and every other write of the control word: the path follows it. */
+/* FLDCW, and every other write of the control word. */
 static inline void x87_set_cw(X86 *c, uint16_t cw) {
     c->fpu_cw = cw;
-    x87_mode_refresh(c);
 }
 
 /* A slot stops being extended: its value was popped, freed or overwritten.
@@ -1166,13 +1162,11 @@ static inline void x87_set_cw(X86 *c, uint16_t cw) {
 static inline void x87_kind_clear(X86 *c, unsigned phys) {
     c->st_kind[phys] = 0;
     c->ext_live--;
-    x87_mode_refresh(c);
 }
 static inline void x87_kind_set(X86 *c, unsigned phys, X87Ext v) {
     if (!c->st_kind[phys]) {
         c->st_kind[phys] = 1;
         c->ext_live++;
-        x87_mode_refresh(c);
     }
     c->stx[phys] = v;
 }
@@ -1180,7 +1174,6 @@ static inline void x87_kind_set(X86 *c, unsigned phys, X87Ext v) {
 static inline void x87_kind_reset(X86 *c) {
     memset(c->st_kind, 0, sizeof c->st_kind);
     c->ext_live = 0;
-    x87_mode_refresh(c);
 }
 /* After the tag word is loaded wholesale (FLDENV, FRSTOR, FFREE): a slot
  * marked empty gives up its extended value. */
@@ -1429,12 +1422,11 @@ RECOMP_HOT_INLINE int x87_pc24_ok(int op, double *r, double a, double b) {
 /* FADD/FSUB/FSUBR/FMUL/FDIV/FDIVR ST(d), ST(s): ST(d) = ST(d) op ST(s). */
 RECOMP_HOT_INLINE void x87_arith_st(X86 *c, int op, unsigned d, unsigned s) {
     unsigned pd = (c->fpu_top + d) & 7u, ps = (c->fpu_top + s) & 7u;
-    uint8_t mode = c->fp_mode;
-    if (RECOMP_LIKELY(mode == X87_MODE_FAST || mode == X87_MODE_PC24)) {
+    unsigned key = x87_mode_key(c);
+    if (RECOMP_LIKELY(key == 0x0200u || key == 0u)) {
         double a = c->st[pd], b = c->st[ps];
         double r = x87_host_op(op, a, b);
-        if (RECOMP_LIKELY(mode == X87_MODE_FAST ? x87_fast_ok(op, r, a, b)
-                                                : x87_pc24_ok(op, &r, a, b))) {
+        if (RECOMP_LIKELY(key == 0x0200u ? x87_fast_ok(op, r, a, b) : x87_pc24_ok(op, &r, a, b))) {
             c->st[pd] = r;
             ftag_put(c, pd, ftag_classify(r));
             return;
@@ -1447,12 +1439,11 @@ RECOMP_HOT_INLINE void x87_arith_st(X86 *c, int op, unsigned d, unsigned s) {
  * to double, which is exact for every x87 memory operand that has these forms. */
 RECOMP_HOT_INLINE void x87_arith_m(X86 *c, int op, double m) {
     unsigned p = c->fpu_top & 7u;
-    uint8_t mode = c->fp_mode;
-    if (RECOMP_LIKELY(mode == X87_MODE_FAST || mode == X87_MODE_PC24)) {
+    unsigned key = x87_mode_key(c);
+    if (RECOMP_LIKELY(key == 0x0200u || key == 0u)) {
         double a = c->st[p];
         double r = x87_host_op(op, a, m);
-        if (RECOMP_LIKELY(mode == X87_MODE_FAST ? x87_fast_ok(op, r, a, m)
-                                                : x87_pc24_ok(op, &r, a, m))) {
+        if (RECOMP_LIKELY(key == 0x0200u ? x87_fast_ok(op, r, a, m) : x87_pc24_ok(op, &r, a, m))) {
             c->st[p] = r;
             ftag_put(c, p, ftag_classify(r));
             return;
@@ -1464,12 +1455,12 @@ RECOMP_HOT_INLINE void x87_arith_m(X86 *c, int op, double m) {
 /* FSQRT. */
 RECOMP_HOT_INLINE void x87_fsqrt(X86 *c) {
     unsigned p = c->fpu_top & 7u;
-    uint8_t mode = c->fp_mode;
-    if (RECOMP_LIKELY(mode == X87_MODE_FAST || mode == X87_MODE_PC24)) {
+    unsigned key = x87_mode_key(c);
+    if (RECOMP_LIKELY(key == 0x0200u || key == 0u)) {
         double a = c->st[p];
         double r = __builtin_sqrt(a);
-        if (RECOMP_LIKELY(mode == X87_MODE_FAST ? x87_fast_ok(X87_SQRT, r, a, a)
-                                                : x87_pc24_ok(X87_SQRT, &r, a, a))) {
+        if (RECOMP_LIKELY(key == 0x0200u ? x87_fast_ok(X87_SQRT, r, a, a)
+                                         : x87_pc24_ok(X87_SQRT, &r, a, a))) {
             c->st[p] = r;
             ftag_put(c, p, ftag_classify(r));
             return;
