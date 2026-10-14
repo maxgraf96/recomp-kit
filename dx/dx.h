@@ -99,6 +99,16 @@ void qmixer_dump(FILE *out);
 // DirectSound entry point calls it too.
 void dsound_pump();
 
+// The IDirectSound (guest interface pointer) that the audio libraries share:
+// Miles hands it out from AIL_get_DirectSound_info, and the same pointer is
+// what a game passes on to IDirectMusicPerformance::Init and to
+// BinkSetSoundSystem. A component that would otherwise open DirectSound for
+// itself (DirectMusic given a null one) borrows this one too. Created on first
+// use; the runtime holds the creation reference, so the borrowers' AddRef and
+// Release pairs never destroy it. Its caps report no hardware mixing buffers,
+// which a Miles mixer plugin turns into its 16-voice default.
+uint32_t dsound_shared_device();
+
 // Runs on the main guest thread between frames, from the guest's own message
 // loop, registered with host_set_frame_pump by dx_register_shims. It refills
 // streamed QMixer waves by calling the guest back for more samples and it

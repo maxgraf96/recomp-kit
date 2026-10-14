@@ -1715,10 +1715,31 @@ void dsbuffer_destroy(ComObj *b) {
 
 } // namespace
 
+// The one DirectSound object the audio libraries hand each other. On Windows
+// a sound library opens DirectSound once and other components borrow that
+// pointer: Miles reports it from AIL_get_DirectSound_info, a DirectMusic
+// performance is initialised with it, and Bink is given it for its own
+// buffers. Each borrower AddRefs and Releases it, so the runtime keeps the
+// creation reference for itself; the borrowers' calls balance around it and
+// the object lives until the arena does. Held by id: objects are reached
+// through com_get, never by a pointer kept across allocations.
+static uint32_t g_shared_device = 0;
+
+uint32_t dsound_shared_device() {
+    ComObj *ds = com_get(g_shared_device);
+    if (!ds || ds->kind != K_DSOUND) {
+        ds = com_new(K_DSOUND);
+        g_shared_device = ds->id;
+        LOGV("dsound: shared DirectSound object %u", ds->id);
+    }
+    return com_view(ds, IF_DSOUND);
+}
+
 void dsound_reset() {
     // The sample blocks lived in the arena mem_init discarded, so the
     // reference table must not outlive it. So did the guest event handles the
     // notification records name.
+    g_shared_device = 0;
     pcm_refs().clear();
     notifies().clear();
     streams().clear();

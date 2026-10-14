@@ -7172,6 +7172,92 @@ static void test_mss32_stream() {
     CHECK_EQ(os_rmdir(dir), 0);
 }
 
+static uint32_t make_buffer(uint32_t ds, uint32_t chans, uint32_t rate, uint32_t bits,
+                            uint32_t bytes, uint32_t out);
+
+// One IDirectSound for Miles, DirectMusic and Bink: COM identity, balanced
+// borrowing, caps validation, buffers made from it, and a fresh one per arena.
+static void test_dsound_shared_device() {
+    cpu_reset();
+    uint32_t ds = dsound_shared_device();
+    CHECK(ds != 0);
+    CHECK_EQ(dsound_shared_device(), ds);
+    CHECK(com_this(ds) != nullptr && com_this(ds)->kind == K_DSOUND);
+
+    static const uint8_t iid_ds[16] = {0x83, 0xFA, 0x9A, 0x27, 0x81, 0x49, 0xCE, 0x11,
+                                       0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60};
+    static const uint8_t iid_unknown[16] = {0, 0, 0, 0, 0, 0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46};
+    uint32_t iid = sc(0x40);
+    memcpy(g_mem + iid, iid_ds, 16);
+    CHECK_EQ(call_method(ds, 0, {iid, sc(0x60)}), DS_OK);
+    CHECK_EQ(rd32(sc(0x60)), ds);
+    memcpy(g_mem + iid, iid_unknown, 16);
+    CHECK_EQ(call_method(ds, 0, {iid, sc(0x60)}), DS_OK);
+    CHECK_EQ(rd32(sc(0x60)), ds);
+    memset(g_mem + iid, 0x5a, 16);
+    CHECK_EQ(call_method(ds, 0, {iid, sc(0x60)}), E_NOINTERFACE);
+    CHECK_EQ(rd32(sc(0x60)), 0u);
+    CHECK_EQ(call_method(ds, 2), 2u); // the two successful QueryInterface calls
+    CHECK_EQ(call_method(ds, 2), 1u);
+
+    // Borrowers' pairs balance around the runtime's reference: Miles, a
+    // DirectMusic performance and Bink each AddRef and later Release.
+    for (uint32_t i = 0; i < 3; ++i)
+        CHECK_EQ(call_method(ds, 1), 2u + i);
+    for (uint32_t i = 0; i < 3; ++i)
+        CHECK_EQ(call_method(ds, 2), 3u - i);
+    uint32_t caps = sc(0x200);
+    gm_zero(caps, 0x60);
+    wr32(caps, 0x60);
+    CHECK_EQ(call_method(ds, 4, {caps}), DS_OK);
+    uint32_t flags = rd32(caps + 4);
+    CHECK((flags & DSCAPS_PRIMARY16BIT) && (flags & DSCAPS_PRIMARYSTEREO));
+    CHECK((flags & DSCAPS_SECONDARY16BIT) && (flags & DSCAPS_CONTINUOUSRATE));
+    wr32(caps, 0);
+    CHECK_EQ(call_method(ds, 4, {caps}), DSERR_INVALIDPARAM);
+    wr32(caps, 0x61);
+    CHECK_EQ(call_method(ds, 4, {caps}), DSERR_INVALIDPARAM);
+    CHECK_EQ(call_method(ds, 4, {0}), DSERR_INVALIDPARAM);
+    CHECK_EQ(call_method(ds, DS_SetCooperativeLevel, {0x1234, 2}), DS_OK);
+
+    // The primary buffer it makes reports the format Miles opens it at.
+    uint32_t desc = sc(0x100);
+    gm_zero(desc, DSBUFFERDESC_SIZE);
+    wr32(desc + DSBD_OFF_dwSize, DSBUFFERDESC_SIZE);
+    wr32(desc + DSBD_OFF_dwFlags, DSBCAPS_PRIMARYBUFFER);
+    CHECK_EQ(call_method(ds, DS_CreateSoundBuffer, {desc, sc(0x80), 0}), DS_OK);
+    uint32_t primary = rd32(sc(0x80));
+    CHECK(primary != 0);
+    if (primary) {
+        uint32_t wfx = sc(0x140);
+        gm_zero(wfx, WFX_SIZE);
+        CHECK_EQ(call_method(primary, B_GetFormat, {wfx, WFX_SIZE, 0}), DS_OK);
+        CHECK_EQ(rd32(wfx + WFX_OFF_nSamplesPerSec), 22050u);
+        CHECK_EQ(rd16(wfx + WFX_OFF_nChannels), 2u);
+        CHECK_EQ(rd16(wfx + WFX_OFF_wBitsPerSample), 16u);
+        CHECK_EQ(call_method(primary, 2), 0u);
+    }
+    // A secondary buffer from it plays through the host mixer like any other.
+    g_plays.clear();
+    uint32_t buffer = make_buffer(ds, 1, 22050, 8, 64, sc(0x84));
+    CHECK(buffer != 0);
+    if (buffer) {
+        CHECK_EQ(call_method(buffer, B_Play, {0, 0, 0}), DS_OK);
+        CHECK_EQ(g_plays.size(), 1u);
+        call_method(buffer, B_Stop);
+        CHECK_EQ(call_method(buffer, 2), 0u);
+    }
+
+    // The arena goes, and the next borrower gets a new, working object.
+    dsound_reset();
+    uint32_t fresh = dsound_shared_device();
+    CHECK(fresh != 0);
+    CHECK(com_this(fresh) != nullptr && com_this(fresh)->kind == K_DSOUND);
+    CHECK(com_this(fresh) != com_this(ds));
+    wr32(caps, 0x60);
+    CHECK_EQ(call_method(fresh, 4, {caps}), DS_OK);
+}
+
 static void test_bink_smack_stubs() {
     cpu_reset();
     uint32_t name = sc(0x100);
@@ -12782,6 +12868,7 @@ int main() {
         {"Legacy audio", test_legacy_audio},
         {"AVI reader", test_avi_reader},
         {"Miles streams", test_mss32_stream},
+        {"DirectSound shared device", test_dsound_shared_device},
         {"Bink/Smacker stubs", test_bink_smack_stubs},
         {"Bink entry points resolve", test_bink_entry_points_resolve},
         {"video frame conversion", test_video_frame_convert},
