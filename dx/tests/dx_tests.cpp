@@ -6586,6 +6586,10 @@ static void test_mss32_arities() {
     CHECK_EQ(imports_argc(TRAMP_BASE + 1), 0u);
     CHECK_EQ(imports_argc(TRAMP_BASE + imports_count() * TRAMP_STRIDE), 0u);
     CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_startup@0"), {}), 1u);
+    // Miles 6's DirectSound fragment defaults, read back before any set.
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_get_preference@4"), {34}), 8u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_get_preference@4"), {35}), 96u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_get_preference@4"), {42}), 8u);
     CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_enumerate_3D_providers@12"), {0, 0, 0}), 0u);
     CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_open_3D_provider@4"), {0}), 1u);
     uint32_t sample = call_shim(tramp("mss32.dll", "_AIL_allocate_sample_handle@4"), {0});

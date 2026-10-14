@@ -40,7 +40,20 @@ struct Driver {
 };
 std::map<uint32_t, Driver> g_drivers;
 uint32_t g_next_driver = 0x10000;
-int32_t g_preferences[64]{};
+// Preferences as Miles 6 starts with them, where a game reads one back before
+// it sets it: a DirectSound mixer sized from DIG_DS_FRAGMENT_SIZE (34, 8 ms),
+// DIG_DS_FRAGMENT_CNT (35, 96 fragments) and DIG_DS_MIX_FRAGMENT_CNT (42, 8
+// mixed ahead) divides by the first. Every other preference starts at 0.
+struct Preferences {
+    int32_t v[64] = {};
+    Preferences() {
+        v[34] = 8;
+        v[35] = 96;
+        v[42] = 8;
+    }
+};
+Preferences g_prefs_store;
+int32_t *const g_preferences = g_prefs_store.v;
 
 struct Sample {
     uint32_t handle = 0, driver = 0;
