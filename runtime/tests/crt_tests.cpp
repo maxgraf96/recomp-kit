@@ -1104,7 +1104,435 @@ static void test_registration() {
         check(imports_argc(imports_resolve("MSVCRT.dll", n)) == ARGC_CDECL, "%s is cdecl", n);
 }
 
-int main() {
+// ---------------------------------------------------------------------------
+// The behaviour vectors: `crt_tests --vectors in.tsv out.tsv` runs the file a
+// Windows harness runs against msvcrt.dll, through the HLE, and prints the
+// results in the same format (the game repository's tests/crt describes both
+// and compares them). Each vector starts in the C locale.
+// ---------------------------------------------------------------------------
+namespace vec {
+
+std::string g_line;
+void raw(const std::string &s) {
+    g_line += s;
+}
+void field(const std::string &s) {
+    g_line += '\t';
+    g_line += s;
+}
+void field_hex(const void *p, size_t n) {
+    static const char digits[] = "0123456789abcdef";
+    std::string out;
+    for (size_t i = 0; i < n && i < 4096; ++i) {
+        out.push_back(digits[((const uint8_t *)p)[i] >> 4]);
+        out.push_back(digits[((const uint8_t *)p)[i] & 15]);
+    }
+    field(out);
+}
+void field_gstr(uint32_t a) {
+    if (!a)
+        field("NULL");
+    else
+        field_hex(g_mem + a, crt::gstrlen(a));
+}
+void field_int(int64_t v) {
+    field(std::to_string(v));
+}
+void field_hexw(uint32_t v, int width) {
+    char buf[16];
+    snprintf(buf, sizeof buf, "%0*x", width, v);
+    field(buf);
+}
+void field_bits64(uint64_t v) {
+    char buf[24];
+    snprintf(buf, sizeof buf, "%016llx", (unsigned long long)v);
+    field(buf);
+}
+// The x87 extended form of a double, as FSTP m80 writes it.
+void field_ext80(double d) {
+    uint64_t b = bits_of(d);
+    uint16_t sign = (uint16_t)((b >> 63) << 15);
+    int exp = (int)((b >> 52) & 0x7ff);
+    uint64_t frac = b & 0xfffffffffffffull, mant;
+    uint16_t se;
+    if (exp == 0x7ff) {
+        se = sign | 0x7fff;
+        mant = 0x8000000000000000ull | (frac << 11);
+    } else if (exp == 0 && frac == 0) {
+        se = sign;
+        mant = 0;
+    } else if (exp == 0) {
+        int shift = 0;
+        while (!(frac & (1ull << 52))) {
+            frac <<= 1;
+            ++shift;
+        }
+        se = sign | (uint16_t)(1 - 1023 - shift + 16383);
+        mant = frac << 11;
+    } else {
+        se = sign | (uint16_t)(exp - 1023 + 16383);
+        mant = 0x8000000000000000ull | (frac << 11);
+    }
+    char buf[24];
+    snprintf(buf, sizeof buf, "%04x%016llx", se, (unsigned long long)mant);
+    field(buf);
+}
+
+std::string unhex(const std::string &h) {
+    std::string out;
+    for (size_t i = 0; i + 1 < h.size(); i += 2)
+        out.push_back((char)std::stoi(h.substr(i, 2), nullptr, 16));
+    return out;
+}
+uint64_t hex64(const std::string &h) {
+    return std::stoull(h, nullptr, 16);
+}
+void set_locale(const std::string &name) {
+    ms("setlocale", {0, gstr(name)});
+}
+uint32_t errno_addr() {
+    return ms("_errno", {});
+}
+
+void run(const std::vector<std::string> &f) {
+    const std::string &op = f[1];
+    if (op == "rand") {
+        ms("srand", {(uint32_t)std::stoull(f[2])});
+        for (int i = 0, n = std::stoi(f[3]); i < n; ++i)
+            field_int((int32_t)ms("rand", {}));
+    } else if (op == "rand_thread") {
+        std::vector<uint32_t> vals;
+        int n = std::stoi(f[2]);
+        std::thread([&] {
+            X86 saved = g_cpu;
+            for (int i = 0; i < n; ++i)
+                vals.push_back(ms("rand", {}));
+            g_cpu = saved;
+        }).join();
+        for (uint32_t v : vals)
+            field_int((int32_t)v);
+    } else if (op == "strtod" || op == "atof") {
+        set_locale(f[2]);
+        uint32_t str = gstr(unhex(f[3])), end = gbuf(4);
+        wr32(errno_addr(), 0);
+        if (op == "strtod")
+            ms("strtod", {str, end});
+        else
+            ms("atof", {str});
+        field_bits64(bits_of(st0_result()));
+        if (op == "strtod")
+            field_int((int32_t)(rd32(end) - str));
+        field_int((int32_t)rd32(errno_addr()));
+    } else if (op == "sscanf_f" || op == "sscanf_lf" || op == "sscanf_d") {
+        bool d = op == "sscanf_d";
+        if (!d)
+            set_locale(f[2]);
+        uint32_t str = gstr(unhex(f[d ? 2 : 3]));
+        uint32_t v = gbuf(8), n = gbuf(4);
+        wr32(n, 0xffffffffu);
+        const char *fmt = op == "sscanf_f" ? "%f%n" : op == "sscanf_lf" ? "%lf%n" : "%d%n";
+        int32_t ret = (int32_t)ms("sscanf", {str, gstr(fmt), v, n});
+        field_int(ret);
+        if (op == "sscanf_f")
+            field_hexw(rd32(v), 8);
+        else if (op == "sscanf_lf")
+            field_bits64(rd64(v));
+        else
+            field_int((int32_t)rd32(v));
+        field_int((int32_t)rd32(n));
+    } else if (op.rfind("sprintf_", 0) == 0) {
+        uint32_t buf = gbuf(8192);
+        memset(g_mem + buf, 0, 8192);
+        std::vector<uint32_t> args;
+        if (op == "sprintf_d") {
+            set_locale(f[2]);
+            uint64_t b = hex64(f[4]);
+            args = {buf, gstr(unhex(f[3])), (uint32_t)b, (uint32_t)(b >> 32)};
+        } else if (op == "sprintf_i") {
+            args = {buf, gstr(unhex(f[2])), (uint32_t)std::stoull(f[3])};
+        } else if (op == "sprintf_i64") {
+            uint64_t b = hex64(f[3]);
+            args = {buf, gstr(unhex(f[2])), (uint32_t)b, (uint32_t)(b >> 32)};
+        } else {
+            args = {buf, gstr(unhex(f[2])), gstr(unhex(f[3]))};
+        }
+        int32_t ret = (int32_t)ms("sprintf", args);
+        field_gstr(buf);
+        field_int(ret);
+    } else if (op == "snprintf") {
+        uint32_t count = (uint32_t)std::stoi(f[2]);
+        uint32_t buf = gbuf(64);
+        memset(g_mem + buf, 0xcc, 64);
+        int32_t ret = (int32_t)ms("_snprintf", {buf, count, gstr(unhex(f[3])), gstr(unhex(f[4]))});
+        field_int(ret);
+        field_hex(g_mem + buf, count + 4);
+    } else if (op == "strtol" || op == "strtoul") {
+        uint32_t str = gstr(unhex(f[2])), end = gbuf(4);
+        wr32(end, str);
+        wr32(errno_addr(), 0);
+        uint32_t v = ms(op.c_str(), {str, end, (uint32_t)std::stoi(f[3])});
+        field_int(op == "strtol" ? (int64_t)(int32_t)v : (int64_t)v);
+        field_int((int32_t)(rd32(end) - str));
+        field_int((int32_t)rd32(errno_addr()));
+    } else if (op == "atoi") {
+        field_int((int32_t)ms("atoi", {gstr(unhex(f[2]))}));
+    } else if (op == "atoi64") {
+        ms("_atoi64", {gstr(unhex(f[2]))});
+        field_int((int64_t)((uint64_t)g_cpu.r[R_EDX] << 32 | g_cpu.r[R_EAX]));
+    } else if (op == "itoa") {
+        uint32_t buf = gbuf(64);
+        memset(g_mem + buf, 0, 64);
+        ms("_itoa", {(uint32_t)std::stoi(f[2]), buf, (uint32_t)std::stoi(f[3])});
+        field_gstr(buf);
+    } else if (op == "math") {
+        const std::string &fn = f[2];
+        g_cpu.fpu_cw = (uint16_t)std::stoul(f[3], nullptr, 16);
+        std::vector<uint32_t> a;
+        uint64_t xb = hex64(f[4]);
+        a.push_back((uint32_t)xb);
+        a.push_back((uint32_t)(xb >> 32));
+        if (fn == "pow") {
+            uint64_t yb = hex64(f[5]);
+            a.push_back((uint32_t)yb);
+            a.push_back((uint32_t)(yb >> 32));
+        } else if (fn == "ldexp") {
+            a.push_back((uint32_t)std::stoi(f[5]));
+        }
+        wr32(errno_addr(), 0);
+        uint32_t r = ms(fn.c_str(), a);
+        if (fn == "_finite") {
+            field_bits64(r);
+            field("00000000000000000000");
+        } else {
+            double v = st0_result();
+            field_bits64(bits_of(v));
+            field_ext80(v);
+        }
+        field_int((int32_t)rd32(errno_addr()));
+        g_cpu.fpu_cw = 0x027f;
+    } else if (op == "ci") {
+        const std::string &fn = f[2];
+        g_cpu.fpu_cw = (uint16_t)std::stoul(f[3], nullptr, 16);
+        fpush(&g_cpu, from_bits(hex64(f[4])));
+        if (fn == "_CIpow" || fn == "_CIatan2")
+            fpush(&g_cpu, from_bits(hex64(f[5])));
+        ms(fn.c_str(), {});
+        double v = st0_result();
+        field_bits64(bits_of(v));
+        field_ext80(v);
+        g_cpu.fpu_cw = 0x027f;
+    } else if (op == "ftol") {
+        g_cpu.fpu_cw = (uint16_t)std::stoul(f[2], nullptr, 16);
+        fpush(&g_cpu, from_bits(hex64(f[3])));
+        ms("_ftol", {});
+        field_bits64((uint64_t)g_cpu.r[R_EDX] << 32 | g_cpu.r[R_EAX]);
+        g_cpu.fpu_cw = 0x027f;
+    } else if (op == "ctype") {
+        set_locale(f[2]);
+        uint32_t ch = (uint32_t)std::stoi(f[3]);
+        for (const char *n : {"isalnum", "isalpha", "isdigit", "isspace", "isxdigit"})
+            field_hexw(ms(n, {ch}), 1);
+        field_int((int32_t)ms("tolower", {ch}));
+        field_int((int32_t)ms("toupper", {ch}));
+    } else if (op == "wctype") {
+        set_locale(f[2]);
+        uint32_t w = (uint32_t)std::stoi(f[3]) & 0xffff;
+        field_hexw(ms("towupper", {w}) & 0xffff, 4);
+        field_hexw(ms("towlower", {w}) & 0xffff, 4);
+        field_hexw(ms("iswctype", {w, 0x1ff}), 1);
+    } else if (op == "mbconv") {
+        set_locale(f[2]);
+        uint32_t in = gbuf(4), w = gbuf(8), back = gbuf(4);
+        wr8(in, (uint8_t)std::stoi(f[3]));
+        wr8(in + 1, 0);
+        memset(g_mem + w, 0xcc, 8);
+        memset(g_mem + back, 0xcc, 4);
+        field_int((int32_t)ms("mbstowcs", {w, in, 4}));
+        field_hexw(rd16(w), 4);
+        field_int((int32_t)ms("wcstombs", {back, w, 4}));
+        field_hexw(rd8(back), 2);
+    } else if (op == "mbcase") {
+        set_locale(f[2]);
+        std::string s = unhex(f[3]);
+        uint32_t a = gstr(s);
+        ms("_mbsupr", {a});
+        field_hex(g_mem + a, s.size());
+        uint32_t b = gstr(s);
+        ms("_mbslwr", {b});
+        field_hex(g_mem + b, s.size());
+    } else if (op == "cmp") {
+        const std::string &fn = f[2];
+        set_locale(f[3]);
+        std::string a = unhex(f[4]), b = unhex(f[5]);
+        uint32_t n = (uint32_t)std::stoi(f[6]);
+        uint32_t r;
+        if (fn == "wcscmp") {
+            uint32_t wa = gbuf(2 * (uint32_t)a.size() + 2), wb = gbuf(2 * (uint32_t)b.size() + 2);
+            for (size_t i = 0; i <= a.size(); ++i)
+                wr16(wa + 2 * (uint32_t)i, i < a.size() ? (uint8_t)a[i] : 0);
+            for (size_t i = 0; i <= b.size(); ++i)
+                wr16(wb + 2 * (uint32_t)i, i < b.size() ? (uint8_t)b[i] : 0);
+            r = ms("wcscmp", {wa, wb});
+        } else if (fn == "strcmp" || fn == "_stricmp" || fn == "_mbscmp" || fn == "_mbsicmp") {
+            r = ms(fn.c_str(), {gstr(a), gstr(b)});
+        } else {
+            r = ms(fn.c_str(), {gstr(a), gstr(b), n});
+        }
+        field_int((int32_t)r);
+    } else if (op == "setlocale") {
+        set_locale("C");
+        uint32_t r = ms("setlocale", {(uint32_t)std::stoi(f[2]), gstr(unhex(f[3]))});
+        field_gstr(r);
+        field_gstr(ms("setlocale", {0, 0}));
+        uint32_t lc = ms("localeconv", {});
+        for (int i = 0; i < 10; ++i)
+            field_gstr(rd32(lc + 4 * (uint32_t)i));
+        for (int i = 0; i < 8; ++i)
+            field_int(rd8(lc + 40 + (uint32_t)i));
+    } else if (op == "asctime" || op == "strftime") {
+        int base = op == "asctime" ? 2 : 5;
+        uint32_t tm = gbuf(36);
+        for (int i = 0; i < 9; ++i)
+            wr32(tm + 4 * (uint32_t)i, (uint32_t)std::stoi(f[base + i]));
+        if (op == "asctime") {
+            field_gstr(ms("asctime", {tm}));
+        } else {
+            set_locale(f[2]);
+            uint32_t buf = gbuf(512);
+            memset(g_mem + buf, 0, 512);
+            uint32_t r = ms("strftime", {buf, (uint32_t)std::stoi(f[4]), gstr(unhex(f[3])), tm});
+            field_int(r);
+            if (r)
+                field_gstr(buf);
+            else
+                field("");
+        }
+    } else if (op == "gmtime") {
+        uint32_t t = gbuf(4);
+        wr32(t, (uint32_t)std::stoi(f[2]));
+        uint32_t tm = ms("gmtime", {t});
+        if (!tm)
+            field("NULL");
+        else
+            for (int i = 0; i < 9; ++i)
+                field_int((int32_t)rd32(tm + 4 * (uint32_t)i));
+    } else if (op == "msize") {
+        uint32_t p = ms("malloc", {(uint32_t)std::stoi(f[2])});
+        field_int(p ? (int64_t)ms("_msize", {p}) : -1);
+        field_int(p & 15);
+        ms("free", {p});
+    } else if (op == "splitpath") {
+        uint32_t out[4];
+        for (uint32_t &o : out) {
+            o = gbuf(1024);
+            memset(g_mem + o, 0, 1024);
+        }
+        ms("_splitpath", {gstr(unhex(f[2])), out[0], out[1], out[2], out[3]});
+        for (uint32_t o : out)
+            field_gstr(o);
+    } else if (op == "typename") {
+        uint32_t ti = gbuf(600);
+        wr32(ti, ti);
+        wr32(ti + 4, 0);
+        gm_put_str(ti + 8, unhex(f[2]).c_str(), 512);
+        field_gstr(ms("?name@type_info@@QBEPBDXZ", {}, ti));
+    } else if (op == "textfile") {
+        std::string mode = unhex(f[2]), content = unhex(f[3]);
+        std::string host = std::string(win32_game_dir()) + "/crtvec.tmp";
+        FILE *w = fopen(host.c_str(), "wb");
+        if (w) {
+            fwrite(content.data(), 1, content.size(), w);
+            fclose(w);
+        }
+        uint32_t file = ms("fopen", {gstr("crtvec.tmp"), gstr(mode)});
+        if (!file) {
+            field("NULL");
+        } else {
+            uint32_t line = gbuf(16);
+            for (int i = 0; i < 64; ++i) {
+                uint32_t r = ms("fgets", {line, 16, file});
+                field_gstr(r ? line : 0);
+                field_int((int32_t)ms("ftell", {file}));
+                if (!r)
+                    break;
+            }
+            field_int((rd32(file + 12) & 0x10) != 0);
+            ms("rewind", {file});
+            uint32_t rb = gbuf(256);
+            memset(g_mem + rb, 0, 256);
+            field_int(ms("fread", {rb, 1, 200, file}));
+            field_gstr(rb);
+            field_int((int32_t)ms("ftell", {file}));
+            field_int((int32_t)ms("fseek", {file, 3, 0}));
+            field_int((int32_t)ms("fgetc", {file}));
+            field_int((int32_t)ms("ungetc", {'Q', file}));
+            field_int((int32_t)ms("ftell", {file}));
+            field_int((int32_t)ms("fgetc", {file}));
+            field_int((int32_t)ms("fgetc", {file}));
+            ms("fclose", {file});
+        }
+        remove(host.c_str());
+    } else {
+        field("UNKNOWN_OP");
+    }
+}
+
+} // namespace vec
+
+static int run_vectors(const char *in_path, const char *out_path) {
+    FILE *in = fopen(in_path, "rb");
+    FILE *out = fopen(out_path, "wb");
+    if (!in || !out) {
+        fprintf(stderr, "cannot open %s or %s\n", in_path, out_path);
+        return 2;
+    }
+    char dir[256];
+    snprintf(dir, sizeof dir, "%s/crt-vectors-XXXXXX", os_temp_dir());
+    if (os_mkdtemp(dir) != 0)
+        return 2;
+    reset_world();
+    win32_init(dir);
+    imports_alloc_data("msvcrt.dll", "_iob");
+    std::string line;
+    char chunk[1 << 16];
+    size_t count = 0;
+    while (fgets(chunk, sizeof chunk, in)) {
+        line += chunk;
+        if (line.empty() || line.back() != '\n')
+            continue;
+        while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
+            line.pop_back();
+        std::vector<std::string> f;
+        size_t at = 0;
+        for (;;) {
+            size_t tab = line.find('\t', at);
+            f.push_back(line.substr(at, tab == std::string::npos ? std::string::npos : tab - at));
+            if (tab == std::string::npos)
+                break;
+            at = tab + 1;
+        }
+        line.clear();
+        if (f.size() < 2)
+            continue;
+        g_scratch_top = SCRATCH;
+        vec::g_line = f[0];
+        vec::field(f[1]);
+        vec::set_locale("C");
+        vec::run(f);
+        vec::g_line += '\n';
+        fwrite(vec::g_line.data(), 1, vec::g_line.size(), out);
+        ++count;
+    }
+    fclose(in);
+    fclose(out);
+    os_rmdir(dir);
+    fprintf(stderr, "%zu vectors -> %s\n", count, out_path);
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc == 4 && !strcmp(argv[1], "--vectors"))
+        return run_vectors(argv[2], argv[3]);
     test_heap();
     test_strings();
     test_locale();
