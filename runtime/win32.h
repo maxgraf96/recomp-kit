@@ -41,6 +41,12 @@ std::string shell_folder_guest_path(uint32_t csidl, bool create);
 // Reserves a process-wide TLS slot for the loader or TlsAlloc; 0xffffffff
 // when every slot is in use. win32_init resets the reservation map.
 uint32_t tls_reserve_slot();
+// Returns a slot to the pool and zeroes it in every thread (a DLL's static TLS
+// on unload).
+void tls_release_slot(uint32_t index);
+// The TLS arrays of every live guest thread, the main thread's first: where a
+// DLL loaded later puts its static TLS block for each.
+std::vector<uint32_t> win32_thread_tls_arrays();
 
 void set_last_error(uint32_t code);
 // Signals a kernel event object by handle (pulse = signal then immediately

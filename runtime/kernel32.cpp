@@ -516,7 +516,14 @@ uint32_t tls_reserve_slot() {
 }
 
 uint32_t loader_tls_block_for_thread(uint32_t tls_array) {
-    const LoaderTls &t = loader_tls();
+    // Attached DLLs with static TLS first; the return value is the image's.
+    for (uint32_t i = 0; const LoaderModule *m = loader_module(i); ++i)
+        if (m->attached && m->tls.index != 0xffffffffu && !loader_tls_block(m->tls, tls_array))
+            LOGW("%s: no TLS block for a new thread: the guest heap is full", m->name.c_str());
+    return loader_tls_block(loader_tls(), tls_array);
+}
+
+uint32_t loader_tls_block(const LoaderTls &t, uint32_t tls_array) {
     if (t.index == 0xffffffffu)
         return 0;
     uint32_t raw = t.raw_end - t.raw_start;
@@ -1058,6 +1065,9 @@ void k_SetCurrentDirectoryA(X86 *c) {
 // Both encodings expose the same guest path, never a host filesystem path.
 std::string module_file_name(uint32_t hmod) {
     std::string path = RECOMP_GUEST_ROOT "\\" RECOMP_EXECUTABLE;
+    // A mapped module's handle is its base, and it lives beside the image.
+    if (const LoaderModule *m = hmod ? loader_module_at_base(hmod) : nullptr)
+        return RECOMP_GUEST_ROOT "\\" + m->name;
     if (hmod && hmod != IMAGE_BASE) {
         for (const auto &kv : modules())
             if (kv.second == hmod) {
@@ -1134,17 +1144,9 @@ bool runtime_serves_module(const std::string &lower_name) {
 }
 
 // Mapped auxiliary code stays in the arena, but its Win32 lifetime follows
-// LoadLibrary/FreeLibrary. The main executable never enters this DLL path.
-uint32_t call_dll_entry(X86 *c, const LoaderModule &m, uint32_t reason) {
-    if (!m.entry || recomp_module_lookup(m.entry) < 0) {
-        LOGV("%s: DLL entry %08x is not translated, not run", m.name.c_str(), m.entry);
-        return 1;
-    }
-    uint32_t result = guest_call(c, m.entry, m.base, reason, 0);
-    LOGV("%s: DLL entry %08x reason %u returned %08x", m.name.c_str(), m.entry, reason, result);
-    return result;
-}
-
+// LoadLibrary/FreeLibrary: the loader attaches it - after what it imports - on
+// the first reference and detaches it on the last (loader_module_load/free).
+// The main executable never enters this DLL path.
 void load_library_named(X86 *c, const std::string &module_name) {
     std::string name = library_name(module_name);
     auto it = modules().find(name);
@@ -1152,27 +1154,17 @@ void load_library_named(X86 *c, const std::string &module_name) {
         set_eax(c, it->second);
         return;
     }
-    // Restore post-IAT bytes before each fresh attach, just as remapping the
-    // original DLL would. Never restore the main image or run its EXE entry.
     if (LoaderModule *m = loader_module_named(name.c_str())) {
         if (m->base == loader_image_base()) {
             set_eax(c, m->base);
             return;
         }
-        if (!m->attached) {
-            memcpy(g_mem + m->base, m->initial_image.data(), m->initial_image.size());
-            m->attached = true;
-            m->load_refs = 1;
-            if (!call_dll_entry(c, *m, 1)) { // DLL_PROCESS_ATTACH
-                call_dll_entry(c, *m, 0);    // failed attach still receives detach
-                m->attached = false;
-                m->load_refs = 0;
-                set_last_error(1114); // ERROR_DLL_INIT_FAILED
-                set_eax(c, 0);
-                return;
-            }
-        } else {
-            ++m->load_refs;
+        if (uint32_t err = loader_module_load(c, m)) {
+            log_once(("loadlib-fail:" + name).c_str(), "LoadLibrary(\"%s\") failed: %s",
+                     name.c_str(), loader_error());
+            set_last_error(err);
+            set_eax(c, 0);
+            return;
         }
         set_eax(c, m->base);
         return;
@@ -1205,18 +1197,31 @@ void k_LoadLibraryExW(X86 *c) {
     k_LoadLibraryW(c);
 }
 
+// The flags change only where Windows searches (LOAD_WITH_ALTERED_SEARCH_PATH
+// and friends) or skip DllMain for a module mapped as data or "without
+// references"; a mapped module answers by name either way, so it loads.
+void k_LoadLibraryExA(X86 *c) {
+    if (arg(c, 2) & ~0x8u)
+        log_once("LoadLibraryExA-flags", "LoadLibraryExA(\"%s\", flags %x): loading normally",
+                 gm_str(arg(c, 0)).c_str(), arg(c, 2));
+    k_LoadLibraryA(c);
+}
+
+// A thread attach or detach no longer reaches this module's DllMain.
+void k_DisableThreadLibraryCalls(X86 *c) {
+    if (LoaderModule *m = loader_module_at_base(arg(c, 0)))
+        m->thread_calls = false;
+    set_eax(c, 1);
+}
+
 void k_FreeLibrary(X86 *c) {
     uint32_t handle = arg(c, 0);
     if (const LoaderModule *mapped = loader_module_containing(handle)) {
         LoaderModule *m = loader_module_named(mapped->name.c_str());
-        if (handle != m->base || handle == loader_image_base() || !m->load_refs) {
+        if (handle != m->base || !loader_module_free(c, m)) {
             set_last_error(ERROR_INVALID_HANDLE_);
             set_eax(c, 0);
             return;
-        }
-        if (--m->load_refs == 0) {
-            call_dll_entry(c, *m, 0); // DLL_PROCESS_DETACH, before discarding globals
-            m->attached = false;
         }
     }
     // Shim-only libraries have process lifetime and no guest entry point.
@@ -2703,6 +2708,22 @@ const double SCHED_SLICE_SECONDS = 0.001;
 
 } // namespace
 
+void tls_release_slot(uint32_t i) {
+    if (i >= TLS_SLOTS)
+        return;
+    g_tls_used[i] = false;
+    tls_clear_slot_everywhere(i);
+}
+
+std::vector<uint32_t> win32_thread_tls_arrays() {
+    cur_thread();
+    std::vector<uint32_t> out;
+    for (GuestThread *t : threads())
+        if (!t->finished && t->tls)
+            out.push_back(t->tls);
+    return out;
+}
+
 // Blocks the calling guest thread for `ms`, letting everything else run. The
 // message loop uses it so a wait for a message is a real wait rather than a
 // spin.
@@ -3001,10 +3022,19 @@ void *thread_host_main(void *arg) {
         param = o->thread_param;
     }
     uint32_t result = 0;
-    if (setjmp(t->exit_jmp) == 0)
+    if (setjmp(t->exit_jmp) == 0) {
+        // Every attached DLL hears of the new thread on it, before its start.
+        loader_thread_notify(&t->ctx, 2); // DLL_THREAD_ATTACH
         result = guest_call(&t->ctx, start, param);
-    else
+    } else
         result = t->exit_code;
+    // And of its end, on it, unless the process is ending under it.
+    if (!g_exit_requested) {
+        t->exit_code = result;
+        if (setjmp(t->exit_jmp) == 0)
+            loader_thread_notify(&t->ctx, 3); // DLL_THREAD_DETACH
+        result = t->exit_code;
+    }
 
     // Before anything is published: this thread still holds the baton here.
     thread_run_exit_cleanup(t);
@@ -3377,6 +3407,10 @@ void k_ExitProcess(X86 *c) {
     if (request_process_exit(arg(c, 0)))
         return; // never returns
     publish_process_exit(arg(c, 0));
+    // DLL_PROCESS_DETACH for every attached DLL, last attached first, before
+    // the process is gone - their static destructors and atexit lists run here
+    // on Windows too.
+    loader_detach_all(c);
     g_exit_code = arg(c, 0);
     g_exited = true;
     if (g_exit_jmp_valid)
@@ -4787,6 +4821,8 @@ const ImportShim g_kernel32_shims[] = {
     {"KERNEL32.dll", "LoadLibraryA", 1, k_LoadLibraryA},
     {"KERNEL32.dll", "LoadLibraryW", 1, k_LoadLibraryW},
     {"KERNEL32.dll", "LoadLibraryExW", 3, k_LoadLibraryExW},
+    {"KERNEL32.dll", "LoadLibraryExA", 3, k_LoadLibraryExA},
+    {"KERNEL32.dll", "DisableThreadLibraryCalls", 1, k_DisableThreadLibraryCalls},
     {"KERNEL32.dll", "FreeLibrary", 1, k_FreeLibrary},
     {"KERNEL32.dll", "GetProcAddress", 2, k_GetProcAddress},
     {"KERNEL32.dll", "GetCommandLineA", 0, k_GetCommandLineA},

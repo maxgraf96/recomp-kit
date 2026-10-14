@@ -188,18 +188,14 @@ bool rva_ok(uint32_t rva, uint32_t len) {
 }
 
 // Resolve the PE import table of the image mapped at [base, base+size) to
-// runtime trampolines or registered guest data storage. Bound every descriptor
-// and RVA by the image before reading or patching it.
-bool patch_iat(const std::vector<uint8_t> &file, size_t opt_off, uint16_t opt_magic,
-               uint32_t g_base, uint32_t g_size) {
+// another mapped module's exports, runtime trampolines or registered guest data
+// storage. Every module is mapped before any is bound, so an import from a
+// module later in the configuration binds to its export like any other. Bound
+// every descriptor and RVA by the image before reading or patching it.
+// `imports` receives the mapped modules the image imports, in import order.
+bool patch_iat(uint32_t g_base, uint32_t g_size, uint32_t imp_rva, uint32_t imp_size,
+               std::vector<std::string> *imports) {
     auto rva_ok = [g_size](uint32_t rva, uint32_t len) { return rva_in(g_size, rva, len); };
-    size_t dd_off = opt_off + (opt_magic == 0x20b ? 112 : 96);
-    if (dd_off + 16 > file.size()) {
-        g_error = "PE data directories are truncated";
-        return false;
-    }
-    uint32_t imp_rva = rd<uint32_t>(file, dd_off + 8 * 1 + 0);
-    uint32_t imp_size = rd<uint32_t>(file, dd_off + 8 * 1 + 4);
     if (!imp_rva || !imp_size) {
         // A self-contained auxiliary module (pure code, no imports) is fine;
         // the game's executable always imports at least kernel32.
@@ -232,6 +228,10 @@ bool patch_iat(const std::vector<uint8_t> &file, size_t opt_off, uint16_t opt_ma
             return false;
         }
         std::string dll = gm_str(g_base + name_rva, 260);
+        if (const LoaderModule *module = loader_module_named(dll.c_str()))
+            if (imports && module->base != g_base &&
+                std::find(imports->begin(), imports->end(), module->name) == imports->end())
+                imports->push_back(module->name);
 
         uint32_t lookup_rva = orig_thunk ? orig_thunk : first_thunk;
         uint32_t slot_rva = first_thunk;
@@ -298,20 +298,103 @@ bool patch_iat(const std::vector<uint8_t> &file, size_t opt_off, uint16_t opt_ma
     return true;
 }
 
+// Applies the base relocations of the image mapped at [base, base+size) for a
+// load `delta` bytes away from its preferred base: the .reloc blocks name every
+// place the linker stored an absolute address. HIGHLOW (3) is what a 32-bit
+// image uses; HIGH (1) and LOW (2) are handled for completeness and ABSOLUTE
+// (0) is block padding. Anything else, or a block that leaves the table or the
+// image, fails the load rather than leave an address half moved.
+bool apply_relocations(uint32_t base, uint32_t size, uint32_t delta, uint32_t reloc_rva,
+                       uint32_t reloc_size, uint32_t *applied) {
+    *applied = 0;
+    // No table at all is an image with no absolute addresses in it (or one
+    // flagged as stripped, which the caller has refused already).
+    if (!delta || !reloc_rva || !reloc_size)
+        return true;
+    if (!rva_in(size, reloc_rva, reloc_size)) {
+        g_error = "has a relocation table outside the image";
+        return false;
+    }
+    uint32_t off = 0;
+    while (off + 8 <= reloc_size) {
+        const uint32_t block = base + reloc_rva + off;
+        const uint32_t page = rd32(block), bytes = rd32(block + 4);
+        if (bytes < 8 || bytes > reloc_size - off) {
+            if (bytes == 0)
+                break; // a zero block ends some linkers' tables early
+            g_error = "has a relocation block that runs past its table";
+            return false;
+        }
+        for (uint32_t k = 8; k + 2 <= bytes; k += 2) {
+            const uint16_t e = rd16(block + k);
+            const uint32_t type = e >> 12, rva = page + (e & 0xfffu);
+            if (type == 0)
+                continue;
+            const uint32_t width = type == 3 ? 4 : 2;
+            if (!rva_in(size, rva, width)) {
+                g_error = "has a relocation outside the image";
+                return false;
+            }
+            const uint32_t at = base + rva;
+            if (type == 3)
+                wr32(at, rd32(at) + delta);
+            else if (type == 2)
+                wr16(at, (uint16_t)(rd16(at) + (delta & 0xffffu)));
+            else if (type == 1)
+                wr16(at, (uint16_t)(rd16(at) + (delta >> 16)));
+            else {
+                char buf[96];
+                snprintf(buf, sizeof buf, "has relocation type %u, which a PE32 load cannot apply",
+                         type);
+                g_error = buf;
+                return false;
+            }
+            ++*applied;
+        }
+        off += bytes;
+    }
+    return true;
+}
+
+// The TLS directory of the image mapped at [base, base+size), validated; a
+// directory-less image gets index 0xffffffff and zero fields.
+bool read_tls_directory(uint32_t base, uint32_t size, uint32_t tls_rva, uint32_t tls_size,
+                        LoaderTls *out) {
+    *out = LoaderTls{0, 0, 0, 0, 0, 0xffffffffu};
+    if (!tls_rva)
+        return true;
+    if (tls_size < 24 || !rva_in(size, tls_rva, tls_size)) {
+        g_error = "TLS directory is truncated or lies outside the image";
+        return false;
+    }
+    const uint32_t d = base + tls_rva;
+    out->raw_start = rd32(d + 0);
+    out->raw_end = rd32(d + 4);
+    out->index_addr = rd32(d + 8);
+    out->callbacks = rd32(d + 12);
+    out->zero_fill = rd32(d + 16);
+    if (out->raw_end < out->raw_start ||
+        (out->raw_end > out->raw_start &&
+         !rva_in(size, out->raw_start - base, out->raw_end - out->raw_start)) ||
+        !rva_in(size, out->index_addr - base, 4) ||
+        (out->callbacks && !rva_in(size, out->callbacks - base, 4))) {
+        g_error = "TLS directory points outside the image";
+        return false;
+    }
+    return true;
+}
+
 // --------------------------------------------------------------------------
 // Auxiliary modules: DLLs game.toml names, mapped beside the main image at
-// their preferred base (no relocation support, as for the image itself) and
-// verified by content hash like it. Preserve configured installation subfolders
-// when the executable and its game directory have moved onto another device.
+// their configured base - relocated there when the PE prefers another - and
+// verified by content hash like it. Preserve configured installation
+// subfolders when the executable and its game directory have moved onto
+// another device.
 // --------------------------------------------------------------------------
-struct AuxSpec {
-    const char *name, *path, *sha256;
-    uint32_t base, size;
-};
-const AuxSpec g_aux_specs[] = RECOMP_AUX_MODULES;
+const LoaderModuleSpec g_aux_specs[] = RECOMP_AUX_MODULES;
 std::vector<LoaderModule> g_aux;
 
-bool load_aux_module(const AuxSpec &spec) {
+bool load_aux_module(const LoaderModuleSpec &spec) {
     LoaderModule m;
     m.name = spec.name;
     m.path = dirname_of(g_exe_path) + "/" + spec.name;
@@ -364,14 +447,22 @@ bool load_aux_module(const AuxSpec &spec) {
         return false;
     }
     uint32_t entry_rva = rd<uint32_t>(file, opt_off + 16);
-    uint32_t image_base = rd<uint32_t>(file, opt_off + 28);
+    const uint32_t preferred = rd<uint32_t>(file, opt_off + 28);
+    const uint32_t image_base = spec.base; // relocated there below when they differ
     uint32_t size_image = rd<uint32_t>(file, opt_off + 56);
     uint32_t size_hdrs = rd<uint32_t>(file, opt_off + 60);
-    if (image_base != spec.base) {
+    const uint32_t ndirs = opt_size >= 96 ? rd<uint32_t>(file, opt_off + 92) : 0;
+    auto dir = [&](uint32_t i, uint32_t field) -> uint32_t {
+        return i < ndirs && 96 + 8 * i + 8 <= opt_size
+                   ? rd<uint32_t>(file, opt_off + 96 + 8 * i + field)
+                   : 0;
+    };
+    if (preferred != spec.base && (rd<uint16_t>(file, fh_off + 18) & 0x0001u)) {
         char buf[200];
         snprintf(buf, sizeof buf,
-                 "%s: image base %08x is not the configured %08x (no relocation support)",
-                 spec.name, image_base, spec.base);
+                 "%s: image base %08x is not the configured %08x and the image has no "
+                 "relocations to move it",
+                 spec.name, preferred, spec.base);
         g_error = buf;
         return false;
     }
@@ -390,18 +481,32 @@ bool load_aux_module(const AuxSpec &spec) {
             g_error = std::string(spec.name) + " overlaps " + other.name;
             return false;
         }
+    if (image_base < g_base + g_size && g_base < image_base + spec.size) {
+        g_error = std::string(spec.name) + " overlaps the main image";
+        return false;
+    }
     m.base = image_base;
     m.size = spec.size;
     m.entry = entry_rva ? image_base + entry_rva : 0;
     m.attached = false;
-    m.export_rva = rd<uint32_t>(file, opt_off + 96);
-    m.export_size = rd<uint32_t>(file, opt_off + 100);
+    m.preferred_base = preferred;
+    m.is_dll = (rd<uint16_t>(file, fh_off + 18) & 0x2000u) != 0;
+    m.export_rva = dir(0, 0);
+    m.export_size = dir(0, 4);
+    m.import_rva = dir(1, 0);
+    m.import_size = dir(1, 4);
     if (m.export_rva && !rva_in(size_image, m.export_rva, m.export_size)) {
         g_error = std::string(spec.name) + ": export directory lies outside the image";
         return false;
     }
-    if (rd<uint32_t>(file, opt_off + 92) > 9 && rd<uint32_t>(file, opt_off + 96 + 9 * 8))
-        LOGW("%s has a TLS directory, which auxiliary modules do not get", spec.name);
+    if (m.import_rva && !rva_in(size_image, m.import_rva, m.import_size)) {
+        g_error = std::string(spec.name) + ": import directory lies outside the image";
+        return false;
+    }
+    if (!mem_commit(image_base, spec.size)) {
+        g_error = std::string(spec.name) + ": cannot open its range of the guest arena";
+        return false;
+    }
 
     size_t hdr_copy = size_hdrs < file.size() ? size_hdrs : file.size();
     memcpy(g_mem + image_base, file.data(), hdr_copy);
@@ -430,14 +535,35 @@ bool load_aux_module(const AuxSpec &spec) {
             memcpy(g_mem + va, file.data() + raw_ptr, copy);
         }
     }
-    if (!patch_iat(file, opt_off, opt_magic, image_base, size_image)) {
+    if (!apply_relocations(image_base, size_image, image_base - preferred, dir(5, 0), dir(5, 4),
+                           &m.relocations) ||
+        !read_tls_directory(image_base, size_image, dir(9, 0), dir(9, 4), &m.tls)) {
         g_error = std::string(spec.name) + ": " + g_error;
         return false;
     }
-    m.initial_image.assign(g_mem + image_base, g_mem + image_base + m.size);
+    // Imports are bound, and the pristine image snapshotted, once every
+    // module is mapped (bind_modules).
     g_aux.push_back(m);
-    LOGV("mapped auxiliary module %s: base %08x size %08x entry %08x", spec.name, m.base,
-         size_image, m.entry);
+    LOGV("mapped auxiliary module %s: base %08x (prefers %08x, %u relocations) size %08x entry "
+         "%08x",
+         spec.name, m.base, preferred, m.relocations, size_image, m.entry);
+    return true;
+}
+
+// Binds every mapped image's imports - the main image's and each module's -
+// now that all of them exist, then keeps each module's pristine image.
+bool bind_modules() {
+    g_main.imports.clear();
+    if (!patch_iat(g_base, g_size, g_main.import_rva, g_main.import_size, &g_main.imports))
+        return false;
+    for (LoaderModule &m : g_aux) {
+        m.imports.clear();
+        if (!patch_iat(m.base, m.size, m.import_rva, m.import_size, &m.imports)) {
+            g_error = m.name + ": " + g_error;
+            return false;
+        }
+        m.initial_image.assign(g_mem + m.base, g_mem + m.base + m.size);
+    }
     return true;
 }
 
@@ -516,6 +642,254 @@ uint32_t loader_module_export_ordinal(const LoaderModule &m, uint32_t ordinal) {
     return m.base + rva;
 }
 
+LoaderModule *loader_module_at_base(uint32_t base) {
+    if (g_main.base && base == g_main.base)
+        return &g_main;
+    for (LoaderModule &m : g_aux)
+        if (m.base == base)
+            return &m;
+    return nullptr;
+}
+
+// --------------------------------------------------------------------------
+// Module lifetimes: DllMain, static TLS and reference counts, in the order the
+// Windows loader keeps - dependencies attach before the modules that import
+// them and detach after them.
+// --------------------------------------------------------------------------
+namespace {
+
+uint32_t g_attach_seq = 0;
+bool g_detached_all = false;
+
+const uint32_t DLL_PROCESS_DETACH = 0, DLL_PROCESS_ATTACH = 1, DLL_THREAD_ATTACH = 2,
+               DLL_THREAD_DETACH = 3;
+
+bool translated(uint32_t addr) {
+    return recomp_module_lookup(addr) >= 0 || recomp_index_of(addr) >= 0;
+}
+
+// A module's static TLS callbacks for `reason`, then nothing else: the caller
+// runs DllMain. A callback no translation covers is skipped with a notice (and
+// stops a strict run, through recomp_call).
+void run_tls_callbacks(X86 *c, const LoaderModule &m, uint32_t reason, uint32_t reserved) {
+    if (m.tls.index == 0xffffffffu || !m.tls.callbacks)
+        return;
+    for (uint32_t p = m.tls.callbacks; rva_in(m.size, p - m.base, 4); p += 4) {
+        const uint32_t cb = rd32(p);
+        if (!cb)
+            break;
+        guest_call(c, cb, m.base, reason, reserved);
+    }
+}
+
+// DllMain(base, reason, reserved), its result; 1 for a module without an entry
+// (a resource DLL) or, outside strict mode, one whose entry was not translated.
+uint32_t dll_main(X86 *c, const LoaderModule &m, uint32_t reason, uint32_t reserved) {
+    if (!m.entry)
+        return 1;
+    if (!translated(m.entry) && !recomp_strict()) {
+        LOGW("%s: DllMain %08x is not translated, not run", m.name.c_str(), m.entry);
+        return 1;
+    }
+    const uint32_t result = guest_call(c, m.entry, m.base, reason, reserved);
+    LOGV("%s: DllMain(%08x, %u, %u) at %08x -> %08x (x87 CW %04x)", m.name.c_str(), m.base, reason,
+         reserved, m.entry, result, c->fpu_cw);
+    return result;
+}
+
+// Static TLS for a module being attached: a slot, its index where the image
+// reads it, and a block for every live thread.
+bool tls_attach(LoaderModule &m) {
+    if (m.tls.index_addr == 0 && m.tls.raw_end == m.tls.raw_start && !m.tls.callbacks)
+        return true; // no directory
+    m.tls.index = tls_reserve_slot();
+    if (m.tls.index == 0xffffffffu) {
+        g_error = m.name + ": no TLS slot left for its static TLS";
+        return false;
+    }
+    wr32(m.tls.index_addr, m.tls.index);
+    for (uint32_t array : win32_thread_tls_arrays())
+        if (!loader_tls_block(m.tls, array)) {
+            g_error = m.name + ": no guest heap for its static TLS";
+            return false;
+        }
+    return true;
+}
+
+void tls_detach(LoaderModule &m) {
+    if (m.tls.index == 0xffffffffu)
+        return;
+    for (uint32_t array : win32_thread_tls_arrays())
+        if (uint32_t block = rd32(array + 4 * m.tls.index))
+            heap_free(block);
+    tls_release_slot(m.tls.index);
+    m.tls.index = 0xffffffffu;
+}
+
+uint32_t module_release(X86 *c, LoaderModule &m);
+
+// One reference to `m`; attaches it, and first everything it imports, when
+// this is its first. `visiting` breaks import cycles, which Windows tolerates
+// by attaching the cycle in discovery order. 0 or a Win32 error.
+uint32_t module_acquire(X86 *c, LoaderModule &m, std::vector<const LoaderModule *> &visiting,
+                        bool pin) {
+    if (&m == &g_main && !g_main.is_dll)
+        return 0; // an executable is the process, never a DLL
+    if (m.attached && m.attach_seq) {
+        ++m.load_refs;
+        m.pinned = m.pinned || pin;
+        return 0;
+    }
+    if (std::find(visiting.begin(), visiting.end(), &m) != visiting.end())
+        return 0; // a cycle: the outer acquisition finishes this one
+    visiting.push_back(&m);
+    // Dependencies first, each by one reference this module owns until it is
+    // unloaded.
+    std::vector<LoaderModule *> taken;
+    for (const std::string &name : m.imports) {
+        LoaderModule *dep = loader_module_named(name.c_str());
+        if (!dep || dep == &m)
+            continue;
+        if (uint32_t err = module_acquire(c, *dep, visiting, pin)) {
+            for (auto it = taken.rbegin(); it != taken.rend(); ++it)
+                module_release(c, **it);
+            visiting.pop_back();
+            return err;
+        }
+        taken.push_back(dep);
+    }
+    visiting.pop_back();
+    // A module unloaded before starts again from its pristine image, as a
+    // fresh mapping of the DLL would.
+    if (&m != &g_main && !m.initial_image.empty())
+        memcpy(g_mem + m.base, m.initial_image.data(), m.initial_image.size());
+    m.thread_calls = true;
+    if (!tls_attach(m)) {
+        LOGW("%s", g_error.c_str());
+        for (auto it = taken.rbegin(); it != taken.rend(); ++it)
+            module_release(c, **it);
+        return 8; // ERROR_NOT_ENOUGH_MEMORY
+    }
+    m.attached = true;
+    m.load_refs = 1;
+    m.pinned = pin;
+    m.attach_seq = ++g_attach_seq;
+    run_tls_callbacks(c, m, DLL_PROCESS_ATTACH, pin ? 1 : 0);
+    if (!dll_main(c, m, DLL_PROCESS_ATTACH, pin ? 1 : 0)) {
+        // Windows detaches a DLL whose attach failed, then unloads it.
+        dll_main(c, m, DLL_PROCESS_DETACH, 0);
+        run_tls_callbacks(c, m, DLL_PROCESS_DETACH, 0);
+        tls_detach(m);
+        m.attached = false;
+        m.load_refs = 0;
+        m.attach_seq = 0;
+        m.pinned = false;
+        for (auto it = taken.rbegin(); it != taken.rend(); ++it)
+            module_release(c, **it);
+        g_error = m.name + ": DllMain refused DLL_PROCESS_ATTACH";
+        return 1114; // ERROR_DLL_INIT_FAILED
+    }
+    return 0;
+}
+
+// One reference less; detaches at zero (never a pinned module), then releases
+// what the module imports. The return is the Win32 error, 0 on success.
+uint32_t module_release(X86 *c, LoaderModule &m) {
+    if ((&m == &g_main && !g_main.is_dll) || !m.attached || !m.load_refs)
+        return 6; // ERROR_INVALID_HANDLE
+    if (--m.load_refs || m.pinned) {
+        if (m.pinned && !m.load_refs)
+            m.load_refs = 1; // a static import keeps its own reference
+        return 0;
+    }
+    dll_main(c, m, DLL_PROCESS_DETACH, 0);
+    run_tls_callbacks(c, m, DLL_PROCESS_DETACH, 0);
+    tls_detach(m);
+    m.attached = false;
+    m.attach_seq = 0;
+    for (auto it = m.imports.rbegin(); it != m.imports.rend(); ++it)
+        if (LoaderModule *dep = loader_module_named(it->c_str()))
+            if (dep != &m)
+                module_release(c, *dep);
+    return 0;
+}
+
+} // namespace
+
+bool loader_attach_static(X86 *c) {
+    std::vector<const LoaderModule *> visiting;
+    for (const std::string &name : g_main.imports) {
+        LoaderModule *m = loader_module_named(name.c_str());
+        if (!m || m == &g_main)
+            continue;
+        if (module_acquire(c, *m, visiting, true)) {
+            g_error = "static import " + g_error;
+            return false;
+        }
+    }
+    if (g_main.is_dll && !g_main.attach_seq) {
+        // A DLL serving as the main image has a DllMain, not a process entry.
+        g_main.attach_seq = ++g_attach_seq;
+        g_main.pinned = true;
+        g_main.load_refs = 1;
+        run_tls_callbacks(c, g_main, DLL_PROCESS_ATTACH, 1);
+        if (!dll_main(c, g_main, DLL_PROCESS_ATTACH, 1)) {
+            g_error = g_main.name + ": DllMain refused DLL_PROCESS_ATTACH";
+            return false;
+        }
+    }
+    return true;
+}
+
+uint32_t loader_module_load(X86 *c, LoaderModule *m) {
+    if (!m)
+        return 126; // ERROR_MOD_NOT_FOUND
+    if (m == &g_main)
+        return 0;
+    std::vector<const LoaderModule *> visiting;
+    return module_acquire(c, *m, visiting, false);
+}
+
+bool loader_module_free(X86 *c, LoaderModule *m) {
+    return m && module_release(c, *m) == 0;
+}
+
+// Attached modules in attach order.
+static std::vector<LoaderModule *> attached_in_order() {
+    std::vector<LoaderModule *> v;
+    if (g_main.attach_seq)
+        v.push_back(&g_main);
+    for (LoaderModule &m : g_aux)
+        if (m.attached && m.attach_seq)
+            v.push_back(&m);
+    std::sort(v.begin(), v.end(), [](const LoaderModule *a, const LoaderModule *b) {
+        return a->attach_seq < b->attach_seq;
+    });
+    return v;
+}
+
+void loader_thread_notify(X86 *c, uint32_t reason) {
+    std::vector<LoaderModule *> order = attached_in_order();
+    if (reason == DLL_THREAD_DETACH)
+        std::reverse(order.begin(), order.end());
+    for (LoaderModule *m : order) {
+        run_tls_callbacks(c, *m, reason, 0);
+        if (m->thread_calls)
+            dll_main(c, *m, reason, 0);
+    }
+}
+
+void loader_detach_all(X86 *c) {
+    if (g_detached_all)
+        return;
+    g_detached_all = true;
+    std::vector<LoaderModule *> order = attached_in_order();
+    for (auto it = order.rbegin(); it != order.rend(); ++it) {
+        dll_main(c, **it, DLL_PROCESS_DETACH, 1);
+        run_tls_callbacks(c, **it, DLL_PROCESS_DETACH, 1);
+    }
+}
+
 const char *loader_error() {
     return g_error.c_str();
 }
@@ -553,13 +927,22 @@ const LoaderTls &loader_tls() {
 // Verify the supported executable hash, map PE sections and bind its imports.
 // All later address-based translation assumes this exact image; a mismatch is a hard failure.
 bool loader_load(const char *exe_path) {
+    return loader_load_config(exe_path && *exe_path ? exe_path : LOADER_DEFAULT_EXE,
+                              LOADER_EXPECTED_SHA256, g_aux_specs, RECOMP_AUX_MODULE_COUNT);
+}
+
+bool loader_load_config(const char *exe_path, const char *expected_sha256,
+                        const LoaderModuleSpec *specs, uint32_t spec_count) {
     g_error.clear();
     g_sections.clear();
     g_aux.clear();
     g_main = LoaderModule{};
+    g_attach_seq = 0;
+    g_detached_all = false;
     g_iat_patched = 0;
     g_iat_data = 0;
     g_exe_path = exe_path && *exe_path ? exe_path : LOADER_DEFAULT_EXE;
+    const char *const expected = expected_sha256 ? expected_sha256 : "";
 
     std::vector<uint8_t> file;
     if (!read_file(g_exe_path.c_str(), file)) {
@@ -574,8 +957,8 @@ bool loader_load(const char *exe_path) {
     // against. It is the digest of what was really mapped, not of what was
     // expected, which is why it is recorded here and not made a constant.
     g_exe_sha = digest;
-    if (digest != LOADER_EXPECTED_SHA256) {
-        g_error = g_exe_path + " has SHA-256 " + digest + ", expected " + LOADER_EXPECTED_SHA256;
+    if (digest != expected) {
+        g_error = g_exe_path + " has SHA-256 " + digest + ", expected " + expected;
         return false;
     }
 
@@ -610,20 +993,35 @@ bool loader_load(const char *exe_path) {
     }
 
     uint32_t entry_rva = rd<uint32_t>(file, opt_off + 16);
-    uint32_t image_base = rd<uint32_t>(file, opt_off + 28);
+    // The configured base. A PE that prefers another is relocated there; one
+    // whose relocations were stripped (an EXE, usually) cannot be.
+    const uint32_t preferred = rd<uint32_t>(file, opt_off + 28);
+    const uint32_t image_base = IMAGE_BASE;
     uint32_t size_image = rd<uint32_t>(file, opt_off + 56);
     uint32_t size_hdrs = rd<uint32_t>(file, opt_off + 60);
+    const uint16_t file_flags = rd<uint16_t>(file, fh_off + 18);
+    const uint32_t ndirs = rd<uint32_t>(file, opt_off + 92);
+    auto dir = [&](uint32_t i, uint32_t field) -> uint32_t {
+        return i < ndirs && 96 + 8 * i + 8 <= opt_size
+                   ? rd<uint32_t>(file, opt_off + 96 + 8 * i + field)
+                   : 0;
+    };
 
-    if (image_base != IMAGE_BASE) {
-        char buf[128];
+    if (preferred != image_base && (file_flags & 0x0001u)) {
+        char buf[160];
         snprintf(buf, sizeof buf,
-                 "image base %08x is not the expected %08x (no relocation support)", image_base,
-                 IMAGE_BASE);
+                 "image base %08x is not the expected %08x and the image has no relocations to "
+                 "move it",
+                 preferred, image_base);
         g_error = buf;
         return false;
     }
-    if ((uint64_t)image_base + size_image > HEAP_BASE) {
-        char buf[128];
+    // Below the heap, as an executable is; or above the trampolines, where a
+    // DLL serving as the main image (a harness without its executable) sits
+    // at its own base.
+    if ((uint64_t)image_base + size_image > HEAP_BASE &&
+        (image_base < GUEST_SHIM_END || (uint64_t)image_base + size_image > GUEST_SIZE)) {
+        char buf[160];
         snprintf(buf, sizeof buf,
                  "image ends at %08x, above the heap arena start %08x; raise [game] heap_base",
                  image_base + size_image, HEAP_BASE);
@@ -632,6 +1030,15 @@ bool loader_load(const char *exe_path) {
     }
 
     mem_init();
+    // Module places are fixed by the configuration, loaded or not: heap growth
+    // must never take one.
+    mem_reserve_range(image_base, size_image);
+    for (uint32_t i = 0; i < spec_count; ++i)
+        mem_reserve_range(specs[i].base, specs[i].size);
+    if (!mem_commit(image_base, size_image)) {
+        g_error = "cannot open the image's range of the guest arena";
+        return false;
+    }
     g_base = image_base;
     g_size = size_image;
     g_entry = image_base + entry_rva;
@@ -641,6 +1048,14 @@ bool loader_load(const char *exe_path) {
     g_main.size = g_size;
     g_main.entry = g_entry;
     g_main.attached = true; // Its process entry must never run as DllMain.
+    g_main.preferred_base = preferred;
+    g_main.is_dll = (file_flags & 0x2000u) != 0;
+    g_main.import_rva = dir(1, 0);
+    g_main.import_size = dir(1, 4);
+    if (g_main.import_rva && !rva_in(g_size, g_main.import_rva, g_main.import_size)) {
+        g_error = "import directory lies outside the image";
+        return false;
+    }
     if (opt_size >= 104 && rd<uint32_t>(file, opt_off + 92) > 0) {
         g_main.export_rva = rd<uint32_t>(file, opt_off + 96);
         g_main.export_size = rd<uint32_t>(file, opt_off + 100);
@@ -684,6 +1099,11 @@ bool loader_load(const char *exe_path) {
             memcpy(g_mem + si.va, file.data() + si.raw_ptr, copy);
         }
         g_sections.push_back(si);
+    }
+    if (!apply_relocations(image_base, size_image, image_base - preferred, dir(5, 0), dir(5, 4),
+                           &g_main.relocations)) {
+        g_error = "the image " + g_error;
+        return false;
     }
 
     // game.toml operand_redirects: each new location starts with the value of
@@ -755,11 +1175,23 @@ bool loader_load(const char *exe_path) {
         }
     }
 
-    if (!patch_iat(file, opt_off, opt_magic, g_base, g_size))
-        return false;
-    for (uint32_t i = 0; i < RECOMP_AUX_MODULE_COUNT; ++i)
-        if (!load_aux_module(g_aux_specs[i]))
+    // Map every module first, then bind every image: the main image's
+    // imports from a module (an executable's from its engine DLL) need that
+    // module's exports in place, and so do modules importing each other.
+    for (uint32_t i = 0; i < spec_count; ++i)
+        if (!load_aux_module(specs[i]))
             return false;
+    if (!bind_modules())
+        return false;
+    g_main.tls = g_tls;
+    if (recomp_strict()) {
+        uint32_t unknown = 0;
+        imports_coverage(nullptr, nullptr, &unknown);
+        if (unknown)
+            LOGW("strict: %u imports have no known stdcall argument count; calling one stops "
+                 "the run (RECOMP_IMPORT_STATS=1 lists them)",
+                 unknown);
+    }
 
     if (g_entry != LOADER_EXPECTED_ENTRY)
         LOGW("entry point is %08x, expected %08x", g_entry, LOADER_EXPECTED_ENTRY);
@@ -836,6 +1268,19 @@ void run_entry(X86 *c) {
     sched_set_guest_thread(true);
     // ExitProcess/TerminateProcess/ExitThread-outside-a-thread longjmp here.
     if (setjmp(*process_exit_jmp()) == 0) {
+        // Windows initialises every statically imported DLL, dependencies
+        // first, before the image's TLS callbacks and entry point run.
+        if (!loader_attach_static(c)) {
+            LOGW("process start failed: %s", g_error.c_str());
+            sched_set_guest_thread(false);
+            return;
+        }
+        if (g_main.is_dll) {
+            // A DLL as the main image: its DllMain was the start; there is no
+            // process entry to run.
+            sched_set_guest_thread(false);
+            return;
+        }
         uint32_t count = 0;
         for (uint32_t p = g_tls.callbacks; p && rva_ok(p - g_base, 4); p += 4) {
             uint32_t cb = rd32(p);

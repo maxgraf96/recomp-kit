@@ -31,12 +31,50 @@ Guest address `a` is `g_mem + a`.
 
 | range | contents |
 | --- | --- |
-| `0x00400000`–`loader_image_limit()` | image at its preferred base, no relocation (`0xd4c000` for this EXE, from SizeOfImage) |
+| `0x00400000`–`loader_image_limit()` | image at `[game] image_base` (`0xd4c000` for this EXE, from SizeOfImage) |
 | `0x01000000`–`0x0e000000` | heap arena (HeapAlloc/GlobalAlloc/LocalAlloc/VirtualAlloc) |
 | `0x0ef00000`–`0x0f000000` | stack, growing down |
 | `0x0fe00000` | TEB: FS:[0] SEH head, FS:[4]/[8] stack bounds, FS:[0x18] self, FS:[0x2c] TLS |
 | `0x0fe01000` | 64 TLS slots |
 | `0x0ff00000 + 16*i` | trampoline for import `i` |
+| `0x10000000`–`GUEST_SIZE` | `[modules.aux.*]` DLLs at their configured bases, then heap growth around them |
+| `GUEST_SIZE`–4 GB | reserved, never mapped: any access traps (guarded arena) |
+
+On a 64-bit host the arena is **guarded**: `mem_init` reserves the whole 4 GB a
+32-bit guest can name and opens `[0, GUEST_SIZE)`, so `g_mem + a` never leaves
+the reservation. An access from `GUEST_SIZE` up - and to the first 64 KB when
+the null guard is armed (strict mode, or `RECOMP_NULL_GUARD=1`) - is reported
+as `guest memory fault` with the guest address and registers, and the process
+ends (exit code 5), instead of reading host memory or crashing without a word.
+WebAssembly and other hosts that cannot reserve 4 GB keep the plain mapping.
+
+**The heap grows.** Once `[heap_base, 0x0e000000)` cannot satisfy a request,
+`heap_alloc` claims 16 MB stretches of `[0x10000000, GUEST_SIZE)` that no
+configured module occupies (`mem_reserve_range`), so `[game] guest_size =
+0x40000000` gives a game about a gigabyte more heap.
+
+**Modules sit at configured bases, relocated.** A DLL's `[modules.aux.*] base`
+need not be its preferred ImageBase: the loader applies the PE's base
+relocations as it maps it, exactly as the translator does to the bytes and
+listings it reads (`translate.py` `Image`/`Rebase`), so several DLLs that all
+prefer `0x10000000` load side by side from the original files. Every image is
+mapped before any import table is bound, so the executable's imports from a
+DLL - and DLLs' imports from each other - bind to the exports' guest addresses
+in any configuration order; calls through them dispatch through the module
+registry like any other call.
+
+**DllMain runs in the Windows loader's order.** `run_entry` first attaches
+every module the image imports (directly or through another module),
+dependencies first, with `lpReserved` set; such a static import is never
+unloaded. `LoadLibrary` of a module loads what it imports (one reference each)
+before attaching it; `FreeLibrary` of the last reference detaches it and then
+releases those. A DllMain that refuses the attach is detached again and its
+dependencies released (`ERROR_DLL_INIT_FAILED`). Guest threads send
+`DLL_THREAD_ATTACH`/`DETACH` (unless `DisableThreadLibraryCalls`), modules with
+a TLS directory get a slot, a block in every thread and their callbacks, and
+`ExitProcess` detaches everything in reverse. A DLL can also be the main image
+(a harness without its executable): `run_entry` then runs its DllMain instead
+of a process entry.
 
 Handles are small integers outside the arena's mapped regions and are never
 dereferenced: kernel objects from `0x00010004`, windows from `0x00020004`,
@@ -124,8 +162,9 @@ here, so continuing would run the guest past a point Windows never reaches.
   itself, because only `GetMessageA` knows the filter and only the runtime can
   yield the baton. With no host installed at all it returns -1, the documented
   error, rather than blocking forever or inventing a `WM_NULL`.
-- **`LoadLibraryA` only succeeds for DLLs the runtime has shims for.** Anything
-  else reports `ERROR_MOD_NOT_FOUND`, so the guest takes its own "feature
+- **`LoadLibraryA` only succeeds for DLLs the runtime has shims for** or maps
+  as translated modules (any path; only the file name counts). Anything else
+  reports `ERROR_MOD_NOT_FOUND`, so the guest takes its own "feature
   unavailable" path instead of calling into nothing.
 - **`CreateWindowExA` sends `WM_NCCREATE` then `WM_CREATE`** and honours their
   failure returns by cancelling creation, as Windows does.

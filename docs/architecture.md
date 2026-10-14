@@ -31,12 +31,19 @@ not host pointers and not evidence of human-recovered intent.
 
 A game that ships part of its code as a DLL can name it in game.toml as an
 auxiliary module (`[modules.aux.<key>]`). The loader maps it beside the image
-at its preferred base, above the shim trampolines, so `[game] guest_size`
-grows the arena to hold it. The translator turns the module into its own
-generated library with prefixed tables that register with the runtime at
-start-up; `recomp_call` and `recomp_jump` consult that registry after the
-image's own table misses, so calls in either direction cross the boundary
-without a special case. `LoadLibrary` of the module's name returns its base
+at its configured base, above the shim trampolines, so `[game] guest_size`
+grows the arena to hold it. When that base is not the DLL's preferred one,
+the loader applies the PE's base relocations and the translator applies the
+same relocations to the image and listings it reads, so the translation and
+the mapped bytes agree on every address. Every module is mapped before any
+import table is bound: an executable importing from its DLLs, and DLLs
+importing from each other, bind straight to the exports. The translator turns
+the module into its own generated library with prefixed tables that register
+with the runtime at start-up; `recomp_call` and `recomp_jump` consult that
+registry after the image's own table misses, so calls in either direction
+cross the boundary without a special case. `run_entry` attaches static
+imports in dependency order before the entry point; `LoadLibrary` of the
+module's name (with any path) loads its dependencies and runs its DllMain,
 and `GetProcAddress` reads its export directory, which is all the game sees.
 
 ## Threads and ownership
