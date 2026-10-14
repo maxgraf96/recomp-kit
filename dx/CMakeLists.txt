@@ -67,6 +67,19 @@ pop_test_binary(pad_tests)
 add_test(NAME pad_tests COMMAND pad_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(pad_tests PROPERTIES LABELS nogame)
 
+# The window system a game sees: per-thread message queues, sent messages,
+# activation and focus, keyboard translation, and the DirectInput keyboard
+# and mouse that hang off activation. Its own binary because it defines
+# host_input_state strongly and runs guest threads.
+add_executable(win32_ui_tests tests/win32_ui_tests.cpp
+  ${POP_ROOT}/runtime/tests/stub_recomp_call.cpp)
+target_link_libraries(win32_ui_tests PRIVATE recomp_platform recomp_dx recomp_runtime)
+target_compile_options(win32_ui_tests PRIVATE ${POP_WARN_HOST})
+pop_optimize(win32_ui_tests 1)
+pop_test_binary(win32_ui_tests)
+add_test(NAME win32_ui_tests COMMAND win32_ui_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(win32_ui_tests PROPERTIES LABELS nogame TIMEOUT 120)
+
 # No strong host callback anywhere: the weak defaults must carry the link.
 # page_overlay.cpp because every host links it beside boot.cpp; the dispatch
 # stub because no generated code is present.
