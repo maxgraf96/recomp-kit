@@ -681,8 +681,10 @@ uint32_t guest_strtoul(uint32_t s, uint32_t endp, int base, bool is_signed) {
         return neg ? (uint32_t)(0 - (uint32_t)v) : (uint32_t)v;
     }
     if (overflow) {
+        // Saturated first, then negated as any negative input is: a negative
+        // overflow comes back as 1, which is what msvcrt returns.
         set_errno(E_RANGE);
-        return 0xffffffffu;
+        v = 0xffffffffu;
     }
     return neg ? (uint32_t)(0 - (uint32_t)v) : (uint32_t)v;
 }
@@ -739,16 +741,23 @@ void crt_abs(X86 *c) {
 // ---------------------------------------------------------------------------
 // printf family.
 // ---------------------------------------------------------------------------
+// The formatted bytes and a terminator, exactly: a %c of 0 puts a NUL inside
+// the text, and what follows it is still written.
+void put_text(uint32_t buf, const std::string &s, size_t n, bool terminate) {
+    if (!gm_valid(buf, (uint32_t)n + (terminate ? 1 : 0)))
+        return;
+    memcpy(g_mem + buf, s.data(), n);
+    if (terminate)
+        wr8(buf + (uint32_t)n, 0);
+}
 void crt_sprintf(X86 *c) {
-    uint32_t buf = arg(c, 0);
     std::string s = format_guest(gchars(arg(c, 1)), c->r[R_ESP] + 12);
-    gm_put_str(buf, s.c_str(), (uint32_t)s.size() + 1);
+    put_text(arg(c, 0), s, s.size(), true);
     set_eax(c, (uint32_t)s.size());
 }
 void crt_vsprintf(X86 *c) {
-    uint32_t buf = arg(c, 0);
     std::string s = format_guest(gchars(arg(c, 1)), arg(c, 2));
-    gm_put_str(buf, s.c_str(), (uint32_t)s.size() + 1);
+    put_text(arg(c, 0), s, s.size(), true);
     set_eax(c, (uint32_t)s.size());
 }
 // _snprintf(buf, count, fmt, ...): writes at most count bytes; when the text
@@ -759,17 +768,16 @@ void crt_snprintf(X86 *c) {
     std::string s = format_guest(gchars(arg(c, 2)), c->r[R_ESP] + 16);
     uint32_t n = (uint32_t)s.size();
     if (n < count) {
-        gm_put_str(buf, s.c_str(), n + 1);
+        put_text(buf, s, n, true);
         set_eax(c, n);
     } else {
-        if (count && gm_valid(buf, count))
-            memcpy(g_mem + buf, s.data(), count);
+        put_text(buf, s, count, false);
         set_eax(c, n == count ? n : 0xffffffffu);
     }
 }
 void crt_printf(X86 *c) {
     std::string s = format_guest(gchars(arg(c, 0)), c->r[R_ESP] + 8);
-    uint32_t stdout_file = imports_data_address("msvcrt.dll", "_iob");
+    uint32_t stdout_file = imports_alloc_data("msvcrt.dll", "_iob");
     stdio_write(stdout_file ? stdout_file + 32 : 0, s.data(), s.size());
     set_eax(c, (uint32_t)s.size());
 }

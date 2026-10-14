@@ -167,7 +167,12 @@ int stream_getc(uint32_t file, Stream &s) {
         sync_flags(file, s);
         return -1;
     }
-    if (s.text && ch == 0x1a) { // Ctrl-Z: end of a text file, left unread
+    if (s.text && ch == 0x1a) {
+        // Ctrl-Z ends a text file. msvcrt's read stops there but has already
+        // taken the whole chunk from the file, so the position (and ftell) is
+        // the end of that chunk and the bytes after the Ctrl-Z are gone until
+        // a seek.
+        s.rpos = s.rbuf.size();
         s.eof = true;
         sync_flags(file, s);
         return -1;

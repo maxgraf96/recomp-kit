@@ -457,6 +457,12 @@ static void test_printf() {
                 "text|abc|   ab|ab   |");
     expect_fmti("%s", {0}, "(null)");
     expect_fmti("%c%c%3c", {'a', 'b', 'c'}, "ab  c");
+    {
+        uint32_t b = gbuf(8);
+        check(ms("sprintf", {b, gstr("a%cb"), 0}) == 3 && rd8(b) == 'a' && rd8(b + 1) == 0 &&
+                  rd8(b + 2) == 'b' && rd8(b + 3) == 0,
+              "sprintf writes past a NUL from %%c");
+    }
     expect_fmti("100%% %y", {}, "100% y");
     expect_fmti("%*d|%-*d|%.*f", {4, 1, 4, 1, 2, 0, 0x3ff80000}, "   1|1   |1.50");
     uint32_t wide = gbuf(16);
@@ -576,6 +582,8 @@ static void test_parsing() {
     uint32_t none = gstr("xyz");
     check(ms("strtol", {none, end, 10}) == 0 && rd32(end) == none, "no digits: end is start");
     check(ms("strtoul", {gstr("-1"), 0, 10}) == 0xffffffffu, "strtoul negates");
+    check(ms("strtoul", {gstr("-99999999999"), 0, 10}) == 1,
+          "a negative overflow negates ULONG_MAX");
     check(ms("strtoul", {gstr("zz"), 0, 36}) == 35 * 36 + 35, "strtoul base 36");
     check(ms("atoi", {gstr("  +42xyz")}) == 42, "atoi");
     check(ms("atoi", {gstr("4294967297")}) == 1, "atoi wraps");
@@ -643,6 +651,8 @@ static void test_math() {
     check(bad == 0, "sqrt at PC=24 rounds once: %d wrong of 19999", bad);
     g_cpu.fpu_cw = 0x027f;
     check(math1("fabs", -2.5) == 2.5, "fabs");
+    check(bits_of(math1("fabs", from_bits(0xfff0000000000001ull))) == 0x7ff8000000000001ull,
+          "an argument is loaded as FLD loads it: a signalling NaN comes back quiet");
     check(math1("log", std::exp(1.0)) == 1.0 || std::fabs(math1("log", std::exp(1.0)) - 1) < 1e-15,
           "log");
     clear_errno();
@@ -931,6 +941,7 @@ static void test_cxx() {
          "class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> >"},
         {".?AV?$Array@$03@@", "class Array<4>"},
         {".PBD", "char const *"},
+        {".?AU?$pair@$$CBHH@std@@", "struct std::pair<int const,int>"},
     };
     for (auto &k : cases) {
         std::string got = crt::undecorated_type_name(k.raw);

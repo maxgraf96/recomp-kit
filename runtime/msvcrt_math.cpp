@@ -54,8 +54,10 @@ double round_significand(double v, int bits) {
 
 // sqrt as FSQRT computes it under the precision-control field of `cw`.
 double x87_sqrt(double x, uint16_t cw) {
-    if (std::isnan(x))
+    if (std::isnan(x)) {
+        set_errno(E_DOM); // msvcrt reports a NaN operand as a domain error
         return quiet(x);
+    }
     if (x < 0) {
         set_errno(E_DOM);
         return indefinite();
@@ -82,8 +84,11 @@ double x87_sqrt(double x, uint16_t cw) {
     return round_significand(r, 24); // an exact tie: even
 }
 
+// A double argument as msvcrt sees it: its x87 code loads the argument with
+// FLD, which turns a signalling NaN into the quiet one.
 double stack_double(X86 *c, int slot) {
-    return rdf64(c->r[R_ESP] + 4 + 4 * (uint32_t)slot);
+    double v = rdf64(c->r[R_ESP] + 4 + 4 * (uint32_t)slot);
+    return std::isnan(v) ? quiet(v) : v;
 }
 
 void crt_sqrt(X86 *c) {

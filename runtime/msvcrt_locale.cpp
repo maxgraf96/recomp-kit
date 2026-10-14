@@ -64,7 +64,15 @@ struct ByteTables {
         for (int b = 0; b < 256; ++b) {
             uint16_t u = cp1252_to_unicode((uint8_t)b);
             ansi_bits[b] = unicode_bits(u);
-            c_bits[b] = b < 128 ? ansi_bits[b] : 0;
+            // The feminine and masculine ordinals were lower-case letters in
+            // the Unicode data Windows' code page tables were built from.
+            if (b == 0xaa || b == 0xba)
+                ansi_bits[b] = CT_LOWER | CT_ALPHA;
+            // The "C" locale's table is msvcrt's static one, which predates the
+            // separate alphabetic bit: letters are only upper or lower.
+            c_bits[b] = b < 128 ? (uint16_t)(ansi_bits[b] & ~CT_ALPHA) : 0;
+            if (b < 128 && !(c_bits[b] & (CT_UPPER | CT_LOWER)))
+                c_bits[b] = ansi_bits[b];
             int lo = unicode_to_cp1252(case_map(kLowerRuns, std::size(kLowerRuns), u));
             int up = unicode_to_cp1252(case_map(kUpperRuns, std::size(kUpperRuns), u));
             ansi_lower[b] = (uint8_t)(lo >= 0 ? lo : b);

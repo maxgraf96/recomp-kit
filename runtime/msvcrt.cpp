@@ -446,6 +446,12 @@ struct Undecorator {
             p += 2;
             return number();
         }
+        if (p[0] == '$' && p[1] == '$' && p[2] == 'C') {
+            // A cv-qualified type: "int const".
+            p += 3;
+            std::string q = cv(*p++);
+            return type() + q;
+        }
         return type();
     }
     std::string cv(char ch) {
