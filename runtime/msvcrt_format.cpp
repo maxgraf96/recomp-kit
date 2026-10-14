@@ -494,9 +494,9 @@ std::string format_guest(const char *fmt, uint32_t ap_start) {
 // inputs, 1,200 of them chosen to tell models apart; tests/crt in the game
 // repository, whose decimal_model.py is the reference), every result is
 // reproduced by this model:
-//   1. The significand's digits, without leading or trailing zeros, form an
-//      integer that keeps only its 64 most significant bits; the rest is
-//      truncated away. Long inputs lose their tail.
+//   1. Only the first 24 significant digits count; the rest are ignored.
+//      Those digits, without trailing zeros, form an integer that keeps only
+//      its 64 most significant bits; the rest is truncated away.
 //   2. That integer times 10^exponent keeps 80 significant bits, truncated:
 //      one rounding standing for msvcrt's extended-precision arithmetic.
 //   3. A normal result is rounded from those 80 bits to the significand, up
@@ -659,10 +659,12 @@ Decimal parse_canon(const std::string &canon) {
 uint64_t ms_convert(const Decimal &dec, int P, int emin, int emax, bool *range) {
     const uint64_t inf = (uint64_t)(emax * 2 + 1) << (P - 1);
     *range = false;
-    size_t ndigits = dec.digits.find_last_not_of('0');
-    if (dec.digits.empty() || ndigits == std::string::npos)
+    // The first 24 significant digits, and of those no trailing zeros.
+    const std::string sig = dec.digits.substr(0, 24);
+    size_t ndigits = sig.find_last_not_of('0');
+    if (sig.empty() || ndigits == std::string::npos)
         return 0;
-    ++ndigits; // trailing zeros take no part
+    ++ndigits;
     if (dec.exp10 > 400) {
         *range = true;
         return inf;
@@ -675,7 +677,7 @@ uint64_t ms_convert(const Decimal &dec, int P, int emin, int emax, bool *range) 
     Big all(0);
     for (size_t i = 0; i < ndigits; ++i) {
         all.mul_small(10);
-        all.add_small((uint32_t)(dec.digits[i] - '0'));
+        all.add_small((uint32_t)(sig[i] - '0'));
     }
     int shift;
     uint64_t mant = all.top_bits(64, &shift);

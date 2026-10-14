@@ -578,6 +578,11 @@ static void test_parsing() {
           "trailing zeros take no part in the 64-bit accumulator");
     check(bits_of(strtod_guest("5.563466145614656417e-309", nullptr)) == 0x00040024d418f7b1ull,
           "a denormal is rounded straight from the 80-bit product");
+    check(bits_of(strtod_guest("6.9767186701768106535230239467e-302", nullptr)) ==
+                  0x0167ec05e83b54d4ull &&
+              bits_of(strtod_guest("8.27791022959429594841805359334e-234", nullptr)) ==
+                  0x0f8a51f14714849cull,
+          "digits after the 24th are ignored");
     clear_errno();
     check(strtod_guest("4.9406564584124654e-324", nullptr) == from_bits(1) && guest_errno() == 0,
           "a denormal result is not a range error");
