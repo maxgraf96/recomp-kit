@@ -63,11 +63,7 @@ struct ByteTables {
     ByteTables() {
         for (int b = 0; b < 256; ++b) {
             uint16_t u = cp1252_to_unicode((uint8_t)b);
-            ansi_bits[b] = unicode_bits(u);
-            // The feminine and masculine ordinals were lower-case letters in
-            // the Unicode data Windows' code page tables were built from.
-            if (b == 0xaa || b == 0xba)
-                ansi_bits[b] = CT_LOWER | CT_ALPHA;
+            ansi_bits[b] = kAnsiBits[b];
             // The "C" locale's table is msvcrt's static one, which predates the
             // separate alphabetic bit: letters are only upper or lower.
             c_bits[b] = b < 128 ? (uint16_t)(ansi_bits[b] & ~CT_ALPHA) : 0;
@@ -94,19 +90,44 @@ struct LocaleDef {
     const char *abbrev;   // the three-letter Windows abbreviation
     char decimal, thousands;
     const char *currency, *int_currency;
+    // localeconv's eight char fields: int_frac_digits, frac_digits,
+    // p_cs_precedes, p_sep_by_space, n_cs_precedes, n_sep_by_space,
+    // p_sign_posn, n_sign_posn (as Windows reports them).
+    uint8_t mon[8];
 };
 // The "C" locale is index 0. Every other locale shares code page 1252, so
 // only the punctuation differs between them.
 const LocaleDef kLocales[] = {
-    {"C", "C", "", '.', 0, "", ""},
-    {"English_United States.1252", "english", "enu", '.', ',', "$", "USD"},
-    {"English_United Kingdom.1252", "english-uk", "eng", '.', ',', "\xa3", "GBP"},
-    {"German_Germany.1252", "german", "deu", ',', '.', "\x80", "EUR"},
-    {"French_France.1252", "french", "fra", ',', '\xa0', "\x80", "EUR"},
-    {"Spanish_Spain.1252", "spanish", "esp", ',', '.', "\x80", "EUR"},
-    {"Italian_Italy.1252", "italian", "ita", ',', '.', "\x80", "EUR"},
-    {"Dutch_Netherlands.1252", "dutch", "nld", ',', '.', "\x80", "EUR"},
-    {"Portuguese_Brazil.1252", "portuguese", "ptb", ',', '.', "R$", "BRL"},
+    {"C", "C", "", '.', 0, "", "", {127, 127, 127, 127, 127, 127, 127, 127}},
+    {"English_United States.1252",
+     "english",
+     "enu",
+     '.',
+     ',',
+     "$",
+     "USD",
+     {2, 2, 1, 0, 1, 0, 3, 0}},
+    {"English_United Kingdom.1252",
+     "english-uk",
+     "eng",
+     '.',
+     ',',
+     "\xa3",
+     "GBP",
+     {2, 2, 1, 0, 1, 0, 3, 3}},
+    {"German_Germany.1252", "german", "deu", ',', '.', "\x80", "EUR", {2, 2, 0, 1, 0, 1, 1, 1}},
+    {"French_France.1252", "french", "fra", ',', '\xa0', "\x80", "EUR", {2, 2, 0, 1, 0, 1, 1, 1}},
+    {"Spanish_Spain.1252", "spanish", "esp", ',', '.', "\x80", "EUR", {2, 2, 0, 1, 0, 1, 1, 1}},
+    {"Italian_Italy.1252", "italian", "ita", ',', '.', "\x80", "EUR", {2, 2, 0, 1, 0, 1, 1, 1}},
+    {"Dutch_Netherlands.1252", "dutch", "nld", ',', '.', "\x80", "EUR", {2, 2, 1, 1, 1, 1, 4, 4}},
+    {"Portuguese_Brazil.1252",
+     "portuguese",
+     "ptb",
+     ',',
+     '.',
+     "R$",
+     "BRL",
+     {2, 2, 1, 1, 1, 1, 3, 3}},
 };
 constexpr int kUserDefault = 1;
 
@@ -156,8 +177,7 @@ int parse_locale_name(const std::string &raw) {
         language == "english-us" || language == "english-american" || language == "enu" ||
         language == "usa")
         return 1;
-    if (language == "english-uk" || language == "british" || language == "eng" ||
-        language == "english-british")
+    if (language == "english-uk" || language == "eng") // "british" is refused
         return 2;
     if (language == "english") {
         if (country == "united kingdom" || country == "great britain" || country == "uk" ||
@@ -312,19 +332,23 @@ void crt_toupper(X86 *c) {
 }
 // wint_t towupper(wint_t), towlower(wint_t): the argument is an unsigned
 // short widened to a dword.
+// Below 256 a lower-case character (by the wide table) goes through the
+// narrow toupper of LC_CTYPE, so towupper(0xff) is 0x9f, the code page 1252
+// byte of its capital; above it the "C" locale changes nothing and a real
+// locale uses the Unicode case pairs.
 void crt_towupper(X86 *c) {
     uint32_t w = arg(c, 0) & 0xffff;
-    if (ctype_is_c_locale())
-        set_eax(c, (w >= 'a' && w <= 'z') ? w - 32 : w);
+    if (w < 256)
+        set_eax(c, (wide_ctype_bits(w) & CT_LOWER) ? (uint32_t)ctype_toupper((int)w) : w);
     else
-        set_eax(c, wide_toupper(w));
+        set_eax(c, ctype_is_c_locale() ? w : wide_toupper(w));
 }
 void crt_towlower(X86 *c) {
     uint32_t w = arg(c, 0) & 0xffff;
-    if (ctype_is_c_locale())
-        set_eax(c, (w >= 'A' && w <= 'Z') ? w + 32 : w);
+    if (w < 256)
+        set_eax(c, (wide_ctype_bits(w) & CT_UPPER) ? (uint32_t)ctype_tolower((int)w) : w);
     else
-        set_eax(c, wide_tolower(w));
+        set_eax(c, ctype_is_c_locale() ? w : wide_tolower(w));
 }
 // int iswctype(wint_t c, wctype_t mask)
 void crt_iswctype(X86 *c) {
@@ -446,11 +470,17 @@ uint16_t ctype_bits(int c) {
     return ctype_is_c_locale() ? tables().c_bits[b] : tables().ansi_bits[b];
 }
 
+// tolower/toupper. A value outside 0..255, EOF included, is taken by its low
+// byte and mapped through code page 1252 in every locale: msvcrt returns 255
+// for tolower(EOF) and 0x9f for toupper(EOF), and a negative char comes back
+// as its unsigned mapped byte. Inside 0..255 the "C" locale maps ASCII only.
 int ctype_tolower(int c) {
+    if (c < 0 || c > 255) {
+        uint8_t b = (uint8_t)c;
+        return (tables().ansi_bits[b] & CT_UPPER) ? tables().ansi_lower[b] : b;
+    }
     if (ctype_is_c_locale())
         return (c >= 'A' && c <= 'Z') ? c + 32 : c;
-    if (c < -128 || c > 255 || c == -1)
-        return c;
     uint8_t b = (uint8_t)c;
     if (!(tables().ansi_bits[b] & CT_UPPER))
         return c;
@@ -458,10 +488,12 @@ int ctype_tolower(int c) {
 }
 
 int ctype_toupper(int c) {
+    if (c < 0 || c > 255) {
+        uint8_t b = (uint8_t)c;
+        return (tables().ansi_bits[b] & CT_LOWER) ? tables().ansi_upper[b] : b;
+    }
     if (ctype_is_c_locale())
         return (c >= 'a' && c <= 'z') ? c - 32 : c;
-    if (c < -128 || c > 255 || c == -1)
-        return c;
     uint8_t b = (uint8_t)c;
     if (!(tables().ansi_bits[b] & CT_LOWER))
         return c;
@@ -544,10 +576,7 @@ uint32_t localeconv_addr() {
     put(32, "");
     put(36, c_mon ? std::string() : std::string("-"));
     // CHAR_MAX (127) marks "not available" in the C locale.
-    const uint8_t c_fields[8] = {127, 127, 127, 127, 127, 127, 127, 127};
-    const uint8_t us_fields[8] = {2, 2, 1, 0, 1, 0, 3, 0};
-    const uint8_t eu_fields[8] = {2, 2, 0, 1, 0, 1, 1, 1};
-    const uint8_t *f = c_mon ? c_fields : (st.cat[CAT_MONETARY] <= 2 ? us_fields : eu_fields);
+    const uint8_t *f = mon.mon;
     for (int i = 0; i < 8; ++i)
         wr8(st.lconv + 40 + i, f[i]);
     return st.lconv;

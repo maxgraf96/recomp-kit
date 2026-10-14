@@ -6,8 +6,8 @@
 //
 // The multibyte code page is 1252, which has no lead bytes, and for such a
 // code page msvcrt's _mbs* functions are the corresponding str* functions:
-// _mbsicmp is _stricmp, _mbslwr is _strlwr, and so on. Their case-insensitive
-// forms therefore follow LC_CTYPE, as _stricmp does.
+// _mbsicmp is _stricmp and follows LC_CTYPE. _mbsupr and _mbslwr are the
+// exception: they map through the code page's own case table in any locale.
 #include "msvcrt_internal.h"
 #include <algorithm>
 
@@ -133,11 +133,14 @@ int str_ncmp(uint32_t a, uint32_t b, uint32_t n) {
 void crt_strncmp(X86 *c) {
     set_eax(c, (uint32_t)str_ncmp(arg(c, 0), arg(c, 1), arg(c, 2)));
 }
+// The case-insensitive compares give the difference of the lower-cased bytes
+// under a real locale, but only its sign under "C".
 int str_nicmp(uint32_t a, uint32_t b, uint32_t n) {
+    bool c_locale = ctype_is_c_locale();
     for (uint32_t i = 0; i < n; ++i) {
         int x = ctype_tolower(rd8(a + i)), y = ctype_tolower(rd8(b + i));
         if (x != y || !x)
-            return x - y;
+            return c_locale ? sign(x - y) : x - y;
     }
     return 0;
 }
@@ -235,11 +238,13 @@ void crt_strdup(X86 *c) {
     }
     set_eax(c, mem_strdup(std::string(gchars(s), gstrlen(s))));
 }
+// _mbsupr/_mbslwr map through the multibyte code page's case table (code
+// page 1252 from start-up), in the "C" locale too.
 uint32_t str_case(uint32_t s, bool upper) {
     uint32_t len = gstrlen(s);
     for (uint32_t i = 0; i < len; ++i) {
-        int ch = rd8(s + i);
-        wr8(s + i, uint8_t(upper ? ctype_toupper(ch) : ctype_tolower(ch)));
+        uint8_t ch = rd8(s + i);
+        wr8(s + i, upper ? mbc_upper(ch) : mbc_lower(ch));
     }
     return s;
 }
@@ -344,16 +349,16 @@ void put_part(uint32_t out, const char *p, size_t n, size_t cap) {
     memcpy(g_mem + out, p, n);
     wr8(out + uint32_t(n), 0);
 }
+// A part longer than its limit makes every part empty, as on Windows.
 void crt_splitpath(X86 *c) {
     uint32_t path = arg(c, 0);
     std::string s(gchars(path), gstrlen(path));
     const char *p = s.c_str();
     size_t len = s.size(), at = 0;
+    size_t drive_len = 0;
     if (len >= 2 && p[1] == ':') {
-        put_part(arg(c, 1), p, 2, 3);
+        drive_len = 2;
         at = 2;
-    } else {
-        put_part(arg(c, 1), p, 0, 3);
     }
     size_t last_sep = std::string::npos, last_dot = std::string::npos;
     for (size_t i = at; i < len; ++i) {
@@ -362,20 +367,26 @@ void crt_splitpath(X86 *c) {
         else if (p[i] == '.')
             last_dot = i;
     }
-    size_t name_at = at;
+    size_t dir_from = at, dir_len = 0, name_at = at;
     if (last_sep != std::string::npos) {
-        put_part(arg(c, 2), p + at, last_sep + 1 - at, 256);
+        dir_len = last_sep + 1 - at;
         name_at = last_sep + 1;
-    } else {
-        put_part(arg(c, 2), p, 0, 256);
     }
+    size_t name_len, ext_from = len, ext_len = 0;
     if (last_dot != std::string::npos && last_dot >= name_at) {
-        put_part(arg(c, 3), p + name_at, last_dot - name_at, 256);
-        put_part(arg(c, 4), p + last_dot, len - last_dot, 256);
+        name_len = last_dot - name_at;
+        ext_from = last_dot;
+        ext_len = len - last_dot;
     } else {
-        put_part(arg(c, 3), p + name_at, len - name_at, 256);
-        put_part(arg(c, 4), p, 0, 256);
+        name_len = len - name_at;
     }
+    bool fits = dir_len < 256 && name_len < 256 && ext_len < 256;
+    put_part(arg(c, 1), p, fits ? drive_len : 0, 3);
+    put_part(arg(c, 2), p + dir_from, fits ? dir_len : 0, 256);
+    put_part(arg(c, 3), p + name_at, fits ? name_len : 0, 256);
+    put_part(arg(c, 4), p + ext_from, fits ? ext_len : 0, 256);
+    if (!fits)
+        set_errno(E_RANGE);
 }
 
 const ImportShim shims[] = {
