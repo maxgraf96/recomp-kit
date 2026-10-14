@@ -1884,6 +1884,225 @@ def seh_frame_sites(fn, image=None):
     return sites
 
 
+# ------------------------------------------------------------ MSVC frames --
+#
+# An MSVC frame links a registration {next, handler, state} (C++) or {next,
+# handler, scope table, try level} (_except_handler3) with the same idiom in
+# every function: the PUSHes of the handler and the old chain head, then
+# `MOV FS:[0],ESP`. The runtime (runtime/msvc_eh.cpp) resumes such a frame at
+# a catch block's continuation or an __except block; the translator gives each
+# frame that can be resumed a checkpoint there (recomp_eh_frame_enter) and
+# retires it where the frame unlinks itself (recomp_eh_frame_unlink after
+# `MOV FS:[0],reg`). Frames that only destroy locals on the way through are
+# never resumed and get nothing.
+
+#: The handlers msvcrt exports, by imported name.
+MSVC_CXX_HANDLER = "__CxxFrameHandler"
+MSVC_SEH3_HANDLERS = frozenset(("_except_handler3",))
+#: _setjmp3 is substituted at its call sites, as _setjmp is (intrinsics.h).
+MSVC_SETJMP_IMPORTS = frozenset(("_setjmp3",))
+MSVC_FUNCINFO_MAGIC = frozenset((0x19930520, 0x19930521, 0x19930522))
+
+
+def s32(v):
+    return v - (1 << 32) if v & 0x80000000 else v
+
+
+def import_target(image, va):
+    """The import a thunk at `va` (`JMP dword ptr [slot]`) reaches, or None."""
+    names = getattr(image, "iat_names", None) or {}
+    if va is None or image.rd8(va) != 0xff or image.rd8(va + 1) != 0x25:
+        return None
+    return names.get(image.rd32(va + 2))
+
+
+def called_import(image, ins):
+    """The import a CALL reaches: `CALL thunk` or `CALL dword ptr [slot]`."""
+    if ins.mnem != "CALL" or not ins.ops:
+        return None
+    op = ins.ops[0].strip()
+    m = re.match(r"dword ptr \[(0x[0-9a-fA-F]+)\]$", op)
+    if m:
+        return (getattr(image, "iat_names", None) or {}).get(int(m.group(1), 16))
+    if op.startswith("0x"):
+        return import_target(image, int(op, 16))
+    return None
+
+
+def msvc_cxx_funcinfo(image, stub):
+    """The FuncInfo of a C++ EH stub, `MOV EAX,FuncInfo; JMP __CxxFrameHandler`
+    (through its import thunk or the IAT slot), or None."""
+    if stub is None or image.rd8(stub) != 0xb8:
+        return None
+    fi, op = image.rd32(stub + 1), image.rd8(stub + 5)
+    if op == 0xe9 and image.rd32(stub + 6) is not None:
+        name = import_target(image, (stub + 10 + s32(image.rd32(stub + 6))) & 0xffffffff)
+    elif op == 0xff and image.rd8(stub + 6) == 0x25:
+        name = (getattr(image, "iat_names", None) or {}).get(image.rd32(stub + 7))
+    else:
+        return None
+    if name != MSVC_CXX_HANDLER or fi is None or image.rd32(fi) not in MSVC_FUNCINFO_MAGIC:
+        return None
+    return fi
+
+
+def msvc_funcinfo(image, fi):
+    """A FuncInfo's unwind actions and try blocks:
+    (actions, [(try_low, try_high, catch_high, [(adjectives, type, disp, funclet)])]).
+    Read only as far as the image holds it; a bad count reads nothing."""
+    max_state, umap = image.rd32(fi + 4), image.rd32(fi + 8)
+    ntry, tmap = image.rd32(fi + 12), image.rd32(fi + 16)
+    actions, tries = [], []
+    if max_state is None or ntry is None or max_state > 0x10000 or ntry > 0x1000:
+        return actions, tries
+    for i in range(max_state):
+        action = image.rd32(umap + 8 * i + 4)
+        if action:
+            actions.append(action)
+    for i in range(ntry):
+        e = tmap + 20 * i
+        low, high, catch_high, n, hs = (image.rd32(e + 4 * k) for k in range(5))
+        if hs is None or n is None or n > 0x100:
+            break
+        handlers = [(image.rd32(hs + 16 * k), image.rd32(hs + 16 * k + 4),
+                     s32(image.rd32(hs + 16 * k + 8) or 0), image.rd32(hs + 16 * k + 12))
+                    for k in range(n)]
+        tries.append((s32(low), s32(high), s32(catch_high), handlers))
+    return actions, tries
+
+
+def msvc_scope_table(image, scope):
+    """An _except_handler3 scope table: [(enclosing, filter, handler)], as far
+    as its entries are well formed (it carries no count)."""
+    entries = []
+    for i in range(64):
+        e = scope + 12 * i
+        enclosing, filt, handler = image.rd32(e), image.rd32(e + 4), image.rd32(e + 8)
+        if enclosing is None or handler is None or filt is None:
+            break
+        enclosing = s32(enclosing)
+        if (not (-1 <= enclosing < i) or not image.is_exec(handler)
+                or (filt and not image.is_exec(filt))):
+            break
+        entries.append((enclosing, filt, handler))
+    return entries
+
+
+def msvc_frames(fn, image):
+    """The MSVC frames `fn` links: {index of its MOV FS:[0],ESP: (kind, table,
+    resumable, handler)}, kind "cxx" (table: the FuncInfo, handler: the stub)
+    or "seh3" (the scope table, and the _except_handler3 thunk).
+    A frame is resumable when the runtime can continue in it: a C++ frame with
+    a try block, an _except_handler3 frame with an __except scope."""
+    frames = {}
+    if image is None or getattr(image, "rd8", None) is None:
+        return frames
+    for i, ins in enumerate(fn.insns):
+        if ins.mnem != "MOV" or len(ins.ops) != 2 or "FS:" not in ins.ops[0]:
+            continue
+        try:
+            dst, src = [parse_operand(o) for o in ins.ops]
+        except TranslateError:
+            continue
+        if not seh_chain_operand(dst) or src.kind != "reg" or src.reg != R_ESP:
+            continue
+        # The registration as the PUSHes left it, nearest first: old head,
+        # handler, then state (C++) or scope table and try level (SEH). Loads
+        # of the old head or of an argument may sit between them.
+        pushed = []
+        for j in range(i - 1, max(-1, i - 10), -1):
+            if not fn.contiguous[j] or len(pushed) == 4:
+                break
+            p = fn.insns[j]
+            if p.mnem == "PUSH" and p.ops:
+                try:
+                    pushed.append(parse_operand(p.ops[0]))
+                except TranslateError:
+                    break
+                continue
+            if p.mnem in ("MOV", "LEA", "XOR") and p.ops:
+                try:
+                    if (parse_operand(p.ops[0]).kind == "reg"
+                            and not Translator.writes_reg32(p, R_ESP)):
+                        continue
+                except TranslateError:
+                    pass
+            break
+        if len(pushed) < 2 or pushed[1].kind != "imm":
+            continue
+        handler = pushed[1].imm & 0xffffffff
+        fi = msvc_cxx_funcinfo(image, handler)
+        if fi is not None:
+            frames[i] = ("cxx", fi, bool(msvc_funcinfo(image, fi)[1]), handler)
+            continue
+        if (import_target(image, handler) in MSVC_SEH3_HANDLERS and len(pushed) >= 3
+                and pushed[2].kind == "imm"):
+            scope = pushed[2].imm & 0xffffffff
+            frames[i] = ("seh3", scope, any(f for _e, f, _h in msvc_scope_table(image, scope)),
+                         handler)
+    return frames
+
+
+def msvc_frame_entries(image, kind, table, listing=None):
+    """The code an MSVC frame's table names, as (kind, address): unwind
+    actions, catch blocks and the continuations they return (C++); filters,
+    __except blocks and __finally blocks (SEH). `listing` maps an address to
+    its listed instructions, when there are listings."""
+    out = []
+    if kind == "cxx":
+        actions, tries = msvc_funcinfo(image, table)
+        out.extend(("unwind", a) for a in actions)
+        for _low, _high, _catch_high, handlers in tries:
+            for _adjectives, _type, _disp, funclet in handlers:
+                if not funclet:
+                    continue
+                out.append(("catch", funclet))
+                insns = listing.get(funclet) if listing else None
+                out.extend(("continuation", t) for t in
+                           sorted(msvc_catch_continuations(image, funclet, insns)))
+    else:
+        for _enclosing, filt, handler in msvc_scope_table(image, table):
+            if filt:
+                out.append(("filter", filt))
+            out.append(("except" if filt else "finally", handler))
+    return out
+
+
+def msvc_catch_continuations(image, funclet, insns=None):
+    """The addresses a catch block returns (`MOV EAX,imm32; RET`): from its
+    listing when there is one, else by following its code in the image."""
+    found = set()
+    if insns:
+        for a, b in zip(insns, insns[1:]):
+            if (a.mnem == "MOV" and len(a.ops) == 2 and a.ops[0] == "EAX"
+                    and a.ops[1].startswith("0x") and b.mnem == "RET"):
+                found.add(int(a.ops[1], 16))
+        return found
+    md = getattr(image, "md", None)
+    if md is None:
+        return found
+    work, seen = [funclet], set()
+    while work and len(seen) < 4096:
+        va = work.pop()
+        while va not in seen and image.is_exec(va):
+            seen.add(va)
+            ci = next(md.disasm(image.data[va - image.base:va - image.base + 16], va), None)
+            if ci is None or ci.mnemonic == "ret":
+                break
+            if (ci.mnemonic == "mov" and ci.op_str.startswith("eax, 0x") and ci.size == 5
+                    and image.rd8(va + 5) == 0xc3):
+                found.add(int(ci.op_str.split(",")[1], 16))
+            if ci.mnemonic.startswith("j"):
+                try:
+                    work.append(int(ci.op_str, 16))
+                except ValueError:
+                    break
+                if ci.mnemonic == "jmp":
+                    break
+            va += ci.size
+    return found
+
+
 NORETURN_IMPORTS = frozenset(("RaiseException", "ExitProcess", "TerminateProcess",
                               "ExitThread", "FatalAppExitA", "FatalExit"))
 
@@ -2806,6 +3025,7 @@ class Translator(object):
         fn.pushed_continuations = self.live_continuations(fn)
         fn.seh_sites = seh_frame_sites(fn, self.image)
         fn.seh_restores = seh_restore_sites(fn)
+        fn.msvc_sites = {i for i, f in msvc_frames(fn, self.image).items() if f[2]}
         self.strict = strict
         for i, ins in enumerate(fn.insns):
             if ins.mnem == "JMP" and ins.ops and not ins.ops[0].startswith("0x"):
@@ -2840,6 +3060,9 @@ class Translator(object):
             entries = [e for e in entries if e in fn.index]
         fn.return_jumps = self.popped_return_jumps(fn, entries)
         fn.seh_escapes = self.seh_escaping_returns(fn)
+        fn.msvc_sites = {i for i, f in msvc_frames(fn, self.image).items() if f[2]}
+        if fn.msvc_sites:
+            self.stats["_msvc_frame_checkpoint"] += len(fn.msvc_sites)
         if self.opts.eager_flags:
             live_out = [ALL_FLAGS] * len(fn.insns)
         else:
@@ -3078,6 +3301,17 @@ class Translator(object):
                 # These come from data Ghidra decoded as code.
                 return ["recomp_int(c, 6u);"] if dst.imm == SEGMENT_SELECTOR["CS"] else [";"]
             L.append(write_op(dst, size, read_op(src, size)))
+            if (getattr(fn, "msvc_sites", None) and seh_chain_operand(dst)
+                    and src.kind == "reg" and src.size == 32):
+                # An MSVC frame the runtime may resume: its checkpoint where
+                # it links itself in, its retirement wherever it unlinks.
+                L.append("c->eip = %s;" % hexlit(ins.addr))
+                if i in fn.msvc_sites:
+                    L.append("{ jmp_buf *b_ = recomp_eh_frame_enter(c); "
+                             "if (setjmp(*b_)) { recomp_seh_land(c); return; } }")
+                elif src.reg != R_ESP:
+                    L.append("recomp_eh_frame_unlink(c);")
+                return L
             if (fn.seh_sites and (seh_chain_operand(dst) or i in fn.seh_sites)
                     and src.kind == "reg" and src.size == 32):
                 L.append("c->eip = %s;" % hexlit(ins.addr))
@@ -3407,6 +3641,17 @@ class Translator(object):
             return self.emit_indirect_jump(fn, i, ins, ops[0])
 
         if m == "CALL":
+            if called_import(self.image, ins) in MSVC_SETJMP_IMPORTS:
+                # msvcrt's _setjmp3, through its thunk or its IAT slot: the
+                # host setjmp is taken here, in the live caller, and the
+                # runtime fills the guest's jump buffer (seh.h).
+                self.stats["_msvc_setjmp3"] += 1
+                L.append("c->r[4] -= 4; wr32(c->r[4], %s);" % hexlit(nxt))
+                L.append("c->eip = %s;" % hexlit(ins.addr))
+                L.append("jmp_buf *b_ = recomp_setjmp3_prepare(c);")
+                L.append("if (setjmp(*b_) == 0) recomp_setjmp_return(c, 0);")
+                L.append("else recomp_setjmp3_resume(c);")
+                return L
             if ins.ops and ins.ops[0].startswith("0x"):
                 t = int(ins.ops[0], 16)
                 L.append("c->r[4] -= 4; wr32(c->r[4], %s);" % hexlit(nxt))
@@ -5110,6 +5355,7 @@ def main():
 
     scanned_pointers = False
     seh_stubs = set()
+    msvc_tables = set()
     converged = False
     for _round in range(64):
         tr.func_addrs = all_addrs
@@ -5150,6 +5396,24 @@ def main():
                     tr.table_ranges.add(table_range)
                 for landing in landings:
                     changed |= resolve(landing, set(owner), why="seh")
+        # MSVC frames name their funclets in tables the runtime reads: the
+        # C++ stub's FuncInfo (unwind actions, catch blocks and the
+        # continuations those return) and an _except_handler3 scope table.
+        # Each is code the runtime calls or resumes, however nothing branches
+        # to it. A function database lists them already; then this changes
+        # nothing, and anything it does adopt is reported as a gap.
+        for fn in list(parsed):
+            if fn in retired_finally_bodies:
+                continue
+            for i, (kind, table, _resumable, handler) in msvc_frames(fn, image).items():
+                if (kind, table) in msvc_tables:
+                    continue
+                msvc_tables.add((kind, table))
+                if kind == "cxx":
+                    changed |= resolve(handler, set(owner), why="immediate")
+                for _what, t in msvc_frame_entries(image, kind, table):
+                    if image.is_exec(t):
+                        changed |= resolve(t, set(owner), why="seh")
         for fn in list(parsed):
             if fn in retired_finally_bodies:
                 continue
@@ -6390,9 +6654,21 @@ void recomp_unknown_jump(X86 *c, uint32_t target)
             print("  function database: %d functions not in it, %d of its entry points without a "
                   "listing, %d listed functions it excludes; speculative scans off"
                   % (len(db_report["functions_not_in_db"]), len(db_unlisted), len(db_dropped)))
+    msvc_report = msvc_eh_report(image, parsed, set(entry_names))
+    if not args.quiet and (msvc_report["frames"]["cxx"] or msvc_report["frames"]["seh3"]):
+        print("  MSVC exception handling: %d C++ frames (%d with try blocks), %d SEH frames "
+              "(%d with __except), %d checkpoints; %d catch blocks, %d continuations, %d unwind "
+              "actions; %d throw sites, %d _setjmp3 sites; %d named entries not translated"
+              % (msvc_report["frames"]["cxx"], msvc_report["frames"]["cxx_try"],
+                 msvc_report["frames"]["seh3"], msvc_report["frames"]["seh3_except"],
+                 msvc_report["checkpoints"], msvc_report["entries"].get("catch", 0),
+                 msvc_report["entries"].get("continuation", 0),
+                 msvc_report["entries"].get("unwind", 0), msvc_report["throw_sites"],
+                 msvc_report["setjmp3_sites"], len(msvc_report["missing"])))
     if args.report:
         with open(args.report, "w") as fh:
             json.dump({
+                "msvc_eh": msvc_report,
                 "function_db": db_report,
                 "image_base": "%08x" % image.base,
                 "functions_total": len(parsed),
@@ -6434,6 +6710,43 @@ void recomp_unknown_jump(X86 *c, uint32_t target)
                 "notes": tr.notes[:200],
             }, fh, indent=1)
     return 1 if failures else 0
+
+
+def msvc_eh_report(image, parsed, entries):
+    """What the translation carries of MSVC exception handling: the frames,
+    the checkpoints the runtime resumes them through, and every funclet and
+    continuation their tables name, each of which must be a translated entry
+    (`missing` lists any that is not)."""
+    listing = {fn.addr: fn.insns for fn in parsed}
+    frames = {"cxx": 0, "cxx_try": 0, "seh3": 0, "seh3_except": 0}
+    counts, missing, checkpoints, tables = defaultdict(int), [], 0, set()
+    throws, setjmps, try_blocks = 0, 0, 0
+    for fn in parsed:
+        for ins in fn.insns:
+            name = called_import(image, ins)
+            if name == "_CxxThrowException":
+                throws += 1
+            elif name in MSVC_SETJMP_IMPORTS:
+                setjmps += 1
+        for _i, (kind, table, resumable, handler) in msvc_frames(fn, image).items():
+            frames[kind] += 1
+            if resumable:
+                frames["cxx_try" if kind == "cxx" else "seh3_except"] += 1
+                checkpoints += 1
+            if (kind, table) in tables:
+                continue
+            tables.add((kind, table))
+            named = msvc_frame_entries(image, kind, table, listing)
+            if kind == "cxx":
+                named.append(("stub", handler))
+                try_blocks += len(msvc_funcinfo(image, table)[1])
+            for what, t in named:
+                counts[what] += 1
+                if t not in entries:
+                    missing.append(["%08x" % fn.addr, what, "%08x" % t])
+    return {"frames": frames, "checkpoints": checkpoints, "try_blocks": try_blocks,
+            "entries": dict(counts), "missing": missing, "throw_sites": throws,
+            "setjmp3_sites": setjmps}
 
 
 def check_flags(tr, parsed):
