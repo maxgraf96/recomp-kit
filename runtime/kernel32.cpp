@@ -681,6 +681,11 @@ void k_GlobalFree(X86 *c) {
 void k_GlobalLock(X86 *c) {
     set_eax(c, arg(c, 0));
 }
+// GlobalSize(hMem): the block's size; GlobalAlloc hands out fixed blocks, so
+// the handle is the pointer. 0 for anything the heap does not own.
+void k_GlobalSize(X86 *c) {
+    set_eax(c, heap_owns(arg(c, 0)) ? heap_size(arg(c, 0)) : 0);
+}
 void k_GlobalUnlock(X86 *c) {
     set_eax(c, 0);
 }
@@ -929,6 +934,29 @@ void k_GetFileSize(X86 *c) {
     if (phigh)
         wr32(phigh, (uint32_t)(st.size >> 32));
     set_eax(c, (uint32_t)st.size);
+}
+
+// GetFileTime(file, creation, last access, last write): any pointer may be
+// null.
+void k_GetFileTime(X86 *c) {
+    HObj *o = handle_get(arg(c, 0), H_FILE);
+    OsStat st{};
+    if (!o || os_fd_stat(o->fd, &st) != 0) {
+        set_last_error(ERROR_INVALID_HANDLE_);
+        set_eax(c, 0);
+        return;
+    }
+    const int64_t times[3] = {st.ctime, st.atime, st.mtime};
+    for (int i = 0; i < 3; ++i)
+        if (uint32_t p = arg(c, 1 + i))
+            put_filetime(p, times[i]);
+    set_eax(c, 1);
+}
+// CompareFileTime(a, b): -1, 0 or 1, as LONG.
+void k_CompareFileTime(X86 *c) {
+    auto ft = [](uint32_t p) { return (uint64_t)rd32(p + 4) << 32 | rd32(p); };
+    uint64_t a = ft(arg(c, 0)), b = ft(arg(c, 1));
+    set_eax(c, a < b ? 0xffffffffu : a > b ? 1u : 0u);
 }
 
 void k_CloseHandle(X86 *c) {
@@ -1553,6 +1581,106 @@ void k_GetSystemDirectoryA(X86 *c) {
     set_eax(c, len);
 }
 
+// GetWindowsDirectoryA(buf, size): the directory GetSystemDirectoryA's is in.
+void k_GetWindowsDirectoryA(X86 *c) {
+    static const char dir[] = "C:\\Windows";
+    uint32_t buf = arg(c, 0), size = arg(c, 1), len = sizeof dir - 1;
+    if (size <= len) {
+        set_eax(c, len + 1);
+        return;
+    }
+    memcpy(g_mem + buf, dir, len + 1);
+    set_eax(c, len);
+}
+// The guest's temporary directory: Temp under the guest root, so files the
+// game makes there go where its other writes go (the overlay's writable tier
+// when there is one). Created on first use.
+std::string temp_dir_guest() {
+    std::string dir = std::string(RECOMP_GUEST_ROOT) + "\\Temp\\";
+    std::string host = win32_host_path_op(dir.substr(0, dir.size() - 1), WIN32_FILE_WRITE);
+    if (!host.empty())
+        os_mkdir(host.c_str());
+    return dir;
+}
+// GetTempPathA(size, buf): the length without the NUL, or the size needed.
+void k_GetTempPathA(X86 *c) {
+    uint32_t size = arg(c, 0), buf = arg(c, 1);
+    std::string dir = temp_dir_guest();
+    if (size <= dir.size()) {
+        set_eax(c, (uint32_t)dir.size() + 1);
+        return;
+    }
+    gm_put_str(buf, dir.c_str(), size);
+    set_eax(c, (uint32_t)dir.size());
+}
+// GetTempFileNameA(path, prefix, unique, out): path\PRE<hex>.TMP. With
+// unique 0 the first free number from a counter is taken and the file is
+// created, as Windows does; otherwise the name is only made.
+void k_GetTempFileNameA(X86 *c) {
+    std::string dir = gm_str(arg(c, 0), 260), prefix = arg(c, 1) ? gm_str(arg(c, 1), 3) : "";
+    uint32_t unique = arg(c, 2) & 0xffff, out = arg(c, 3);
+    if (!out) {
+        set_last_error(ERROR_INVALID_PARAMETER_);
+        set_eax(c, 0);
+        return;
+    }
+    if (!dir.empty() && dir.back() != '\\' && dir.back() != '/')
+        dir += "\\";
+    static uint32_t counter = 0;
+    auto name_for = [&](uint32_t n) {
+        char tail[32];
+        snprintf(tail, sizeof tail, "%X.TMP", n);
+        return dir + prefix + tail;
+    };
+    if (unique) {
+        gm_put_str(out, name_for(unique).c_str(), 260);
+        set_eax(c, unique);
+        return;
+    }
+    for (int tries = 0; tries < 0x10000; ++tries) {
+        uint32_t n = (++counter & 0xffff) ? counter & 0xffff : (++counter & 0xffff);
+        std::string guest = name_for(n);
+        std::string host = win32_host_path_op(guest, WIN32_FILE_WRITE);
+        if (host.empty()) {
+            set_last_error(ERROR_PATH_NOT_FOUND_);
+            set_eax(c, 0);
+            return;
+        }
+        int fd = os_fd_open(host.c_str(), OS_O_WRONLY | OS_O_CREAT | OS_O_EXCL);
+        if (fd < 0)
+            continue;
+        os_fd_close(fd);
+        win32_invalidate_dir_cache();
+        gm_put_str(out, guest.c_str(), 260);
+        set_eax(c, n);
+        return;
+    }
+    set_last_error(ERROR_ALREADY_EXISTS_);
+    set_eax(c, 0);
+}
+void k_GetFileAttributesExA(X86 *c) {
+    get_file_attributes_ex_named(c, gm_str(arg(c, 0), 260));
+}
+// GetShortPathNameA(long, short, size): a volume without 8.3 names answers
+// with the long path itself, which is what this file system is.
+void k_GetShortPathNameA(X86 *c) {
+    std::string path = gm_str(arg(c, 0), 260);
+    uint32_t out = arg(c, 1), size = arg(c, 2);
+    OsStat st{};
+    std::string host = win32_host_path(path);
+    if (host.empty() || os_stat(host.c_str(), &st) != 0) {
+        set_last_error(ERROR_FILE_NOT_FOUND_);
+        set_eax(c, 0);
+        return;
+    }
+    if (size <= path.size()) {
+        set_eax(c, (uint32_t)path.size() + 1);
+        return;
+    }
+    gm_put_str(out, path.c_str(), size);
+    set_eax(c, (uint32_t)path.size());
+}
+
 void k_GetLogicalDriveStringsA(X86 *c) {
     logical_drive_strings(c, false);
 }
@@ -1893,6 +2021,10 @@ void k_WaitForSingleObject(X86 *c) {
 
 void k_WaitForMultipleObjects(X86 *c) {
     wait_multiple_objects(c);
+}
+// No APC is ever queued to a guest thread, so an alertable wait is a wait.
+void k_WaitForSingleObjectEx(X86 *c) {
+    k_WaitForSingleObject(c);
 }
 
 // -------------------------------------------------------------------------
@@ -3699,6 +3831,18 @@ void k_lstrlenA(X86 *c) {
     set_eax(c, (uint32_t)gm_str(arg(c, 0)).size());
 }
 
+// lstrcpynA(dst, src, n): at most n - 1 characters and a NUL; n 0 writes
+// nothing. Returns dst.
+void k_lstrcpynA(X86 *c) {
+    uint32_t d = arg(c, 0), n = arg(c, 2);
+    if (d && n) {
+        std::string s = arg(c, 1) ? gm_str(arg(c, 1), n - 1) : std::string();
+        if (s.size() > n - 1)
+            s.resize(n - 1);
+        memcpy(g_mem + d, s.c_str(), s.size() + 1);
+    }
+    set_eax(c, d);
+}
 void k_lstrcpyA(X86 *c) {
     uint32_t d = arg(c, 0);
     std::string s = gm_str(arg(c, 1));
@@ -4847,6 +4991,7 @@ const ImportShim g_kernel32_shims[] = {
     {"KERNEL32.dll", "GlobalAlloc", 2, k_GlobalAlloc},
     {"KERNEL32.dll", "GlobalReAlloc", 3, k_GlobalReAlloc},
     {"KERNEL32.dll", "GlobalFree", 1, k_GlobalFree},
+    {"KERNEL32.dll", "GlobalSize", 1, k_GlobalSize},
     {"KERNEL32.dll", "GlobalLock", 1, k_GlobalLock},
     {"KERNEL32.dll", "GlobalUnlock", 1, k_GlobalUnlock},
     {"KERNEL32.dll", "LocalAlloc", 2, k_LocalAlloc},
@@ -4862,6 +5007,8 @@ const ImportShim g_kernel32_shims[] = {
     {"KERNEL32.dll", "WriteFile", 5, k_WriteFile},
     {"KERNEL32.dll", "SetFilePointer", 4, k_SetFilePointer},
     {"KERNEL32.dll", "GetFileSize", 2, k_GetFileSize},
+    {"KERNEL32.dll", "GetFileTime", 4, k_GetFileTime},
+    {"KERNEL32.dll", "CompareFileTime", 2, k_CompareFileTime},
     {"KERNEL32.dll", "CloseHandle", 1, k_CloseHandle},
     {"KERNEL32.dll", "FlushFileBuffers", 1, k_FlushFileBuffers},
     {"KERNEL32.dll", "SetEndOfFile", 1, k_SetEndOfFile},
@@ -4882,6 +5029,11 @@ const ImportShim g_kernel32_shims[] = {
     {"KERNEL32.dll", "GetVolumeInformationA", 8, k_GetVolumeInformationA},
     {"KERNEL32.dll", "GetDiskFreeSpaceA", 5, k_GetDiskFreeSpaceA},
     {"KERNEL32.dll", "GetSystemDirectoryA", 2, k_GetSystemDirectoryA},
+    {"KERNEL32.dll", "GetWindowsDirectoryA", 2, k_GetWindowsDirectoryA},
+    {"KERNEL32.dll", "GetTempPathA", 2, k_GetTempPathA},
+    {"KERNEL32.dll", "GetTempFileNameA", 4, k_GetTempFileNameA},
+    {"KERNEL32.dll", "GetShortPathNameA", 3, k_GetShortPathNameA},
+    {"KERNEL32.dll", "GetFileAttributesExA", 3, k_GetFileAttributesExA},
     {"KERNEL32.dll", "GetLogicalDriveStringsA", 2, k_GetLogicalDriveStringsA},
     {"KERNEL32.dll", "GetDriveTypeA", 1, k_GetDriveTypeA},
     // modules and process state
@@ -4981,6 +5133,7 @@ const ImportShim g_kernel32_shims[] = {
     {"KERNEL32.dll", "ResetEvent", 1, k_ResetEvent},
     {"KERNEL32.dll", "CreateMutexA", 3, k_CreateMutexA},
     {"KERNEL32.dll", "WaitForSingleObject", 2, k_WaitForSingleObject},
+    {"KERNEL32.dll", "WaitForSingleObjectEx", 3, k_WaitForSingleObjectEx},
     {"KERNEL32.dll", "WaitForMultipleObjects", 4, k_WaitForMultipleObjects},
     // threads and process exit
     {"KERNEL32.dll", "CreateThread", 6, k_CreateThread},
@@ -5006,6 +5159,7 @@ const ImportShim g_kernel32_shims[] = {
     // strings, code pages, locale
     {"KERNEL32.dll", "lstrlenA", 1, k_lstrlenA},
     {"KERNEL32.dll", "lstrcpyA", 2, k_lstrcpyA},
+    {"KERNEL32.dll", "lstrcpynA", 3, k_lstrcpynA},
     {"KERNEL32.dll", "lstrcatA", 2, k_lstrcatA},
     {"KERNEL32.dll", "IsDBCSLeadByte", 1, k_IsDBCSLeadByte},
     {"KERNEL32.dll", "GetACP", 0, k_GetACP},

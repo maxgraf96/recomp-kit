@@ -862,8 +862,8 @@ void a_RegQueryInfoKeyW(X86 *c) {
         wr64(arg(c, 11), 0);
     set_eax(c, hr);
 }
-void a_RegDeleteKeyW(X86 *c) {
-    std::string path = key_path(arg(c, 0), gm_wstr(arg(c, 1)));
+void reg_delete_key(X86 *c, const std::string &sub) {
+    std::string path = key_path(arg(c, 0), sub);
     if (path.empty()) {
         set_eax(c, 6);
         return;
@@ -879,19 +879,33 @@ void a_RegDeleteKeyW(X86 *c) {
     g_registry_dirty = true;
     set_eax(c, 0);
 }
-void a_RegDeleteValueW(X86 *c) {
+void a_RegDeleteKeyW(X86 *c) {
+    reg_delete_key(c, gm_wstr(arg(c, 1)));
+}
+void a_RegDeleteKeyA(X86 *c) {
+    reg_delete_key(c, gm_str(arg(c, 1), 512));
+}
+// RegDeleteValue(key, name): a null name is the key's default value, "".
+void reg_delete_value(X86 *c, const std::string &name) {
     std::string path = key_path(arg(c, 0), "");
     if (path.empty()) {
         set_eax(c, 6);
         return;
     }
     auto it = regstore().find(path);
-    if (it == regstore().end() || !it->second.erase(gm_wstr(arg(c, 1)))) {
+    if (it == regstore().end() || !it->second.erase(name)) {
         set_eax(c, 2);
         return;
     }
     g_registry_dirty = true;
+    registry_flush();
     set_eax(c, 0);
+}
+void a_RegDeleteValueW(X86 *c) {
+    reg_delete_value(c, arg(c, 1) ? gm_wstr(arg(c, 1)) : std::string());
+}
+void a_RegDeleteValueA(X86 *c) {
+    reg_delete_value(c, arg(c, 1) ? gm_str(arg(c, 1), 256) : std::string());
 }
 void a_RegFlushKey(X86 *c) {
     if (key_path(arg(c, 0), "").empty()) {
@@ -1446,9 +1460,15 @@ std::string midi_soundfont_path() {
 void m_midiOutGetNumDevs(X86 *c) {
     set_eax(c, 1);
 }
+// Auxiliary audio (the CD audio and line-in mixer lines): none. Every device
+// id is MMSYSERR_BADDEVICEID, which is what a caller probing ids from 0 meets
+// past the last device.
 void m_auxGetNumDevs(X86 *c) {
     set_eax(c, 0);
-} // no aux devices
+}
+void m_aux_no_device(X86 *c) {
+    set_eax(c, MMSYSERR_BADDEVICEID);
+}
 
 void m_midiOutGetDevCapsA(X86 *c) {
     uint32_t id = arg(c, 0), out = arg(c, 1), size = arg(c, 2);
@@ -2134,7 +2154,9 @@ const ImportShim g_misc_shims[] = {
     {"ADVAPI32.dll", "RegEnumValueW", 8, a_RegEnumValueW},
     {"ADVAPI32.dll", "RegQueryInfoKeyW", 12, a_RegQueryInfoKeyW},
     {"ADVAPI32.dll", "RegDeleteKeyW", 2, a_RegDeleteKeyW},
+    {"ADVAPI32.dll", "RegDeleteKeyA", 2, a_RegDeleteKeyA},
     {"ADVAPI32.dll", "RegDeleteValueW", 2, a_RegDeleteValueW},
+    {"ADVAPI32.dll", "RegDeleteValueA", 2, a_RegDeleteValueA},
     {"ADVAPI32.dll", "RegFlushKey", 1, a_RegFlushKey},
     {"ADVAPI32.dll", "RegConnectRegistryW", 3, a_RegDenied},
     {"ADVAPI32.dll", "RegLoadKeyW", 3, a_RegDenied},
@@ -2250,11 +2272,11 @@ const ImportShim g_misc_shims[] = {
     {"VERSION.dll", "GetFileVersionInfoSizeW", 2, v_GetFileVersionInfoSizeW},
     {"VERSION.dll", "GetFileVersionInfoW", 4, v_GetFileVersionInfoW},
     {"VERSION.dll", "VerQueryValueW", 4, v_VerQueryValueW},
-    // WINMM: logging-only, correct stdcall pop counts so the guest stack stays
-    // balanced. MIDI and aux output belong to the audio task.
-    {"WINMM.dll", "auxGetDevCapsA", 3, nullptr},
-    {"WINMM.dll", "auxGetVolume", 2, nullptr},
-    {"WINMM.dll", "auxSetVolume", 2, nullptr},
+    // WINMM: correct stdcall pop counts so the guest stack stays balanced. MIDI
+    // and aux output belong to the audio task; there are no aux devices.
+    {"WINMM.dll", "auxGetDevCapsA", 3, m_aux_no_device},
+    {"WINMM.dll", "auxGetVolume", 2, m_aux_no_device},
+    {"WINMM.dll", "auxSetVolume", 2, m_aux_no_device},
     // DirectX and third-party DLLs are owned by later tasks; these entries only
     // record the callee's pop count so an early call cannot unbalance the stack.
     // Direct3D 9, D3DX 9 and DirectInput 8: a shader-era game's graphics and

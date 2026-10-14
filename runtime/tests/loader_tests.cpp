@@ -2,7 +2,8 @@
 // relocation to a configured base, import binding across modules in any
 // configuration order, dependency-ordered DllMain and static TLS for static and
 // LoadLibrary'd modules, thread notifications, reference counts and failure
-// paths; a mapped DLL's resources; file views; Winsock start-up; then the
+// paths; a mapped DLL's resources; file views; Winsock start-up; the rest of
+// a 2001 game's kernel32/advapi32/winmm imports; then the
 // guarded arena, heap growth, strict mode, the initial x87 control word and
 // the import argument counts. Needs no game: every image is
 // written to a temporary directory and its DllMain is a native stand-in
@@ -835,11 +836,133 @@ static void test_winsock_startup(X86 *c) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The rest of what a 2001 game imports from kernel32, advapi32 and winmm:
+// file times, temporary files, short paths, the Windows directory, lstrcpyn,
+// GlobalSize, alertable waits, deleting registry keys and values, and no
+// auxiliary audio devices.
+// ---------------------------------------------------------------------------
+static void test_more_win32(X86 *c) {
+    section("kernel32/advapi32/winmm: file times, temp files, paths, registry deletes, aux");
+    const std::string path = g_dir + "/times.bin";
+    g_written.push_back(path);
+    FILE *f = fopen(path.c_str(), "wb");
+    fputs("times", f);
+    fclose(f);
+    const std::string root = RECOMP_GUEST_ROOT;
+    const uint32_t name = guest_str((root + "\\TIMES.BIN").c_str());
+    const uint32_t h =
+        call_import(c, "KERNEL32.dll", "CreateFileA", {name, 0x80000000u, 1, 0, 3, 0, 0});
+    const uint32_t ft = g_scratch;
+    g_scratch += 64;
+    memset(g_mem + ft, 0, 24);
+    check(call_import(c, "KERNEL32.dll", "GetFileTime", {h, ft, 0, ft + 16}) == 1 &&
+              rd32(ft + 20) != 0 && rd32(ft + 12) == 0,
+          "GetFileTime fills the times asked for and leaves a null pointer alone");
+    wr32(ft + 24, rd32(ft + 16) + 1);
+    wr32(ft + 28, rd32(ft + 20));
+    check(call_import(c, "KERNEL32.dll", "CompareFileTime", {ft + 16, ft + 24}) == 0xffffffffu &&
+              call_import(c, "KERNEL32.dll", "CompareFileTime", {ft + 24, ft + 16}) == 1 &&
+              call_import(c, "KERNEL32.dll", "CompareFileTime", {ft + 16, ft + 16}) == 0,
+          "CompareFileTime orders FILETIMEs");
+    call_import(c, "KERNEL32.dll", "CloseHandle", {h});
+    const uint32_t attrs = g_scratch;
+    g_scratch += 64;
+    check(call_import(c, "KERNEL32.dll", "GetFileAttributesExA", {name, 0, attrs}) == 1 &&
+              rd32(attrs + 32) == 5,
+          "GetFileAttributesExA reports the size");
+
+    const uint32_t buf = g_scratch;
+    g_scratch += 512;
+    const uint32_t n = call_import(c, "KERNEL32.dll", "GetTempPathA", {260, buf});
+    const std::string tmp = gm_str(buf, 260);
+    OsStat st{};
+    check(n == tmp.size() && tmp == root + "\\Temp\\" &&
+              os_stat((g_dir + "/Temp").c_str(), &st) == 0 && st.is_dir,
+          "GetTempPathA is Temp under the guest root, and exists: %s", tmp.c_str());
+    check(call_import(c, "KERNEL32.dll", "GetTempPathA", {3, buf}) == tmp.size() + 1,
+          "...and asks for the room it needs");
+    const uint32_t made =
+        call_import(c, "KERNEL32.dll", "GetTempFileNameA", {buf, guest_str("eex"), 0, buf + 260});
+    const std::string temp_file = gm_str(buf + 260, 260);
+    const std::string host_temp = g_dir + "/Temp/" + temp_file.substr(temp_file.rfind('\\') + 1);
+    g_written.push_back(host_temp);
+    check(made && temp_file.find("\\Temp\\eex") != std::string::npos && temp_file.size() > 4 &&
+              temp_file.substr(temp_file.size() - 4) == ".TMP" &&
+              os_stat(host_temp.c_str(), &st) == 0,
+          "GetTempFileNameA(unique 0) makes the file: %s", temp_file.c_str());
+    check(call_import(c, "KERNEL32.dll", "GetTempFileNameA",
+                      {buf, guest_str("eex"), 0x1a2b, buf + 260}) == 0x1a2b &&
+              gm_str(buf + 260, 260) == tmp + "eex1A2B.TMP",
+          "...and with a unique number only names it");
+    check(call_import(c, "KERNEL32.dll", "GetShortPathNameA", {name, buf, 260}) ==
+                  root.size() + 10 &&
+              gm_str(buf, 260) == root + "\\TIMES.BIN",
+          "GetShortPathNameA answers with the long path");
+    check(call_import(c, "KERNEL32.dll", "GetShortPathNameA",
+                      {guest_str((root + "\\nope.bin").c_str()), buf, 260}) == 0 &&
+              call_import(c, "KERNEL32.dll", "GetLastError", {}) == 2,
+          "...and ERROR_FILE_NOT_FOUND for a missing file");
+    check(call_import(c, "KERNEL32.dll", "GetWindowsDirectoryA", {buf, 260}) == 10 &&
+              gm_str(buf, 260) == "C:\\Windows",
+          "GetWindowsDirectoryA");
+
+    const uint32_t src = guest_str("abcdef");
+    memset(g_mem + buf, 'x', 16);
+    check(call_import(c, "KERNEL32.dll", "lstrcpynA", {buf, src, 4}) == buf &&
+              gm_str(buf, 16) == "abc",
+          "lstrcpynA copies n - 1 characters and a NUL");
+    wr8(buf, 'x');
+    check(call_import(c, "KERNEL32.dll", "lstrcpynA", {buf, src, 0}) == buf && rd8(buf) == 'x',
+          "...and nothing for n 0");
+    const uint32_t block = call_import(c, "KERNEL32.dll", "GlobalAlloc", {0, 100});
+    check(call_import(c, "KERNEL32.dll", "GlobalSize", {block}) >= 100 &&
+              call_import(c, "KERNEL32.dll", "GlobalSize", {0x12345678}) == 0,
+          "GlobalSize of a block, and 0 for what is none");
+    call_import(c, "KERNEL32.dll", "GlobalFree", {block});
+    const uint32_t ev = call_import(c, "KERNEL32.dll", "CreateEventA", {0, 1, 1, 0});
+    check(call_import(c, "KERNEL32.dll", "WaitForSingleObjectEx", {ev, 0, 1}) == 0,
+          "WaitForSingleObjectEx waits as WaitForSingleObject");
+    call_import(c, "KERNEL32.dll", "CloseHandle", {ev});
+
+    const uint32_t key = g_scratch;
+    g_scratch += 16;
+    const uint32_t sub = guest_str("Software\\RecompTest\\Gone");
+    check(call_import(c, "ADVAPI32.dll", "RegCreateKeyExA",
+                      {0x80000001u, sub, 0, 0, 0, 0xf003f, 0, key, 0}) == 0,
+          "RegCreateKeyExA");
+    const uint32_t val = guest_str("Value"), dword = g_scratch;
+    g_scratch += 16;
+    wr32(dword, 7);
+    call_import(c, "ADVAPI32.dll", "RegSetValueExA", {rd32(key), val, 0, 4, dword, 4});
+    check(call_import(c, "ADVAPI32.dll", "RegDeleteValueA", {rd32(key), val}) == 0 &&
+              call_import(c, "ADVAPI32.dll", "RegDeleteValueA", {rd32(key), val}) == 2,
+          "RegDeleteValueA deletes once, then ERROR_FILE_NOT_FOUND");
+    call_import(c, "ADVAPI32.dll", "RegCloseKey", {rd32(key)});
+    check(call_import(c, "ADVAPI32.dll", "RegDeleteKeyA",
+                      {0x80000001u, guest_str("Software\\RecompTest")}) == 5,
+          "RegDeleteKeyA refuses a key with subkeys (ERROR_ACCESS_DENIED)");
+    check(call_import(c, "ADVAPI32.dll", "RegDeleteKeyA", {0x80000001u, sub}) == 0 &&
+              call_import(c, "ADVAPI32.dll", "RegOpenKeyExA",
+                          {0x80000001u, sub, 0, 0x20019, key}) == 2,
+          "RegDeleteKeyA deletes a leaf key");
+
+    const uint32_t caps = g_scratch;
+    g_scratch += 64;
+    check(call_import(c, "WINMM.dll", "auxGetNumDevs", {}) == 0 &&
+              call_import(c, "WINMM.dll", "auxGetDevCapsA", {0, caps, 48}) == 2 &&
+              call_import(c, "WINMM.dll", "auxGetVolume", {0, caps}) == 2 &&
+              call_import(c, "WINMM.dll", "auxSetVolume", {0, 0xffffffffu}) == 2,
+          "no auxiliary audio devices: MMSYSERR_BADDEVICEID");
+}
+
 static void test_import_cycle(Config &cfg) {
     section("an import cycle");
     const std::string saved = g_dir;
     g_dir += "/cycle";
     os_mkdir(g_dir.c_str());
+    os_setenv("RECOMP_REGISTRY", (g_dir + "/registry.json").c_str());
+    g_written.push_back(g_dir + "/registry.json");
     pe::Image exe;
     exe.preferred = IMAGE_BASE;
     exe.dll = false;
@@ -1219,6 +1342,7 @@ int main(int argc, char **argv) {
     test_module_resources(c);
     test_file_views(c);
     test_winsock_startup(c);
+    test_more_win32(c);
     test_heap_growth(cfg);
     test_exact_ranges(cfg);
     test_import_cycle(cfg);
@@ -1230,6 +1354,7 @@ int main(int argc, char **argv) {
     os_unlink((g_dir + "/child.log").c_str());
     os_unlink((g_dir + "/cycle/child.log").c_str());
     os_rmdir((g_dir + "/cycle").c_str());
+    os_rmdir((g_dir + "/Temp").c_str());
     os_rmdir(g_dir.c_str());
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
