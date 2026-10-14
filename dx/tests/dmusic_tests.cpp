@@ -487,6 +487,110 @@ static void test_volume() {
     close_music(m);
 }
 
+// A game's volume: a float set as 1000 ln v hundredths of a dB, and the
+// floor at -20000 below 0.01.
+static void game_volume(const Music &m, double v) {
+    set_volume_mb(m, v <= 0.01 ? -20000 : (int32_t)lround(1000.0 * log(v)));
+}
+
+// A fade in steps of 1/30 every 100 ms, rendering between them, as a game's
+// music thread does it. Returns each step's level, clear of the breath that
+// ends each bar.
+static std::vector<double> fade(const Music &m, Audio &a, double from, double to) {
+    std::vector<double> levels;
+    const double step = to > from ? 1.0 / 30.0 : -1.0 / 30.0;
+    for (double v = from;; v += step) {
+        if ((step > 0 && v > to) || (step < 0 && v < to))
+            v = to;
+        game_volume(m, v);
+        const double t = (double)a.frames() / a.rate;
+        render(a, 0.1);
+        levels.push_back(rms_db(a, t + 0.01, t + 0.07));
+        if (v == to)
+            break;
+    }
+    return levels;
+}
+
+// The sequence a game's music thread runs to change tracks: load the next
+// score, fade out, stop, unload the old score (retrying while it still
+// plays), set the new one's repeats, intensity and reverb, play it and fade
+// in. The old track is 441 Hz and the new one 1102.5 Hz.
+static void test_track_change() {
+    os_setenv("RECOMP_DMUSIC_GM", (g_dir + "/GmBank.dls").c_str());
+    Music m = open_music();
+    set_reverb(m, true, 0.0f, -9.0f, 2100.0f, 0.25f);
+    uint32_t old_seg = load(m, "Song.sgt");
+    CHECK_EQ(call_method(old_seg, SEG_SETPARAM, {gp(GUID_Download), 0xffffffffu, 0, 0, m.perf}),
+             S_OK_);
+    game_volume(m, 0.0);
+    CHECK_EQ(call_method(old_seg, SEG_SETREPEATS, {100000}), S_OK_);
+    set_groove(m, 1);
+    CHECK_EQ(call_method(m.perf, PERF_PLAYSEGMENT, {old_seg, 0x4000, 0, 0, 0}), S_OK_);
+    Audio a;
+    fade(m, a, 0.0, 0.62);
+    render(a, 1.5);
+    const double t_steady = (double)a.frames() / a.rate;
+    const double steady = rms_db(a, t_steady - 1.0, t_steady - 0.1);
+    CHECK_EQ(pitch(a, t_steady - 1.0, t_steady - 0.1), 660); // groove 1 + 1
+
+    // The change.
+    uint32_t next = load(m, "GmSong.sgt");
+    CHECK(next != 0);
+    CHECK_EQ(call_method(next, SEG_SETPARAM, {gp(GUID_Download), 0xffffffffu, 0, 0, m.perf}),
+             S_OK_);
+    const std::vector<double> out = fade(m, a, 0.62, 0.0);
+    bool falling = true;
+    for (size_t i = 1; i < out.size(); ++i)
+        falling = falling && out[i] <= out[i - 1] + 1.0; // a bar's breath may fall in a window
+    CHECK(falling);
+    if (!falling)
+        for (size_t i = 0; i < out.size(); ++i)
+            fprintf(stderr, "  fade out step %zu: %.2f dB\n", i, out[i]);
+    CHECK(out.size() == 20 && out.back() < out.front() - 25.0); // the reverb's tail is what is left
+    CHECK_EQ(call_method(m.perf, PERF_STOP, {0, 0, 0, 0}), S_OK_);
+    int tries = 0;
+    for (; tries < 100; ++tries) {
+        uint32_t hr = 0;
+        uint32_t state = segment_state(m, &hr);
+        if (!state)
+            break;
+        wr32(sc(0xe8), 0);
+        call_method(state, STATE_GETSEGMENT, {sc(0xe8)});
+        const bool still = rd32(sc(0xe8)) == old_seg;
+        call_method(state, RELEASE, {});
+        if (!still)
+            break;
+    }
+    CHECK_EQ(tries, 0);
+    CHECK_EQ(call_method(old_seg, SEG_SETPARAM, {gp(GUID_Unload), 0xffffffffu, 0, 0, 0x1234}),
+             S_OK_);
+    call_method(old_seg, RELEASE, {});
+    CHECK_EQ(call_method(next, SEG_SETREPEATS, {100000}), S_OK_);
+    set_groove(m, 0); // groove 1: A4, which the stand-in GM instrument sounds at 1102.5 Hz
+    set_reverb(m, true, 0.0f, -8.0f, 1600.0f, 0.15f);
+    CHECK_EQ(call_method(m.perf, PERF_PLAYSEGMENT, {next, 0x4000, 0, 0, 0}), S_OK_);
+    game_volume(m, 0.0);
+    fade(m, a, 0.0, 0.62);
+    render(a, 1.5);
+    const double t_end = (double)a.frames() / a.rate;
+    CHECK_EQ(pitch(a, t_end - 1.0, t_end - 0.1), 1102);
+    printf("  (old track %.1f dB, new track %.1f dB at the same volume)\n", steady,
+           rms_db(a, t_end - 1.0, t_end - 0.1));
+    uint32_t state = segment_state(m);
+    CHECK(state != 0);
+    if (state) {
+        wr32(sc(0xe8), 0);
+        call_method(state, STATE_GETSEGMENT, {sc(0xe8)});
+        CHECK_EQ(rd32(sc(0xe8)), next);
+        call_method(next, RELEASE, {});
+        call_method(state, RELEASE, {});
+    }
+    call_method(next, RELEASE, {});
+    close_music(m);
+    os_unsetenv("RECOMP_DMUSIC_GM");
+}
+
 // The reverb: a tail after a stop when it is on, none when it is off.
 static void test_reverb() {
     Music m = open_music();
@@ -784,6 +888,7 @@ int main() {
         {"tempo", test_tempo},
         {"groove and transitions", test_groove},
         {"volume and fades", test_volume},
+        {"a game's track change", test_track_change},
         {"reverb", test_reverb},
         {"reverb model", test_reverb_model},
         {"General MIDI bank", test_gm_bank},
