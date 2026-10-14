@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Load DLLs at configured bases from their original files: the loader and the
+  translator apply the same base relocations, every module is mapped before any
+  import table is bound, static imports attach in dependency order before the
+  entry point, `LoadLibrary`/`FreeLibrary` load and release what a module
+  imports, and DLLs get thread notifications and static TLS.
+
+- Reserve the whole 4 GB guest space on 64-bit hosts: an access past
+  `[game] guest_size` (or to the null page, when guarded) is reported with its
+  guest address instead of crashing the host, and the heap grows past its base
+  arena into the rest of `guest_size`.
+
+- Add strict mode (`[runtime] strict`, `RECOMP_STRICT`): undeliverable calls and
+  jumps, imports of unknown stdcall argument count and divide errors stop the
+  run with a diagnostic. Imports without a shim get their argument count from a
+  Win32 table, the C runtimes' convention, MSVC C++ names, Winsock ordinals or
+  `[imports.argc]`.
+
+- Start every guest thread at x87 control word `0x027f`, as Windows does.
+
 - Allow native game adapters to place their own cursors at absolute touch
   positions in logical game pixels. Placement can discard pending DirectInput
   X/Y movement without losing button, wheel or keyboard input.

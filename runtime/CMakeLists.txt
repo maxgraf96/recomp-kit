@@ -79,6 +79,15 @@ add_test(NAME runtime_tests COMMAND runtime_tests WORKING_DIRECTORY ${POP_ROOT})
 # code through the interpreter. It takes two seconds when that returns.
 set_tests_properties(runtime_tests PROPERTIES LABELS game TIMEOUT 600
                      ENVIRONMENT RECOMP_PYTHON=${Python3_EXECUTABLE})
+# The multi-module loader, the guarded arena, strict mode and import argument
+# counts, on synthetic PE images the suite writes itself: no game needed.
+add_executable(loader_tests tests/loader_tests.cpp tests/stub_recomp_call.cpp)
+target_link_libraries(loader_tests PRIVATE recomp_platform recomp_runtime)
+target_compile_options(loader_tests PRIVATE ${POP_WARN_HOST})
+pop_optimize(loader_tests 1)
+pop_test_binary(loader_tests)
+add_test(NAME loader_tests COMMAND loader_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(loader_tests PROPERTIES LABELS nogame TIMEOUT 120)
 add_executable(gdi_tests tests/gdi_tests.cpp tests/stub_recomp_call.cpp)
 target_link_libraries(gdi_tests PRIVATE recomp_platform recomp_runtime)
 target_compile_options(gdi_tests PRIVATE ${POP_WARN_HOST})
