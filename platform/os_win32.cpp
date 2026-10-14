@@ -191,6 +191,16 @@ void os_vm_release(void *p, size_t bytes) {
     (void)bytes;
     VirtualFree(p, 0, MEM_RELEASE);
 }
+void *os_vm_reserve_guarded(size_t bytes) {
+    return VirtualAlloc(nullptr, bytes, MEM_RESERVE, PAGE_NOACCESS);
+}
+int os_vm_commit(void *p, size_t bytes) {
+    return VirtualAlloc(p, bytes, MEM_COMMIT, PAGE_READWRITE) ? 0 : -1;
+}
+int os_vm_protect_none(void *p, size_t bytes) {
+    DWORD old = 0;
+    return VirtualProtect(p, bytes, PAGE_NOACCESS, &old) ? 0 : -1;
+}
 
 void *os_dlopen(const char *path) {
     HMODULE m = LoadLibraryW(widen(path).c_str());
@@ -496,9 +506,14 @@ int os_exe_path(char *buf, size_t cap) {
 // executable's base (so a linker map resolves it), the top of the stack as
 // candidate return addresses, and the registered callback for the guest EIP.
 static OsFaultFn g_fault_fn;
+static OsFaultAddressFn g_fault_address_fn;
 static LONG WINAPI fault_filter(EXCEPTION_POINTERS *info) {
     char line[256];
     const EXCEPTION_RECORD *rec = info->ExceptionRecord;
+    if (g_fault_address_fn && rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
+        rec->NumberParameters >= 2 &&
+        g_fault_address_fn("access violation", (uintptr_t)rec->ExceptionInformation[1]))
+        return EXCEPTION_EXECUTE_HANDLER;
     const uintptr_t base = (uintptr_t)GetModuleHandleW(nullptr);
     const uintptr_t at = (uintptr_t)rec->ExceptionAddress;
     int n = snprintf(line, sizeof line,
@@ -526,6 +541,11 @@ static LONG WINAPI fault_filter(EXCEPTION_POINTERS *info) {
 
 int os_install_fault_handlers(OsFaultFn fn) {
     g_fault_fn = fn;
+    SetUnhandledExceptionFilter(fault_filter);
+    return 1;
+}
+int os_install_fault_address_hook(OsFaultAddressFn fn) {
+    g_fault_address_fn = fn;
     SetUnhandledExceptionFilter(fault_filter);
     return 1;
 }

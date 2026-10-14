@@ -38,6 +38,17 @@ OsThreadId os_thread_id_of(const OsThread *t);
 // ---------------------------------------------------------------------------
 void *os_vm_reserve(size_t bytes); // NULL on failure
 void os_vm_release(void *p, size_t bytes);
+// Address space nothing may touch yet: every page faults until os_vm_commit
+// opens it. Backs no memory, so a reservation far larger than what is used
+// costs nothing. NULL when the platform cannot reserve that much (a 32-bit or
+// WebAssembly host, a device with a small address space). Released with
+// os_vm_release.
+void *os_vm_reserve_guarded(size_t bytes);
+// Makes [p, p+bytes) of a guarded reservation readable and writable, zero
+// filled on first touch. Page aligned. 0 or -1.
+int os_vm_commit(void *p, size_t bytes);
+// Makes [p, p+bytes) fault again on every access; the contents are kept. 0 or -1.
+int os_vm_protect_none(void *p, size_t bytes);
 
 // ---------------------------------------------------------------------------
 // Plugins.
@@ -129,6 +140,14 @@ int os_exe_path(char *buf, size_t cap); // 0 or -1; NUL-terminated
 // where the platform has no equivalent yet.
 typedef void (*OsFaultFn)(const char *what);
 int os_install_fault_handlers(OsFaultFn fn);
+// An access fault, offered first to a hook that knows the faulting address.
+// The hook returns nonzero when the fault was its own: it has reported it and
+// must then end the process (os_exit_immediately), because returning would
+// retry the access. Zero passes the fault on to the os_install_fault_handlers
+// report, or to whatever handled the signal before. One hook; installing
+// another replaces it. Returns 1 when installed, 0 where unsupported.
+typedef int (*OsFaultAddressFn)(const char *what, uintptr_t address);
+int os_install_fault_address_hook(OsFaultAddressFn fn);
 // For use inside a fault handler: a raw write to the error stream and an
 // immediate process exit, neither of which touches stdio or runs destructors.
 void os_write_stderr_raw(const char *s, size_t n);

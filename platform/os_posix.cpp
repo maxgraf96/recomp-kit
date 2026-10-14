@@ -79,6 +79,24 @@ void *os_vm_reserve(size_t bytes) {
 void os_vm_release(void *p, size_t bytes) {
     munmap(p, bytes);
 }
+void *os_vm_reserve_guarded(size_t bytes) {
+#ifdef __EMSCRIPTEN__
+    (void)bytes; // a wasm32 heap cannot hold a reservation of its own size
+    return nullptr;
+#else
+#ifndef MAP_NORESERVE
+#define MAP_NORESERVE 0
+#endif
+    void *p = mmap(nullptr, bytes, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
+    return p == MAP_FAILED ? nullptr : p;
+#endif
+}
+int os_vm_commit(void *p, size_t bytes) {
+    return mprotect(p, bytes, PROT_READ | PROT_WRITE) == 0 ? 0 : -1;
+}
+int os_vm_protect_none(void *p, size_t bytes) {
+    return mprotect(p, bytes, PROT_NONE) == 0 ? 0 : -1;
+}
 
 void *os_dlopen(const char *path) {
     return dlopen(path, RTLD_NOW | RTLD_LOCAL);
@@ -318,6 +336,7 @@ int os_exe_path(char *buf, size_t cap) {
 }
 
 static OsFaultFn g_fault_fn = nullptr;
+static OsFaultAddressFn g_fault_address_fn = nullptr;
 static void fault_trampoline(int sig) {
     const char *what = sig == SIGSEGV   ? "SIGSEGV"
                        : sig == SIGBUS  ? "SIGBUS"
@@ -325,11 +344,53 @@ static void fault_trampoline(int sig) {
                                         : "a fatal signal";
     g_fault_fn(what);
 }
+// SIGSEGV/SIGBUS with the faulting address. The address hook sees the fault
+// first; then the report os_install_fault_handlers registered; then whatever
+// handled the signal before either was installed, which is the default action
+// unless something else (a debugger aid, a page tracker) was there first.
+static struct sigaction g_previous_segv, g_previous_bus;
+static bool g_access_handler_installed = false;
+static void access_fault(int sig, siginfo_t *info, void *ctx) {
+    const char *what = sig == SIGSEGV ? "SIGSEGV" : "SIGBUS";
+    if (g_fault_address_fn && g_fault_address_fn(what, (uintptr_t)(info ? info->si_addr : 0)))
+        return;
+    if (g_fault_fn) {
+        g_fault_fn(what);
+        return;
+    }
+    struct sigaction *old = sig == SIGBUS ? &g_previous_bus : &g_previous_segv;
+    if ((old->sa_flags & SA_SIGINFO) && old->sa_sigaction) {
+        old->sa_sigaction(sig, info, ctx);
+        return;
+    }
+    if (old->sa_handler != SIG_DFL && old->sa_handler != SIG_IGN && old->sa_handler) {
+        old->sa_handler(sig);
+        return;
+    }
+    // Default action: restore it, and the retried access takes it.
+    sigaction(sig, old, nullptr);
+}
+static void install_access_handler() {
+    if (g_access_handler_installed)
+        return;
+    g_access_handler_installed = true;
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = access_fault;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGSEGV, &sa, &g_previous_segv);
+    sigaction(SIGBUS, &sa, &g_previous_bus);
+}
 int os_install_fault_handlers(OsFaultFn fn) {
     g_fault_fn = fn;
-    signal(SIGSEGV, fault_trampoline);
-    signal(SIGBUS, fault_trampoline);
+    install_access_handler();
     signal(SIGABRT, fault_trampoline);
+    return 1;
+}
+int os_install_fault_address_hook(OsFaultAddressFn fn) {
+    g_fault_address_fn = fn;
+    install_access_handler();
     return 1;
 }
 
