@@ -5,6 +5,9 @@
 #include "../win32.h"
 #include "../gdi32_internal.h"
 #include "test_font_ttf.h"
+#include "gdi_font_ttf.h"
+#include "../gdi32_truetype.h"
+#include "../gdi_surface.h"
 #include "../../platform/os.h"
 #include <algorithm>
 #include <cstdio>
@@ -1133,6 +1136,393 @@ static void test_windows_face_substitute() {
     call_import(&c, "USER32.dll", "ReleaseDC", {hwnd, dc});
     call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
 }
+// ---------------------------------------------------------------------------
+// GDI's measuring rules, on a font that carries the Windows tables
+// (make_gdi_font.py): VDMX for the ascent and descent, hdmx for the
+// advances, the Windows ascent and descent otherwise, and the A entry points.
+// ---------------------------------------------------------------------------
+struct TextMetricA {
+    int32_t height, ascent, descent, internal, external, ave, max, weight;
+    uint8_t first, last, def, brk, italic, pitch_family, charset;
+};
+static TextMetricA metrics_a(X86 *c, uint32_t dc, uint32_t out) {
+    memset(g_mem + out, 0xcc, 56);
+    check(call_import(c, "GDI32.dll", "GetTextMetricsA", {dc, out}) == 1, "GetTextMetricsA");
+    TextMetricA m;
+    m.height = int32_t(rd32(out));
+    m.ascent = int32_t(rd32(out + 4));
+    m.descent = int32_t(rd32(out + 8));
+    m.internal = int32_t(rd32(out + 12));
+    m.external = int32_t(rd32(out + 16));
+    m.ave = int32_t(rd32(out + 20));
+    m.max = int32_t(rd32(out + 24));
+    m.weight = int32_t(rd32(out + 28));
+    m.first = rd8(out + 44);
+    m.last = rd8(out + 45);
+    m.def = rd8(out + 46);
+    m.brk = rd8(out + 47);
+    m.italic = rd8(out + 48);
+    m.pitch_family = rd8(out + 51);
+    m.charset = rd8(out + 52);
+    return m;
+}
+static uint32_t font_a(X86 *c, uint32_t s, int32_t height, uint32_t weight, const char *face,
+                       uint32_t italic = 0, int32_t width = 0) {
+    gm_put_str(s + 0x700, face, 32);
+    return call_import(
+        c, "GDI32.dll", "CreateFontA",
+        {uint32_t(height), uint32_t(width), 0, 0, weight, italic, 0, 0, 0, 0, 0, 0, 0, s + 0x700});
+}
+static void test_gdi_metrics() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00360000, data = s + 0x4000;
+    memcpy(g_mem + data, kGdiFontRegular, sizeof kGdiFontRegular);
+    check(call_import(&c, "GDI32.dll", "AddFontMemResourceEx",
+                      {data, uint32_t(sizeof kGdiFontRegular), 0, s + 0x10}) != 0,
+          "the Windows-table test font registers");
+    uint32_t dc = call_import(&c, "USER32.dll", "GetDC", {0}); // a screen DC, as games measure
+    check(dc != 0, "GetDC(NULL)");
+    auto with = [&](uint32_t font) { call_import(&c, "GDI32.dll", "SelectObject", {dc, font}); };
+
+    // -12: VDMX has 12 -> (12, -3); hdmx has 12, where 'A' is 9 and not the
+    // linear 8.
+    with(font_a(&c, s, -12, 400, "WinMetricTest"));
+    TextMetricA m = metrics_a(&c, dc, s + 0x100);
+    check(m.height == 15 && m.ascent == 12 && m.descent == 3 && m.internal == 3 && m.external == 0,
+          "-12: VDMX ascent and descent (%d %d %d %d %d)", m.height, m.ascent, m.descent,
+          m.internal, m.external);
+    check(m.ave == 5 && m.max == 32 && m.weight == 400,
+          "-12: average and maximum widths from OS/2 and head (%d %d %d)", m.ave, m.max, m.weight);
+    check(m.first == 0x1e && m.last == 0xff && m.def == 0x1f && m.brk == 0x20,
+          "TEXTMETRICA's byte range (%02x %02x %02x %02x)", m.first, m.last, m.def, m.brk);
+    check(m.pitch_family == 0x27 && m.charset == 0 && m.italic == 0,
+          "variable pitch, vector, TrueType, FF_SWISS from PANOSE (%02x)", m.pitch_family);
+    gm_put_str(s + 0x200, "AB", 8);
+    call_import(&c, "GDI32.dll", "GetTextExtentPoint32A", {dc, s + 0x200, 2, s + 0x220});
+    check(rd32(s + 0x220) == 17 && rd32(s + 0x224) == 15,
+          "-12: the extent takes hdmx's 9 + 8 (%u x %u)", rd32(s + 0x220), rd32(s + 0x224));
+    call_import(&c, "GDI32.dll", "GetCharWidthA", {dc, 0x41, 0x42, s + 0x240});
+    check(rd32(s + 0x240) == 9 && rd32(s + 0x244) == 8, "GetCharWidthA agrees (%u %u)",
+          rd32(s + 0x240), rd32(s + 0x244));
+    call_import(&c, "GDI32.dll", "GetCharWidthA", {dc, 0x80, 0x80, s + 0x240});
+    call_import(&c, "GDI32.dll", "GetCharWidthW", {dc, 0x20ac, 0x20ac, s + 0x244});
+    check(rd32(s + 0x240) == 7 && rd32(s + 0x244) == 7,
+          "the A forms read code page 1252: byte 0x80 is the euro sign (%u %u)", rd32(s + 0x240),
+          rd32(s + 0x244));
+    memset(g_mem + s + 0x300, 0, 60);
+    call_import(&c, "GDI32.dll", "GetTextMetricsW", {dc, s + 0x300});
+    check(rd16(s + 0x300 + 44) == 0x20 && rd16(s + 0x300 + 46) == 0x20ac &&
+              rd16(s + 0x300 + 48) == 0x1f && rd16(s + 0x300 + 50) == 0x20,
+          "TEXTMETRICW's range is the font's own");
+
+    // -14: VDMX gives 15 above the baseline; no hdmx record, so linear widths.
+    with(font_a(&c, s, -14, 400, "WinMetricTest"));
+    m = metrics_a(&c, dc, s + 0x100);
+    check(m.height == 18 && m.ascent == 15 && m.descent == 3 && m.internal == 4,
+          "-14: VDMX's 15 / 3 (%d %d %d %d)", m.height, m.ascent, m.descent, m.internal);
+    gm_put_str(s + 0x200, "Ai", 8);
+    call_import(&c, "GDI32.dll", "GetTextExtentPoint32A", {dc, s + 0x200, 2, s + 0x220});
+    check(rd32(s + 0x220) == 12, "-14: linear advances 9 + 3 (%u)", rd32(s + 0x220));
+
+    // -20: past VDMX's range, the Windows ascent and descent, rounded.
+    with(font_a(&c, s, -20, 400, "WinMetricTest"));
+    m = metrics_a(&c, dc, s + 0x100);
+    check(m.height == 22 && m.ascent == 18 && m.descent == 4 && m.internal == 2,
+          "-20: OS/2 ascent and descent (%d %d %d %d)", m.height, m.ascent, m.descent, m.internal);
+
+    // Positive heights name the cell: the largest VDMX em whose cell fits.
+    with(font_a(&c, s, 15, 400, "WinMetricTest"));
+    m = metrics_a(&c, dc, s + 0x100);
+    check(m.height == 15 && m.ascent == 12, "+15: the 12-pixel em (%d %d)", m.height, m.ascent);
+    with(font_a(&c, s, 17, 400, "WinMetricTest"));
+    m = metrics_a(&c, dc, s + 0x100);
+    check(m.height == 16 && m.ascent == 13, "+17: 13 fits (16), 14 does not (18) (%d %d)", m.height,
+          m.ascent);
+    with(font_a(&c, s, 40, 400, "WinMetricTest"));
+    m = metrics_a(&c, dc, s + 0x100);
+    check(m.height == 41 && m.ascent == 33 && m.descent == 8,
+          "+40: past VDMX, em = MulDiv(2048, 40, 2288) = 36 (%d %d %d)", m.height, m.ascent,
+          m.descent);
+
+    // GetObjectA answers a LOGFONTA.
+    const uint32_t font = font_a(&c, s, -12, 700, "WinMetricTest");
+    check(call_import(&c, "GDI32.dll", "GetObjectA", {font, 60, s + 0x400}) == 60 &&
+              int32_t(rd32(s + 0x400)) == -12 && rd32(s + 0x410) == 700 &&
+              gm_str(s + 0x400 + 28) == "WinMetricTest",
+          "GetObjectA: LOGFONTA with the ANSI face name");
+    check(call_import(&c, "GDI32.dll", "GetObjectW", {font, 92, s + 0x400}) == 92 &&
+              gm_wstr(s + 0x400 + 28) == "WinMetricTest",
+          "GetObjectW: LOGFONTW");
+    call_import(&c, "USER32.dll", "ReleaseDC", {0, dc});
+}
+
+// ExtTextOutA into a 32-bit DIB: the cell's top at y, the baseline at
+// y + ascent; ETO_OPAQUE fills; TA_BASELINE moves the reference point.
+static void test_gdi_text_out() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00368000;
+    uint32_t mem = call_import(&c, "GDI32.dll", "CreateCompatibleDC", {0});
+    uint32_t bmi = s + 0x100;
+    memset(g_mem + bmi, 0, 40);
+    wr32(bmi, 40);
+    wr32(bmi + 4, 64);
+    wr32(bmi + 8, uint32_t(-32)); // top-down
+    wr16(bmi + 12, 1);
+    wr16(bmi + 14, 32);
+    uint32_t dib = call_import(&c, "GDI32.dll", "CreateDIBSection", {mem, bmi, 0, s + 0x180, 0, 0});
+    call_import(&c, "GDI32.dll", "SelectObject", {mem, dib});
+    uint32_t bits = rd32(s + 0x180);
+    call_import(&c, "GDI32.dll", "SelectObject", {mem, font_a(&c, s, -12, 400, "WinMetricTest")});
+    call_import(&c, "GDI32.dll", "SetTextColor", {mem, 0x00ffffffu});
+    call_import(&c, "GDI32.dll", "SetBkMode", {mem, 1});
+    gm_put_str(s + 0x200, "A", 4);
+    auto pixel = [&](uint32_t x, uint32_t y) { return rd32(bits + (y * 64 + x) * 4) & 0xffffff; };
+    auto clear = [&] { memset(g_mem + bits, 0, 64 * 32 * 4); };
+    clear();
+    check(call_import(&c, "GDI32.dll", "ExtTextOutA", {mem, 2, 1, 0, 0, s + 0x200, 1, 0}) == 1,
+          "ExtTextOutA");
+    // 'A' is a box 1366 x 1466 units: 8 x 8.6 pixels at ppem 12, sitting on
+    // the baseline at y 1 + 12 = 13.
+    check(pixel(5, 9) == 0xffffff && pixel(5, 13) == 0 && pixel(5, 3) == 0 && pixel(12, 9) == 0,
+          "the glyph sits on the baseline (%06x %06x %06x %06x)", pixel(5, 9), pixel(5, 13),
+          pixel(5, 3), pixel(12, 9));
+    std::vector<uint32_t> top(64 * 32);
+    for (uint32_t i = 0; i < 64 * 32; ++i)
+        top[i] = rd32(bits + 4 * i);
+    clear();
+    call_import(&c, "GDI32.dll", "SetTextAlign", {mem, 24}); // TA_BASELINE
+    call_import(&c, "GDI32.dll", "ExtTextOutA", {mem, 2, 13, 0, 0, s + 0x200, 1, 0});
+    bool same = true;
+    for (uint32_t i = 0; i < 64 * 32; ++i)
+        same &= top[i] == rd32(bits + 4 * i);
+    check(same, "TA_BASELINE at the baseline draws what TA_TOP at the cell top draws");
+    call_import(&c, "GDI32.dll", "SetTextAlign", {mem, 0});
+    clear();
+    wr32(s + 0x300, 30);
+    wr32(s + 0x304, 0);
+    wr32(s + 0x308, 40);
+    wr32(s + 0x30c, 10);
+    call_import(&c, "GDI32.dll", "SetBkColor", {mem, 0x000000ffu});
+    call_import(&c, "GDI32.dll", "ExtTextOutA", {mem, 30, 0, 2 | 4, s + 0x300, s + 0x200, 1, 0});
+    check(pixel(39, 1) == 0xff0000 && pixel(33, 9) == 0xffffff && pixel(33, 11) == 0,
+          "ETO_OPAQUE | ETO_CLIPPED fills the rectangle and clips the glyph to it (%06x %06x %06x)",
+          pixel(39, 1), pixel(33, 9), pixel(33, 11));
+    gm_put_str(s + 0x200, "AB", 4);
+    clear();
+    call_import(&c, "GDI32.dll", "SetTextAlign", {mem, 2}); // TA_RIGHT
+    call_import(&c, "GDI32.dll", "TextOutA", {mem, 20, 1, s + 0x200, 2});
+    bool right_edge = false;
+    for (uint32_t x = 14; x < 20; ++x)
+        right_edge |= pixel(x, 9) == 0xffffff;
+    check(right_edge && pixel(20, 9) == 0 && pixel(2, 9) == 0,
+          "TA_RIGHT ends the run at x (17 pixels wide)");
+    call_import(&c, "GDI32.dll", "DeleteDC", {mem});
+}
+
+// gdi_surface.h: GDI text straight into a surface's memory, in the layouts a
+// DirectDraw texture has. The colour channels take the text, an alpha
+// channel stays 0 as GDI leaves it on Windows.
+static void test_surface_dc() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x0036c000, bits = s + 0x1000;
+    struct {
+        uint32_t bpp, r, g, b, white;
+        const char *name;
+    } formats[] = {
+        {32, 0x00ff0000, 0x0000ff00, 0x000000ff, 0x00ffffff, "A8R8G8B8"},
+        {16, 0xf800, 0x07e0, 0x001f, 0xffff, "R5G6B5"},
+        {16, 0x0f00, 0x00f0, 0x000f, 0x0fff, "A4R4G4B4"},
+        {16, 0x7c00, 0x03e0, 0x001f, 0x7fff, "A1R5G5B5"},
+    };
+    const uint32_t font = font_a(&c, s, -12, 400, "WinMetricTest");
+    gm_put_str(s + 0x200, "A", 4);
+    for (const auto &f : formats) {
+        const uint32_t bytes = f.bpp / 8, pitch = 64 * bytes;
+        memset(g_mem + bits, 0, pitch * 32);
+        GdiSurfaceDesc d;
+        d.width = 64;
+        d.height = 32;
+        d.bpp = f.bpp;
+        d.pitch = pitch;
+        d.bits = bits;
+        d.r_mask = f.r;
+        d.g_mask = f.g;
+        d.b_mask = f.b;
+        const uint32_t dc = gdi_surface_dc_open(d);
+        check(dc != 0 && gdi_surface_dc_is(dc), "%s: a surface DC", f.name);
+        call_import(&c, "GDI32.dll", "SelectObject", {dc, font});
+        call_import(&c, "GDI32.dll", "SetTextColor", {dc, 0x00ffffffu});
+        call_import(&c, "GDI32.dll", "SetBkMode", {dc, 1});
+        call_import(&c, "GDI32.dll", "ExtTextOutA", {dc, 2, 1, 0, 0, s + 0x200, 1, 0});
+        const uint32_t at = bits + 9 * pitch + 5 * bytes;
+        const uint32_t inside = bytes == 4 ? rd32(at) : rd16(at);
+        const uint32_t below =
+            bytes == 4 ? rd32(bits + 13 * pitch + 5 * bytes) : rd16(bits + 13 * pitch + 5 * bytes);
+        check(inside == f.white && below == 0,
+              "%s: white text is all colour bits, alpha untouched (%x, %x)", f.name, inside, below);
+        check(gdi_surface_dc_close(dc) && !gdi_surface_dc_is(dc) && !gdi_surface_dc_close(dc),
+              "%s: closed once", f.name);
+    }
+    GdiSurfaceDesc bad;
+    bad.width = 64;
+    bad.height = 32;
+    bad.bpp = 15;
+    bad.pitch = 128;
+    bad.bits = bits;
+    check(gdi_surface_dc_open(bad) == 0, "an unsupported depth is refused");
+}
+
+// The rest of the GDI a 2001 game imports: CreatePen, GetCurrentObject,
+// DPtoLP and SelectClipRgn.
+static void test_gdi_odds() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x0037c000;
+    uint32_t mem = call_import(&c, "GDI32.dll", "CreateCompatibleDC", {0});
+    const uint32_t pen = call_import(&c, "GDI32.dll", "CreatePen", {0, 3, 0x0000ff00u});
+    check(pen != 0 && call_import(&c, "GDI32.dll", "GetObjectA", {pen, 16, s}) == 16 &&
+              rd32(s) == 0 && rd32(s + 4) == 3 && rd32(s + 12) == 0x0000ff00u,
+          "CreatePen: a LOGPEN of style, width and colour");
+    const uint32_t old_pen = call_import(&c, "GDI32.dll", "SelectObject", {mem, pen});
+    check(call_import(&c, "GDI32.dll", "GetCurrentObject", {mem, 1}) == pen &&
+              call_import(&c, "GDI32.dll", "GetCurrentObject", {mem, 6}) != 0 &&
+              call_import(&c, "GDI32.dll", "GetCurrentObject", {mem, 7}) != 0,
+          "GetCurrentObject: the selected pen, the default font and bitmap");
+    call_import(&c, "GDI32.dll", "SelectObject", {mem, old_pen});
+    call_import(&c, "GDI32.dll", "SetViewportOrgEx", {mem, 10, 20, 0});
+    wr32(s + 0x40, 15);
+    wr32(s + 0x44, 25);
+    check(call_import(&c, "GDI32.dll", "DPtoLP", {mem, s + 0x40, 1}) == 1 && rd32(s + 0x40) == 5 &&
+              rd32(s + 0x44) == 5,
+          "DPtoLP takes the viewport origin off (%d, %d)", int32_t(rd32(s + 0x40)),
+          int32_t(rd32(s + 0x44)));
+    call_import(&c, "GDI32.dll", "SetViewportOrgEx", {mem, 0, 0, 0});
+    uint32_t bmi = s + 0x100;
+    memset(g_mem + bmi, 0, 40);
+    wr32(bmi, 40);
+    wr32(bmi + 4, 32);
+    wr32(bmi + 8, 32);
+    wr16(bmi + 12, 1);
+    wr16(bmi + 14, 32);
+    call_import(
+        &c, "GDI32.dll", "SelectObject",
+        {mem, call_import(&c, "GDI32.dll", "CreateDIBSection", {mem, bmi, 0, s + 0x180, 0, 0})});
+    const uint32_t rgn = call_import(&c, "GDI32.dll", "CreateRectRgn", {4, 5, 12, 14});
+    check(call_import(&c, "GDI32.dll", "SelectClipRgn", {mem, rgn}) == 2, "SelectClipRgn");
+    call_import(&c, "GDI32.dll", "GetClipBox", {mem, s + 0x200});
+    check(rd32(s + 0x200) == 4 && rd32(s + 0x204) == 5 && rd32(s + 0x208) == 12 &&
+              rd32(s + 0x20c) == 14,
+          "the clip box is the region");
+    check(call_import(&c, "GDI32.dll", "SelectClipRgn", {mem, 0}) == 2, "SelectClipRgn(NULL)");
+    call_import(&c, "GDI32.dll", "GetClipBox", {mem, s + 0x200});
+    check(rd32(s + 0x208) == 32 && rd32(s + 0x20c) == 32, "and the whole bitmap again");
+    call_import(&c, "GDI32.dll", "DeleteDC", {mem});
+    check(call_import(&c, "IMM32.dll", "ImmGetContext", {0}) == 0 &&
+              call_import(&c, "IMM32.dll", "ImmGetCompositionStringW", {0, 8, 0, 0}) == 0 &&
+              call_import(&c, "IMM32.dll", "ImmNotifyIME", {0, 0x15, 0, 0}) == 0,
+          "IMM32: no input method, no composition, nothing to notify");
+}
+
+// The installed-font database on a directory of its own: the family, the
+// weight within it, a full name, simulation of what the family lacks, and
+// the fallback for a face nothing installs.
+static void test_system_fonts() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00370000;
+    char dir[] = "build/recomp/gdi-fonts-XXXXXX";
+    if (os_mkdtemp(dir) != 0) {
+        check(false, "a temporary font directory");
+        return;
+    }
+    auto put = [&](const char *name, const uint8_t *data, size_t size) {
+        std::string path = std::string(dir) + "/" + name;
+        FILE *f = fopen(path.c_str(), "wb");
+        if (f) {
+            fwrite(data, 1, size, f);
+            fclose(f);
+        }
+        return path;
+    };
+    const std::string regular = put("WinMetricTest.ttf", kGdiFontRegular, sizeof kGdiFontRegular);
+    const std::string bold = put("WinMetricTest Bold.ttf", kGdiFontBold, sizeof kGdiFontBold);
+    gdi::truetype_set_font_dirs_for_test(dir);
+    os_setenv("RECOMP_SYSTEM_FONTS", "1");
+    uint32_t dc = call_import(&c, "USER32.dll", "GetDC", {0});
+    auto realize = [&](int32_t height, uint32_t weight, const char *face, uint32_t italic) {
+        call_import(&c, "GDI32.dll", "SelectObject",
+                    {dc, font_a(&c, s, height, weight, face, italic)});
+        return metrics_a(&c, dc, s + 0x100);
+    };
+    // The family name chooses a face, the weight the nearest one in it.
+    TextMetricA m = realize(-12, 700, "MetricFamilyNotRegistered", 0);
+    check(m.height == 16 && m.weight == 700, "an unknown face keeps the 8x16 cells (%d)", m.height);
+    // The memory font registered by test_gdi_metrics shares the family name
+    // and would win a family match, so ask by the bold face's full name.
+    m = realize(-12, 400, "WinMetricTest Bold", 0);
+    check(m.weight == 700 && m.height == 15,
+          "a full name picks exactly that face, whatever the weight asked (%d)", m.weight);
+    gm_put_str(s + 0x200, "", 4);
+    check(call_import(&c, "GDI32.dll", "GetTextFaceA", {dc, 32, s + 0x200}) == 13 &&
+              gm_str(s + 0x200) == "WinMetricTest",
+          "GetTextFaceA names the family drawn (%s)", gm_str(s + 0x200).c_str());
+    bool synth_bold = true, synth_italic = false;
+    const gdi::TrueTypeFace *face =
+        gdi::truetype_system_face("winmetrictest", 700, true, &synth_bold, &synth_italic);
+    check(face && !synth_bold && synth_italic,
+          "a bold italic request: the bold face, with the italic simulated");
+    face = gdi::truetype_system_face("WinMetricTest", 300, false, &synth_bold, &synth_italic);
+    check(face && !synth_bold && !synth_italic, "a light request takes the regular face");
+    check(gdi::truetype_family_name(face) == "WinMetricTest", "the face's family name");
+    check(!gdi::truetype_system_face("Helvetica", 400, false, nullptr, nullptr),
+          "an alias resolves only to what is installed (no Arial here)");
+    os_setenv("RECOMP_SYSTEM_FONTS", "0");
+    gdi::truetype_set_font_dirs_for_test("");
+    call_import(&c, "USER32.dll", "ReleaseDC", {0, dc});
+    os_unlink(regular.c_str());
+    os_unlink(bold.c_str());
+    os_rmdir(dir);
+}
+
+// The platform's own Windows faces, where it has them (macOS does): values a
+// Windows 96-dpi screen DC reports, which come out of the fonts' VDMX tables.
+static void test_installed_windows_faces() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00378000;
+    os_setenv("RECOMP_SYSTEM_FONTS", "1");
+    bool synth_bold = false, synth_italic = false;
+    if (!gdi::truetype_system_face("Arial", 400, false, &synth_bold, &synth_italic) ||
+        !gdi::truetype_system_face("Tahoma", 400, false, &synth_bold, &synth_italic)) {
+        printf("  [skip] this machine installs no Arial and Tahoma\n");
+        os_setenv("RECOMP_SYSTEM_FONTS", "0");
+        return;
+    }
+    uint32_t dc = call_import(&c, "USER32.dll", "GetDC", {0});
+    struct {
+        const char *face;
+        int32_t height, want_height, want_ascent, want_descent;
+    } cases[] = {
+        {"Tahoma", -11, 13, 11, 2}, // 8 point: the classic dialog font
+        {"Arial", -12, 15, 12, 3},  // 9 point
+        {"Arial", -13, 16, 13, 3},  // 10 point
+    };
+    for (const auto &k : cases) {
+        call_import(&c, "GDI32.dll", "SelectObject", {dc, font_a(&c, s, k.height, 400, k.face)});
+        TextMetricA m = metrics_a(&c, dc, s + 0x100);
+        check(m.height == k.want_height && m.ascent == k.want_ascent && m.descent == k.want_descent,
+              "%s %d: %d %d %d", k.face, k.height, m.height, m.ascent, m.descent);
+    }
+    // Bold comes from the installed bold face, not a simulation.
+    check(gdi::truetype_system_face("Arial", 700, false, &synth_bold, &synth_italic) && !synth_bold,
+          "Arial Bold is installed and chosen for weight 700");
+    os_setenv("RECOMP_SYSTEM_FONTS", "0");
+    call_import(&c, "USER32.dll", "ReleaseDC", {0, dc});
+}
+
 int main(int argc, char **argv) {
     mem_init();
     imports_init();
@@ -1154,6 +1544,12 @@ int main(int argc, char **argv) {
         test_blit_into_moved_child_origin();
         test_memory_truetype_font();
         test_windows_face_substitute();
+        test_gdi_metrics();
+        test_gdi_text_out();
+        test_surface_dc();
+        test_gdi_odds();
+        test_system_fonts();
+        test_installed_windows_faces();
         test_window_surface_and_blits(argc < 2 || strcmp(argv[1], "draw") != 0);
     }
     printf("%d checks, %d failures\n", g_checks, g_failures);

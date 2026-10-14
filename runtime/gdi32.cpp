@@ -2,12 +2,14 @@
 #include "imports.h"
 #include "gdi_image.h"
 #include "gdi32_internal.h"
+#include "gdi_surface.h"
 #include <cstdlib>
 #include "user32_internal.h"
 #include "display_seam.h"
 #include <climits>
 #include <algorithm>
 #include "memory.h"
+#include "msvcrt_internal.h"
 #include "win32.h"
 #include "../platform/os.h"
 
@@ -120,8 +122,6 @@ constexpr uint32_t PALETTE_HANDLE_BASE = 0x00058000u;
 constexpr uint32_t DC_HANDLE_BASE = 0x00060000u;
 constexpr uint32_t DEFAULT_BITMAP = 0x0004f001u;  // what SelectObject reports as "previous"
 constexpr uint32_t DEFAULT_PALETTE = 0x0004f002u; // the system palette handle
-constexpr uint32_t TEXT_HEIGHT = 16;
-constexpr uint32_t TEXT_AVERAGE_CHAR_WIDTH = 7;
 
 uint32_t g_next_bitmap = BITMAP_HANDLE_BASE;
 uint32_t g_next_palette = PALETTE_HANDLE_BASE;
@@ -392,7 +392,9 @@ void g_CreateCompatibleBitmap(X86 *c) {
 
 // GetObjectA(handle, bytes, out): BITMAP (24 bytes) or DIBSECTION (84) for a
 // bitmap, the entry count (a WORD) for a palette.
-void g_GetObjectA(X86 *c) {
+// GetObjectA/W. A font answers with its LOGFONT in the caller's encoding:
+// LOGFONTA is LOGFONTW with a 32-byte code page 1252 face name, 60 bytes.
+void get_object(X86 *c, bool wide) {
     uint32_t handle = arg(c, 0), bytes = arg(c, 1), out = arg(c, 2);
     if (Dib *d = dib_of(handle)) {
         uint32_t have = bytes >= 84 ? 84u : 24u;
@@ -436,7 +438,7 @@ void g_GetObjectA(X86 *c) {
     auto object = objects().find(handle);
     if (object != objects().end()) {
         const Object &o = object->second;
-        uint32_t size = o.kind == Object::Font ? 92 : o.kind == Object::Pen ? 16 : 12;
+        uint32_t size = o.kind == Object::Font ? (wide ? 92 : 60) : o.kind == Object::Pen ? 16 : 12;
         if (!out) {
             set_eax(c, size);
             return;
@@ -446,9 +448,19 @@ void g_GetObjectA(X86 *c) {
             return;
         }
         memset(g_mem + out, 0, size);
-        if (o.kind == Object::Font)
+        if (o.kind == Object::Font && wide)
             memcpy(g_mem + out, o.logfont.data(), size);
-        else {
+        else if (o.kind == Object::Font) {
+            memcpy(g_mem + out, o.logfont.data(), 28);
+            for (uint32_t i = 0; i < 31; ++i) {
+                const uint16_t unit =
+                    uint16_t(o.logfont[28 + 2 * i] | (o.logfont[29 + 2 * i] << 8));
+                if (!unit)
+                    break;
+                const int b = crt::unicode_to_cp1252(unit);
+                wr8(out + 28 + i, uint8_t(b < 0 ? '?' : b));
+            }
+        } else {
             wr32(out, o.style);
             wr32(out + 4, o.kind == Object::Pen ? o.width : o.color);
             if (o.kind == Object::Pen)
@@ -465,6 +477,13 @@ void g_GetObjectA(X86 *c) {
         return;
     }
     set_eax(c, 0);
+}
+
+void g_GetObjectA(X86 *c) {
+    get_object(c, false);
+}
+void g_GetObjectW(X86 *c) {
+    get_object(c, true);
 }
 
 // DeleteObject(handle): a bitmap gives its pixels back; a palette goes away;
@@ -690,42 +709,6 @@ void g_GetDeviceCaps(X86 *c) {
 }
 
 // Text: accepted and measured with fixed metrics, not drawn.
-void g_TextOutA(X86 *c) {
-    log_once("gdi.textout", "gdi: TextOutA is accepted and not drawn in this runtime");
-    set_eax(c, 1);
-}
-void g_GetTextMetricsA(X86 *c) {
-    uint32_t tm = arg(c, 1);
-    if (!tm || !gm_valid(tm, 56)) {
-        set_eax(c, 0);
-        return;
-    }
-    memset(g_mem + tm, 0, 56);
-    wr32(tm + 0, TEXT_HEIGHT);              // tmHeight
-    wr32(tm + 4, 13);                       // tmAscent
-    wr32(tm + 8, 3);                        // tmDescent
-    wr32(tm + 12, 3);                       // tmInternalLeading
-    wr32(tm + 16, 1);                       // tmExternalLeading
-    wr32(tm + 20, TEXT_AVERAGE_CHAR_WIDTH); // tmAveCharWidth
-    wr32(tm + 24, 14);                      // tmMaxCharWidth
-    wr32(tm + 28, 400);                     // tmWeight
-    g_mem[tm + 44] = 0x20;                  // tmFirstChar
-    g_mem[tm + 45] = 0xff;                  // tmLastChar
-    g_mem[tm + 46] = 0x3f;                  // tmDefaultChar
-    g_mem[tm + 47] = 0x20;                  // tmBreakChar
-    g_mem[tm + 52] = 0x02;                  // tmPitchAndFamily: variable pitch
-    set_eax(c, 1);
-}
-void g_GetTextExtentPointA(X86 *c) {
-    uint32_t size = arg(c, 3);
-    if (!size || !gm_valid(size, 8)) {
-        set_eax(c, 0);
-        return;
-    }
-    wr32(size, arg(c, 2) * TEXT_AVERAGE_CHAR_WIDTH);
-    wr32(size + 4, TEXT_HEIGHT);
-    set_eax(c, 1);
-}
 void g_SetTextColor(X86 *c) {
     auto *found = dc_of(arg(c, 0));
     if (!found) {
@@ -761,13 +744,11 @@ void g_SetBkMode(X86 *c) {
 }
 
 const ImportShim g_gdi32_shims[] = {
-    {"GDI32.dll", "CreateFontA", 14, nullptr},
-    {"GDI32.dll", "ExtTextOutA", 8, nullptr},
     {"GDI32.dll", "CreateCompatibleBitmap", 3, g_CreateCompatibleBitmap},
     // Named for its argument count; the result is ERROR, which is honest.
     {"GDI32.dll", "CombineRgn", 4, nullptr},
     {"GDI32.dll", "GetObjectA", 3, g_GetObjectA},
-    {"GDI32.dll", "GetObjectW", 3, g_GetObjectA},
+    {"GDI32.dll", "GetObjectW", 3, g_GetObjectW},
     {"GDI32.dll", "DeleteObject", 1, g_DeleteObject},
     {"GDI32.dll", "CreateCompatibleDC", 1, g_CreateCompatibleDC},
     {"GDI32.dll", "DeleteDC", 1, g_DeleteDC},
@@ -781,9 +762,6 @@ const ImportShim g_gdi32_shims[] = {
     {"GDI32.dll", "SetSystemPaletteUse", 2, g_SetSystemPaletteUse},
     {"GDI32.dll", "GetDIBits", 7, g_GetDIBits},
     {"GDI32.dll", "GetDeviceCaps", 2, g_GetDeviceCaps},
-    {"GDI32.dll", "TextOutA", 5, g_TextOutA},
-    {"GDI32.dll", "GetTextMetricsA", 2, g_GetTextMetricsA},
-    {"GDI32.dll", "GetTextExtentPointA", 4, g_GetTextExtentPointA},
     {"GDI32.dll", "SetTextColor", 2, g_SetTextColor},
     {"GDI32.dll", "SetBkColor", 2, g_SetBkColor},
     {"GDI32.dll", "SetBkMode", 2, g_SetBkMode},
@@ -1480,6 +1458,68 @@ void brush_indirect(X86 *c) {
 void pen_indirect(X86 *c) {
     indirect_object(c, true);
 }
+// CreatePen(style, width, colour): CreatePenIndirect's LOGPEN as arguments.
+void create_pen(X86 *c) {
+    Object o;
+    o.kind = Object::Pen;
+    o.style = arg(c, 0);
+    o.width = int32_t(arg(c, 1));
+    o.color = arg(c, 2);
+    set_eax(c, make_object(o));
+}
+// GetCurrentObject(hdc, OBJ_PEN 1 / OBJ_BRUSH 2 / OBJ_PAL 5 / OBJ_FONT 6 /
+// OBJ_BITMAP 7): what is selected, the default objects included.
+void current_object(X86 *c) {
+    auto *dc = dc_of(arg(c, 0));
+    if (!dc) {
+        set_eax(c, 0);
+        return;
+    }
+    switch (arg(c, 1)) {
+    case 1:
+        set_eax(c, dc->pen);
+        return;
+    case 2:
+        set_eax(c, dc->brush);
+        return;
+    case 5:
+        set_eax(c, dc->palette ? dc->palette : DEFAULT_PALETTE);
+        return;
+    case 6:
+        set_eax(c, dc->font);
+        return;
+    case 7:
+        set_eax(c, dc->bitmap ? dc->bitmap : DEFAULT_BITMAP);
+        return;
+    default:
+        set_eax(c, 0);
+        return;
+    }
+}
+// DPtoLP and LPtoDP for the MM_TEXT mapping every DC here has: logical and
+// device coordinates differ by the window and viewport origins only.
+void map_points_dc(X86 *c, bool to_logical) {
+    auto *dc = dc_of(arg(c, 0));
+    const uint32_t p = arg(c, 1), n = arg(c, 2);
+    if (!dc || (n && (!p || n > 0x100000 || !gm_valid(p, n * 8)))) {
+        set_eax(c, 0);
+        return;
+    }
+    const int64_t dx = int64_t(dc->viewport_x) - dc->org_x,
+                  dy = int64_t(dc->viewport_y) - dc->org_y;
+    for (uint32_t i = 0; i < n; ++i) {
+        const int64_t x = int32_t(rd32(p + 8 * i)), y = int32_t(rd32(p + 8 * i + 4));
+        wr32(p + 8 * i, uint32_t(to_logical ? x - dx : x + dx));
+        wr32(p + 8 * i + 4, uint32_t(to_logical ? y - dy : y + dy));
+    }
+    set_eax(c, 1);
+}
+void dp_to_lp(X86 *c) {
+    map_points_dc(c, true);
+}
+void lp_to_dp(X86 *c) {
+    map_points_dc(c, false);
+}
 void stock_object(X86 *c) {
     uint32_t i = arg(c, 0);
     set_eax(c, i <= 19 ? 0x4f100 + i : 0);
@@ -1643,6 +1683,10 @@ void gdi_model_register() {
                                        G("CreateBrushIndirect", 1, brush_indirect),
                                        G("CreatePenIndirect", 1, pen_indirect),
                                        G("GetStockObject", 1, stock_object),
+                                       G("CreatePen", 3, create_pen),
+                                       G("GetCurrentObject", 2, current_object),
+                                       G("DPtoLP", 3, dp_to_lp),
+                                       G("LPtoDP", 3, lp_to_dp),
                                        G("GetPixel", 3, get_pixel),
                                        G("SetPixel", 4, set_pixel),
                                        G("SaveDC", 1, save_dc),
@@ -1972,4 +2016,47 @@ void gdi_unbind_surface_dc(uint32_t dc) {
     if (bitmap && !bitmap->owned)
         dibs().erase(d->bitmap);
     dcs().erase(dc);
+}
+
+// gdi_surface.h: a DC over memory the caller owns, in any of the layouts a
+// DirectDraw surface can have. 16- and 32-bit layouts are BI_BITFIELDS DIBs
+// with the caller's colour masks, so every pixel write packs into exactly
+// those bits and leaves an alpha channel 0, as GDI on Windows does.
+namespace {
+std::map<uint32_t, bool> &surface_dcs() {
+    static std::map<uint32_t, bool> m;
+    return m;
+}
+} // namespace
+uint32_t gdi_surface_dc_open(const GdiSurfaceDesc &d) {
+    const uint64_t row = (uint64_t(std::max(d.width, 0)) * d.bpp + 7) / 8;
+    if (d.width <= 0 || d.height <= 0 || d.width > 16384 || d.height > 16384 || !d.bits ||
+        !(d.bpp == 8 || d.bpp == 16 || d.bpp == 24 || d.bpp == 32) || d.pitch < row ||
+        !gm_valid(d.bits, uint32_t(uint64_t(d.pitch) * uint64_t(d.height - 1) + row)))
+        return 0;
+    const uint32_t dc = gdi_new_dc();
+    gdi_bind_surface_dc(dc, d.width, d.height, int(d.bpp), d.pitch, d.bits, d.palette);
+    if (Dib *dib = dib_in_dc(dc)) {
+        if (d.bpp == 16 || d.bpp == 32) {
+            const bool given = d.r_mask || d.g_mask || d.b_mask;
+            const uint32_t classic[2][3] = {{0xf800, 0x07e0, 0x001f},
+                                            {0x00ff0000, 0x0000ff00, 0x000000ff}};
+            const uint32_t *fallback = classic[d.bpp == 32 ? 1 : 0];
+            dib->masks[0] = given ? d.r_mask : fallback[0];
+            dib->masks[1] = given ? d.g_mask : fallback[1];
+            dib->masks[2] = given ? d.b_mask : fallback[2];
+            dib->compression = 3; // BI_BITFIELDS
+        }
+    }
+    surface_dcs()[dc] = true;
+    return dc;
+}
+bool gdi_surface_dc_close(uint32_t hdc) {
+    if (!surface_dcs().erase(hdc))
+        return false;
+    gdi_unbind_surface_dc(hdc);
+    return true;
+}
+bool gdi_surface_dc_is(uint32_t hdc) {
+    return surface_dcs().count(hdc) != 0 && dc_of(hdc) != nullptr;
 }

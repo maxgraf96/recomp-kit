@@ -524,6 +524,33 @@ void intersect_clip(X86 *c) {
 void exclude_clip(X86 *c) {
     clip_rect(c, true);
 }
+// SelectClipRgn(hdc, region): the region (device units) becomes the clip, or
+// NULL removes it. The region is copied; the caller still owns it.
+void select_clip_region(X86 *c) {
+    uint32_t hdc = arg(c, 0);
+    auto *dc = dc_of(hdc);
+    if (!dc) {
+        set_eax(c, 0); // ERROR
+        return;
+    }
+    if (!arg(c, 1)) {
+        dc->clip.clear();
+        dc->clipped = false;
+        set_eax(c, 2); // SIMPLEREGION: the whole surface
+        return;
+    }
+    auto it = objects().find(arg(c, 1));
+    if (it == objects().end() || it->second.kind != Object::Region) {
+        set_eax(c, 0);
+        return;
+    }
+    Rect r = to_device(hdc, it->second.rect);
+    dc->clip.clear();
+    if (nonempty(r))
+        dc->clip.push_back(r);
+    dc->clipped = true;
+    set_eax(c, dc->clip.empty() ? 1 : 2);
+}
 void get_clip(X86 *c) {
     uint32_t out = arg(c, 1);
     auto *dc = dc_of(arg(c, 0));
@@ -636,6 +663,7 @@ void register_draw() {
                                        G("IntersectClipRect", 5, intersect_clip),
                                        G("ExcludeClipRect", 5, exclude_clip),
                                        G("GetClipBox", 2, get_clip),
+                                       G("SelectClipRgn", 2, select_clip_region),
                                        G("RectVisible", 2, visible)};
 #undef G
     imports_register(shims, sizeof(shims) / sizeof(shims[0]));

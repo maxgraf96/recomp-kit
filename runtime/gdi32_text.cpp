@@ -1,17 +1,23 @@
-// Text for guest canvases: a TrueType face the program registered when its font
-// names one, the bundled stand-in when it names a Windows interface face, else
-// fixed 8x16 bitmap cells. No host font services or guest
-// pointers escape this file; callbacks receive temporary guest-heap records.
+// Text for guest canvases. A font names a face; the face comes from what the
+// program registered, the platform's own copy of a Windows face (with
+// [runtime] system_fonts), the bundled stand-in for a Windows interface face,
+// or fixed 8x16 bitmap cells, in that order (gdi32_truetype.h). TrueType text
+// is measured as GDI measures it: TEXTMETRIC, the character widths and text
+// extents come from truetype_realize. The ANSI entry points take code page
+// 1252. No host font services or guest pointers escape this file; callbacks
+// receive temporary guest-heap records.
 #include "gdi32_internal.h"
 #include <cstdlib>
 #include "../platform/os.h"
 #include "gdi32_font8x16.h"
 #include "gdi32_truetype.h"
 #include "memory.h"
+#include "msvcrt_internal.h"
 #include "win32.h"
 #include <algorithm>
 #include <cstring>
 #include <climits>
+#include <map>
 using namespace gdi;
 namespace {
 uint32_t font_word(const Object &font, int offset) {
@@ -19,12 +25,55 @@ uint32_t font_word(const Object &font, int offset) {
     memcpy(&v, font.logfont.data() + offset, 4);
     return v;
 }
+const Object *font_object(uint32_t hdc) {
+    auto *dc = dc_of(hdc);
+    auto it = objects().find(dc ? dc->font : 0);
+    return it == objects().end() || it->second.kind != Object::Font ? nullptr : &it->second;
+}
 int32_t font_scale(uint32_t dc) {
-    auto *d = dc_of(dc);
-    auto it = objects().find(d ? d->font : 0);
-    int64_t height = it == objects().end() ? 16 : int32_t(font_word(it->second, 0));
+    const Object *font = font_object(dc);
+    int64_t height = font ? int32_t(font_word(*font, 0)) : 16;
     return int32_t(std::max<int64_t>(1, std::abs(height) / 16));
 }
+std::string face_name(const Object &font) {
+    std::string family;
+    for (size_t i = 0; i < 32; ++i) {
+        uint16_t unit = uint16_t(font.logfont[28 + 2 * i] | (font.logfont[29 + 2 * i] << 8));
+        if (!unit)
+            break;
+        family.push_back(unit < 128 ? char(unit) : '?');
+    }
+    return family;
+}
+
+// LOGFONTW is what every font object holds: the A creators convert into it.
+void put_logfont_w(Object &font, int32_t height, int32_t width, int32_t escapement,
+                   int32_t orientation, int32_t weight, uint8_t italic, uint8_t underline,
+                   uint8_t strikeout, uint8_t charset, uint8_t out_precision,
+                   uint8_t clip_precision, uint8_t quality, uint8_t pitch_family,
+                   const uint16_t *face, size_t face_units) {
+    uint8_t *p = font.logfont.data();
+    memset(p, 0, font.logfont.size());
+    const int32_t longs[5] = {height, width, escapement, orientation, weight};
+    memcpy(p, longs, sizeof longs);
+    const uint8_t bytes[8] = {italic,        underline,      strikeout, charset,
+                              out_precision, clip_precision, quality,   pitch_family};
+    memcpy(p + 20, bytes, sizeof bytes);
+    for (size_t i = 0; i < face_units && i < 31; ++i)
+        memcpy(p + 28 + 2 * i, &face[i], 2);
+}
+// The CP1252 face name of a LOGFONTA or CreateFontA argument, as UTF-16.
+std::vector<uint16_t> ansi_face(uint32_t p) {
+    std::vector<uint16_t> out;
+    for (uint32_t i = 0; p && i < 32 && gm_valid(p + i, 1); ++i) {
+        const uint8_t b = rd8(p + i);
+        if (!b)
+            break;
+        out.push_back(crt::cp1252_to_unicode(b));
+    }
+    return out;
+}
+
 void create_font(X86 *c) {
     uint32_t p = arg(c, 0);
     if (!p || !gm_valid(p, 92)) {
@@ -36,8 +85,37 @@ void create_font(X86 *c) {
     memcpy(font.logfont.data(), g_mem + p, 92);
     set_eax(c, make_object(font));
 }
-// TEXTMETRICW is 60 bytes on x86: eleven DWORDs, four UTF-16
-// characters, five BYTE fields and three bytes of trailing padding.
+// CreateFontIndirectA: LOGFONTA, the same with a 32-byte ANSI face name.
+void create_font_indirect_a(X86 *c) {
+    uint32_t p = arg(c, 0);
+    if (!p || !gm_valid(p, 60)) {
+        set_eax(c, 0);
+        return;
+    }
+    Object font;
+    font.kind = Object::Font;
+    const std::vector<uint16_t> face = ansi_face(p + 28);
+    put_logfont_w(font, int32_t(rd32(p)), int32_t(rd32(p + 4)), int32_t(rd32(p + 8)),
+                  int32_t(rd32(p + 12)), int32_t(rd32(p + 16)), rd8(p + 20), rd8(p + 21),
+                  rd8(p + 22), rd8(p + 23), rd8(p + 24), rd8(p + 25), rd8(p + 26), rd8(p + 27),
+                  face.data(), face.size());
+    set_eax(c, make_object(font));
+}
+// CreateFontA's fourteen arguments are LOGFONTA's fields in order.
+void create_font_a(X86 *c) {
+    Object font;
+    font.kind = Object::Font;
+    const std::vector<uint16_t> face = ansi_face(arg(c, 13));
+    put_logfont_w(font, int32_t(arg(c, 0)), int32_t(arg(c, 1)), int32_t(arg(c, 2)),
+                  int32_t(arg(c, 3)), int32_t(arg(c, 4)), uint8_t(arg(c, 5)), uint8_t(arg(c, 6)),
+                  uint8_t(arg(c, 7)), uint8_t(arg(c, 8)), uint8_t(arg(c, 9)), uint8_t(arg(c, 10)),
+                  uint8_t(arg(c, 11)), uint8_t(arg(c, 12)), face.data(), face.size());
+    set_eax(c, make_object(font));
+}
+
+// The 8x16 cells' TEXTMETRICW. TEXTMETRICW is 60 bytes on x86: eleven
+// DWORDs, four UTF-16 characters, five BYTE fields and three bytes of
+// trailing padding.
 void metrics(uint32_t out, int32_t scale, uint32_t weight) {
     memset(g_mem + out, 0, 60);
     wr32(out, 16u * scale);
@@ -55,7 +133,7 @@ void metrics(uint32_t out, int32_t scale, uint32_t weight) {
     wr8(out + 55, 0x30);
     wr8(out + 56, 0);
 }
-// All wide text entry points share these bitmap glyphs and DC colour/clip rules.
+// All text entry points share these bitmap glyphs and DC colour/clip rules.
 void glyph(uint32_t hdc, int64_t x, int64_t y, uint32_t ch, bool underline = false) {
     auto *dc = dc_of(hdc);
     if (ch < 32 || ch > 127)
@@ -74,21 +152,28 @@ void glyph(uint32_t hdc, int64_t x, int64_t y, uint32_t ch, bool underline = fal
                 write_pixel(hdc, xx, yy, bg);
         }
 }
-// How one DC's text is measured and drawn: from the registered TrueType face
-// its font names, or from the bitmap cells.
+
+// How one DC's text is measured and drawn: a realized TrueType face, or the
+// bitmap cells.
 struct Pen {
-    const TrueTypeFace *face = nullptr;
-    double scale = 0;
+    bool tt = false;
+    GdiFont font;
     int64_t cells = 1;
-    TrueTypeMetrics metrics;
+    std::string requested; // the face name the font asked for
     int64_t advance(uint32_t ch) const {
-        return face ? truetype_advance(face, scale, ch) : 8 * cells;
+        return tt ? truetype_gdi_advance(font, ch) : 8 * cells;
     }
     int64_t height() const {
-        return face ? metrics.height : 16 * cells;
+        return tt ? font.height : 16 * cells;
     }
+    int64_t ascent() const {
+        return tt ? font.ascent : 13 * cells;
+    }
+    // One character with its cell's top-left at (x, y). `underline` is the
+    // mnemonic underline DrawText asks for; the font's own underline and
+    // strikeout are drawn per run (decorate).
     void draw(uint32_t hdc, int64_t x, int64_t y, uint32_t ch, bool underline) const {
-        if (!face) {
+        if (!tt) {
             glyph(hdc, x, y, ch, underline);
             return;
         }
@@ -98,91 +183,203 @@ struct Pen {
         const uint32_t fg = argb(dc->text_color) & 0xffffffu;
         const int64_t width = advance(ch);
         if (dc->bk_mode == 2)
-            fill(hdc, {int32_t(x), int32_t(y), int32_t(x + width), int32_t(y + metrics.height)},
+            fill(hdc, {int32_t(x), int32_t(y), int32_t(x + width), int32_t(y + font.height)},
                  argb(dc->bk_color));
-        const TrueTypeGlyph &g = truetype_glyph(face, scale, ch);
-        const int64_t baseline = y + metrics.ascent;
+        const TrueTypeGlyph &g = truetype_gdi_glyph(font, ch);
+        const int64_t baseline = y + font.ascent;
         for (int32_t j = 0; j < g.h; ++j)
             for (int32_t i = 0; i < g.w; ++i)
                 if (uint8_t cover = g.coverage[size_t(j) * size_t(g.w) + size_t(i)])
                     write_pixel(hdc, x + g.x + i, baseline + g.y + j, (uint32_t(cover) << 24) | fg,
                                 true);
         if (underline)
-            for (int64_t yy = baseline + 1;
-                 yy <= baseline + std::max<int64_t>(1, metrics.height / 16); ++yy)
-                for (int64_t xx = x; xx < x + width; ++xx)
-                    write_pixel(hdc, xx, yy, 0xff000000u | fg);
+            line_under(hdc, x, x + width, baseline + font.underline_pos, font.underline_size, fg);
+    }
+    void line_under(uint32_t hdc, int64_t x0, int64_t x1, int64_t top, int32_t size,
+                    uint32_t fg) const {
+        for (int64_t yy = top; yy < top + std::max(1, size); ++yy)
+            for (int64_t xx = x0; xx < x1; ++xx)
+                write_pixel(hdc, xx, yy, 0xff000000u | fg);
+    }
+    // The font's underline and strikeout across a run of text.
+    void decorate(uint32_t hdc, int64_t x0, int64_t x1, int64_t y) const {
+        auto *dc = dc_of(hdc);
+        if (!tt || !dc)
+            return;
+        const uint32_t fg = argb(dc->text_color) & 0xffffffu;
+        const int64_t baseline = y + font.ascent;
+        if (font.underlined)
+            line_under(hdc, x0, x1, baseline + font.underline_pos, font.underline_size, fg);
+        if (font.struck)
+            line_under(hdc, x0, x1, baseline + font.strike_pos, font.strike_size, fg);
     }
 };
+
+// The face a family-less request gets: what GDI's mapper picks from the pitch
+// and family bits alone.
+std::string default_face(uint8_t pitch_family) {
+    const uint8_t family = pitch_family & 0xf0;
+    if ((pitch_family & 3) == 1 /* FIXED_PITCH */ || family == 0x30 /* FF_MODERN */)
+        return "Courier New";
+    if (family == 0x10 /* FF_ROMAN */)
+        return "Times New Roman";
+    return "Arial";
+}
+
 Pen pen_of(uint32_t hdc) {
     Pen pen;
     pen.cells = font_scale(hdc);
-    auto *dc = dc_of(hdc);
-    auto it = objects().find(dc ? dc->font : 0);
-    if (it == objects().end() || it->second.kind != Object::Font)
+    const Object *object = font_object(hdc);
+    if (!object)
         return pen;
-    std::string family;
-    for (size_t i = 0; i < 32; ++i) {
-        uint16_t unit =
-            uint16_t(it->second.logfont[28 + 2 * i] | (it->second.logfont[29 + 2 * i] << 8));
-        if (!unit)
-            break;
-        family.push_back(unit < 128 ? char(unit) : '?');
+    // Realizations by font handle and LOGFONT: a game measures with the same
+    // few fonts every frame.
+    static std::map<uint32_t, std::pair<std::array<uint8_t, 92>, Pen>> cache;
+    const uint32_t handle = dc_of(hdc)->font;
+    auto hit = cache.find(handle);
+    if (hit != cache.end() && hit->second.first == object->logfont)
+        return hit->second.second;
+    std::string family = face_name(*object);
+    pen.requested = family;
+    const int32_t height = int32_t(font_word(*object, 0));
+    const int32_t weight = int32_t(font_word(*object, 16));
+    const bool italic = object->logfont[20] != 0;
+    // A stock font (an empty LOGFONT) keeps the bitmap cells.
+    const bool stock = family.empty() && height == 0;
+    const TrueTypeFace *face = family.empty() ? nullptr : truetype_find(family);
+    bool synth_bold = false, synth_italic = false;
+    if (!face && !stock && truetype_system_fonts_enabled()) {
+        const std::string want = family.empty() ? default_face(object->logfont[27]) : family;
+        face = truetype_system_face(want, weight, italic, &synth_bold, &synth_italic);
+        if (face)
+            log_once(("gdi-system-font:" + want).c_str(),
+                     "gdi: \"%s\" is drawn with the installed \"%s\"", want.c_str(),
+                     truetype_family_name(face).c_str());
     }
-    if (family.empty())
-        return pen;
-    pen.face = truetype_find(family);
-    if (!pen.face) {
+    if (!face && !family.empty()) {
         // A face every Windows has and the program never supplied: what it
         // gets with no font of its own set, from the VCL's default font.
-        const int32_t weight = int32_t(font_word(it->second, 16));
-        pen.face = truetype_windows_substitute(family, weight);
-        if (pen.face)
+        face = truetype_windows_substitute(family, weight);
+        if (face)
             log_once(("gdi-font:" + family).c_str(),
                      "gdi: \"%s\" is a Windows font the program did not register; drawing it "
                      "with the bundled Open Sans",
                      family.c_str());
     }
-    if (!pen.face)
-        return pen;
-    pen.scale = truetype_scale(pen.face, int32_t(font_word(it->second, 0)));
-    pen.metrics = truetype_metrics(pen.face, pen.scale);
+    if (face) {
+        GdiLogFont lf;
+        lf.height = height;
+        lf.width = int32_t(font_word(*object, 4));
+        lf.weight = weight;
+        lf.italic = italic;
+        lf.underline = object->logfont[21] != 0;
+        lf.strikeout = object->logfont[22] != 0;
+        lf.charset = object->logfont[23];
+        lf.quality = object->logfont[26];
+        pen.tt = true;
+        pen.font = truetype_realize(face, lf, synth_bold, synth_italic);
+    }
+    cache[handle] = {object->logfont, pen};
     return pen;
 }
-void get_metrics(X86 *c) {
-    auto *dc = dc_of(arg(c, 0));
+
+// TEXTMETRICW (wide) or TEXTMETRICA. The A record narrows the character
+// range to bytes as GDI does: the first character is the default one less
+// one, the last at most 0xff.
+void write_metrics(uint32_t hdc, uint32_t out, bool wide) {
+    const Pen pen = pen_of(hdc);
+    const Object *object = font_object(hdc);
+    uint32_t weight = object ? font_word(*object, 16) : 400;
+    if (!weight)
+        weight = 400;
+    if (!pen.tt) {
+        // The cells' record, shared by both forms (its range is ASCII).
+        uint32_t tmp = out;
+        if (!wide) {
+            tmp = heap_alloc(60, true);
+            if (!tmp)
+                return;
+        }
+        metrics(tmp, font_scale(hdc), weight);
+        if (!wide) {
+            memcpy(g_mem + out, g_mem + tmp, 44);
+            wr8(out + 44, 32);
+            wr8(out + 45, 127);
+            wr8(out + 46, '?');
+            wr8(out + 47, ' ');
+            memcpy(g_mem + out + 48, g_mem + tmp + 52, 5);
+            heap_free(tmp);
+        }
+        return;
+    }
+    const GdiFont &f = pen.font;
+    const uint32_t size = wide ? 60 : 56;
+    memset(g_mem + out, 0, size);
+    const int32_t longs[11] = {f.height,   f.ascent,    f.descent,   f.internal,
+                               f.external, f.ave_width, f.max_width, f.weight,
+                               f.overhang, 96,          96};
+    for (uint32_t i = 0; i < 11; ++i)
+        wr32(out + 4 * i, uint32_t(longs[i]));
+    uint32_t at = 44;
+    if (wide) {
+        wr16(out + 44, f.first);
+        wr16(out + 46, f.last);
+        wr16(out + 48, f.def);
+        wr16(out + 50, f.brk);
+        at = 52;
+    } else {
+        wr8(out + 44, uint8_t(f.def - 1));
+        wr8(out + 45, uint8_t(std::min<uint16_t>(f.last, 0xff)));
+        wr8(out + 46, uint8_t(f.def));
+        wr8(out + 47, uint8_t(f.brk));
+        at = 48;
+    }
+    wr8(out + at, f.italic);
+    wr8(out + at + 1, f.underlined);
+    wr8(out + at + 2, f.struck);
+    wr8(out + at + 3, f.pitch_family);
+    wr8(out + at + 4, f.charset);
+}
+void get_metrics(X86 *c, bool wide) {
     uint32_t out = arg(c, 1);
-    if (!dc || !out || !gm_valid(out, 60)) {
+    if (!dc_of(arg(c, 0)) || !out || !gm_valid(out, wide ? 60 : 56)) {
         set_eax(c, 0);
         return;
     }
-    auto font = objects().find(dc->font);
-    uint32_t weight = font == objects().end() ? 400 : font_word(font->second, 16);
-    if (!weight)
-        weight = 400;
-    metrics(out, font_scale(arg(c, 0)), weight);
-    const Pen pen = pen_of(arg(c, 0));
-    if (pen.face) {
-        wr32(out, uint32_t(pen.metrics.height));
-        wr32(out + 4, uint32_t(pen.metrics.ascent));
-        wr32(out + 8, uint32_t(pen.metrics.descent));
-        wr32(out + 12, uint32_t(pen.metrics.internal));
-        wr32(out + 20, uint32_t(pen.metrics.average));
-        wr32(out + 24, uint32_t(pen.metrics.maximum));
-    }
+    write_metrics(arg(c, 0), out, wide);
     set_eax(c, 1);
 }
-void extent(X86 *c) {
+void get_metrics_w(X86 *c) {
+    get_metrics(c, true);
+}
+void get_metrics_a(X86 *c) {
+    get_metrics(c, false);
+}
+
+// A guest string as code points: UTF-16 units for the W entry points, code
+// page 1252 bytes for the A ones. False when it does not lie in the arena.
+bool read_text(uint32_t text, uint32_t n, bool wide, std::vector<uint32_t> *out) {
+    out->clear();
+    if (n > GUEST_SIZE / 4 || (n && (!text || !gm_valid(text, n * (wide ? 2 : 1)))))
+        return false;
+    out->reserve(n);
+    for (uint32_t i = 0; i < n; ++i)
+        out->push_back(wide ? rd16(text + 2 * i) : crt::cp1252_to_unicode(rd8(text + i)));
+    return true;
+}
+
+// GetTextExtentPoint32A/W: the sum of the advances, and the cell height.
+void extent(X86 *c, bool wide) {
     uint32_t dc = arg(c, 0), text = arg(c, 1), n = arg(c, 2), out = arg(c, 3);
-    if (!dc_of(dc) || !out || !gm_valid(out, 8) || n > GUEST_SIZE / 2 ||
-        (n && (!text || !gm_valid(text, n * 2)))) {
+    std::vector<uint32_t> chars;
+    if (!dc_of(dc) || !out || !gm_valid(out, 8) || !read_text(text, n, wide, &chars)) {
         set_eax(c, 0);
         return;
     }
     const Pen pen = pen_of(dc);
     uint64_t width = 0;
-    for (uint32_t i = 0; i < n; ++i)
-        width += uint64_t(pen.advance(rd16(text + 2 * i)));
+    for (uint32_t ch : chars)
+        width += uint64_t(pen.advance(ch));
     if (width > INT_MAX) {
         set_eax(c, 0);
         return;
@@ -191,17 +388,71 @@ void extent(X86 *c) {
     wr32(out + 4, uint32_t(pen.height()));
     set_eax(c, 1);
 }
-void text_out(X86 *c) {
-    uint32_t hdc = arg(c, 0), flags = arg(c, 3), rp = arg(c, 4), text = arg(c, 5), n = arg(c, 6),
-             dx = arg(c, 7);
-    auto *dc = dc_of(hdc);
-    int w, h;
-    if (!dc || !dc_size(hdc, &w, &h) || n > GUEST_SIZE / 4 ||
-        (n && (!text || !gm_valid(text, n * 2))) || (dx && !gm_valid(dx, n * 4)) ||
-        ((flags & 6) && (!rp || !gm_valid(rp, 16)))) {
+void extent_w(X86 *c) {
+    extent(c, true);
+}
+void extent_a(X86 *c) {
+    extent(c, false);
+}
+
+// GetCharWidth[32]A/W(hdc, first, last, widths): one advance per character
+// in [first, last]; the A forms count code page 1252 bytes.
+void char_widths(X86 *c, bool wide) {
+    const uint32_t hdc = arg(c, 0), first = arg(c, 1), last = arg(c, 2), out = arg(c, 3);
+    if (!dc_of(hdc) || last < first || last - first > 0x10000 || !out ||
+        !gm_valid(out, (last - first + 1) * 4) || (!wide && last > 0xff)) {
         set_eax(c, 0);
         return;
     }
+    const Pen pen = pen_of(hdc);
+    for (uint32_t ch = first; ch <= last; ++ch)
+        wr32(out + 4 * (ch - first),
+             uint32_t(pen.advance(wide ? ch : crt::cp1252_to_unicode(uint8_t(ch)))));
+    set_eax(c, 1);
+}
+void char_widths_w(X86 *c) {
+    char_widths(c, true);
+}
+void char_widths_a(X86 *c) {
+    char_widths(c, false);
+}
+
+// The text output every entry point comes down to: ExtTextOut's options
+// (ETO_OPAQUE 2, ETO_CLIPPED 4) and rectangle, optional advances, the DC's
+// text alignment, its background mode and colours, and the font's underline
+// and strikeout. (x, y) is the reference point the alignment names.
+bool text_run(uint32_t hdc, int64_t x, int64_t y, uint32_t flags, uint32_t rp,
+              const std::vector<uint32_t> &chars, uint32_t dx) {
+    auto *dc = dc_of(hdc);
+    int w, h;
+    if (!dc || !dc_size(hdc, &w, &h) || (dx && !gm_valid(dx, uint32_t(chars.size()) * 4)) ||
+        ((flags & 6) && (!rp || !gm_valid(rp, 16))))
+        return false;
+    const Pen pen = pen_of(hdc);
+    std::vector<int64_t> steps(chars.size());
+    int64_t total = 0;
+    for (size_t i = 0; i < chars.size(); ++i) {
+        steps[i] = dx ? int32_t(rd32(dx + 4 * uint32_t(i))) : pen.advance(chars[i]);
+        total += steps[i];
+    }
+    // TA_UPDATECP draws at the current position and moves it on.
+    const uint32_t align = dc->text_align;
+    if (align & 1) {
+        x = dc->pos_x;
+        y = dc->pos_y;
+    }
+    const uint32_t horizontal = align & 6, vertical = align & 24;
+    if (horizontal == 6) // TA_CENTER
+        x -= total / 2;
+    else if (horizontal == 2) // TA_RIGHT
+        x -= total;
+    if (vertical == 24) // TA_BASELINE
+        y -= pen.ascent();
+    else if (vertical == 8) // TA_BOTTOM
+        y -= pen.height();
+    if (align & 1)
+        dc->pos_x = int32_t(horizontal == 2 ? x : x + total);
+
     bool old_clipped = dc->clipped;
     std::vector<Rect> old_clip = dc->clip;
     Rect rect{};
@@ -220,19 +471,102 @@ void text_out(X86 *c) {
                 dc->clip.push_back(hit);
         }
     }
-    uint32_t bg = argb(dc->bk_color);
     if (flags & 2)
-        fill(hdc, rect, bg);
-    const Pen pen = pen_of(hdc);
-    int64_t x = int32_t(arg(c, 1)), y = int32_t(arg(c, 2));
-    for (uint32_t i = 0; i < n; ++i) {
-        uint32_t unit = rd16(text + 2 * i);
-        pen.draw(hdc, x, y, unit, false);
-        x += dx ? int32_t(rd32(dx + 4 * i)) : pen.advance(unit);
+        fill(hdc, rect, argb(dc->bk_color));
+    const int64_t left = x;
+    for (size_t i = 0; i < chars.size(); ++i) {
+        pen.draw(hdc, x, y, chars[i], false);
+        x += steps[i];
     }
+    pen.decorate(hdc, left, left + total, y);
     dc->clip = std::move(old_clip);
     dc->clipped = old_clipped;
-    set_eax(c, 1);
+    return true;
+}
+// ExtTextOutA/W(hdc, x, y, options, rect, text, count, dx).
+void ext_text_out(X86 *c, bool wide) {
+    std::vector<uint32_t> chars;
+    if (!read_text(arg(c, 5), arg(c, 6), wide, &chars)) {
+        set_eax(c, 0);
+        return;
+    }
+    set_eax(c, text_run(arg(c, 0), int32_t(arg(c, 1)), int32_t(arg(c, 2)), arg(c, 3), arg(c, 4),
+                        chars, arg(c, 7)));
+}
+void ext_text_out_w(X86 *c) {
+    ext_text_out(c, true);
+}
+void ext_text_out_a(X86 *c) {
+    ext_text_out(c, false);
+}
+// TextOutA/W(hdc, x, y, text, count).
+void text_out(X86 *c, bool wide) {
+    std::vector<uint32_t> chars;
+    if (!read_text(arg(c, 3), arg(c, 4), wide, &chars)) {
+        set_eax(c, 0);
+        return;
+    }
+    set_eax(c, text_run(arg(c, 0), int32_t(arg(c, 1)), int32_t(arg(c, 2)), 0, 0, chars, 0));
+}
+void text_out_w(X86 *c) {
+    text_out(c, true);
+}
+void text_out_a(X86 *c) {
+    text_out(c, false);
+}
+void set_text_align(X86 *c) {
+    auto *dc = dc_of(arg(c, 0));
+    if (!dc) {
+        set_eax(c, 0xffffffffu); // GDI_ERROR
+        return;
+    }
+    const uint32_t old = dc->text_align;
+    dc->text_align = arg(c, 1) & 0x1f;
+    set_eax(c, old);
+}
+void get_text_align(X86 *c) {
+    auto *dc = dc_of(arg(c, 0));
+    set_eax(c, dc ? dc->text_align : 0xffffffffu);
+}
+// GetTextFaceA/W(hdc, count, out): the realized face's name, or the requested
+// one for the bitmap cells; the length copied, or the size needed when `out`
+// is null.
+void text_face(X86 *c, bool wide) {
+    const uint32_t hdc = arg(c, 0), cap = arg(c, 1), out = arg(c, 2);
+    if (!dc_of(hdc)) {
+        set_eax(c, 0);
+        return;
+    }
+    const Pen pen = pen_of(hdc);
+    const std::string name = pen.tt                  ? truetype_family_name(pen.font.face)
+                             : pen.requested.empty() ? std::string("System")
+                                                     : pen.requested;
+    if (!out) {
+        set_eax(c, uint32_t(name.size()) + 1);
+        return;
+    }
+    if (!cap || !gm_valid(out, cap * (wide ? 2 : 1))) {
+        set_eax(c, 0);
+        return;
+    }
+    const uint32_t n = std::min<uint32_t>(uint32_t(name.size()), cap - 1);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (wide)
+            wr16(out + 2 * i, uint8_t(name[i]));
+        else
+            wr8(out + i, uint8_t(name[i]));
+    }
+    if (wide)
+        wr16(out + 2 * n, 0);
+    else
+        wr8(out + n, 0);
+    set_eax(c, n);
+}
+void text_face_w(X86 *c) {
+    text_face(c, true);
+}
+void text_face_a(X86 *c) {
+    text_face(c, false);
 }
 // The fonts are kept, so a DC whose font names one of them draws with it. Data
 // the rasterizer cannot read still gets a handle, as it always has here.
@@ -423,10 +757,26 @@ void register_text() {
         "GDI32.dll", n, a, f                                                                       \
     }
     static const ImportShim shims[] = {G("CreateFontIndirectW", 1, create_font),
-                                       G("ExtTextOutW", 8, text_out),
-                                       G("GetTextExtentPoint32W", 4, extent),
-                                       G("GetTextExtentPointW", 4, extent),
-                                       G("GetTextMetricsW", 2, get_metrics),
+                                       G("CreateFontIndirectA", 1, create_font_indirect_a),
+                                       G("CreateFontA", 14, create_font_a),
+                                       G("ExtTextOutW", 8, ext_text_out_w),
+                                       G("ExtTextOutA", 8, ext_text_out_a),
+                                       G("TextOutW", 5, text_out_w),
+                                       G("TextOutA", 5, text_out_a),
+                                       G("GetTextExtentPoint32W", 4, extent_w),
+                                       G("GetTextExtentPointW", 4, extent_w),
+                                       G("GetTextExtentPoint32A", 4, extent_a),
+                                       G("GetTextExtentPointA", 4, extent_a),
+                                       G("GetTextMetricsW", 2, get_metrics_w),
+                                       G("GetTextMetricsA", 2, get_metrics_a),
+                                       G("GetCharWidthW", 4, char_widths_w),
+                                       G("GetCharWidth32W", 4, char_widths_w),
+                                       G("GetCharWidthA", 4, char_widths_a),
+                                       G("GetCharWidth32A", 4, char_widths_a),
+                                       G("SetTextAlign", 2, set_text_align),
+                                       G("GetTextAlign", 1, get_text_align),
+                                       G("GetTextFaceW", 3, text_face_w),
+                                       G("GetTextFaceA", 3, text_face_a),
                                        G("AddFontMemResourceEx", 4, memory_font),
                                        G("EnumFontsW", 4, enumerate),
                                        G("EnumFontFamiliesExW", 5, enumerate),
