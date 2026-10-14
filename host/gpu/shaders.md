@@ -57,6 +57,22 @@ these inputs.
   A backend without subgroup operations may reduce through shared memory; the output layout is
   what matters.
 
+## `d3d7`, `d3d7_quad` (render pipelines; Metal only so far)
+
+The Direct3D 7 renderer's programs (`host/d3d7_render.cpp`; the structs are `VS7`, `FS7` and `Q7`
+there). A backend without them reports a failed pipeline and the renderer is not used.
+
+- `d3d7`: vertex buffer slot 0 is the guest's raw vertex bytes, fetched by index; vertex bytes slot 1
+  `VS7` (world-view-projection and world-view, column-major as uploaded, the normal matrix rows, the
+  material, ambient, an NDC remap with the half-pixel shift folded in, fog, vertex-format offsets and
+  flags, 8 lights in eye space); vertex buffer slot 2 the expanded `uint32` index list. Fragment bytes
+  slot 1 `FS7` (stage-0 operations and arguments, alpha test, fog, colour key); texture 0 with
+  sampler 0 (the stage's filters) and sampler 1 (nearest, for the colour-key test). Output: colour
+  attachment 0.
+- `d3d7_quad`: no vertex buffer, 4 vertices as a strip; vertex and fragment bytes slot 0 `Q7`
+  (destination rectangle in target pixels, source texel rectangle and level, fill colour or depth,
+  mode, source key). Nearest copies read texels at exactly `floor((2x + 1) * sw / (2 * dw))`.
+
 ## Vulkan bindings
 
 The GLSL under `gpu/vulkan/shaders/` maps the slots above onto descriptor set 0: vertex-stage buffer

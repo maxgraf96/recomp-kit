@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Serve DirectDraw 7 and Direct3D 7 to a game that opts in (`[runtime] ddraw7`
+  in game.toml): `IDirectDraw7`, `IDirectDrawSurface7`, `IDirect3D7`, the HAL
+  and T&L HAL `IDirect3DDevice7`, and `IDirect3DVertexBuffer7`
+  (`dx/ddraw7.cpp`, `dx/d3d7.cpp`). Surfaces live on the GPU and reach guest
+  memory only when locked; DirectDraw fills and blits run on the GPU;
+  `Flip` copies, so the back buffer keeps its contents, and waits for the
+  refresh. Fixed-function transform, 8 lights, vertex and table fog, the
+  stage-0 combiner, alpha test, blending, depth, culling and mip chains are
+  drawn by a new renderer (`host/d3d7_render.cpp`, Metal) and checked scene by
+  scene against a software reference renderer (`dx/d3d7_soft.cpp`,
+  `RECOMP_D3D7_SOFTWARE=1`). `RECOMP_D3D7_DUMP_DIR` writes presented frames.
+
 - Put guest memory at exact addresses for replay tools: `mem_open` opens a
   range anywhere in the 32-bit space, above `[game] guest_size` included,
   with `gm_valid`, `gm_str` and msvcrt's string scans accepting it

@@ -27,6 +27,7 @@ startup and never runs `WinMain`.
 | `compositor.{h,cpp}`, `performance_overlay.{h,cpp}` | world, UI and overlays composed onto the drawable; the FPS overlay |
 | `d3d_render.{h,cpp}` | the renderer behind `host_d3d_draw`, over `gpu/gpu.h` |
 | `gpu2d.cpp` | the Direct3D 11 hardware path: GPU copies of the shim's textures and render targets, the rectangles drawn into them, and the render target handed to the presenter |
+| `d3d7_render.{h,cpp}` | the DirectDraw 7 / Direct3D 7 renderer behind `dx/d3d7_host.h`: a GPU texture per surface, fills, blits and fixed-function draws in one command stream, and Flip staged into the presenter's frame |
 | `gpu/gpu.h`, `gpu/shaders.md` | the device-level GPU interface every backend implements, and the shader contract |
 | `gpu/metal/` | the Metal backend, the only Objective-C++ in the host |
 | `gpu/fake/` | the CPU test double |
@@ -210,6 +211,30 @@ it, so the CPU never writes a texture the GPU has still to read. The smoke host
 reads every GPU frame back for its captures (`host_gpu2d_present_readback`);
 the windowed host does not. `RECOMP_D3D11_SOFTWARE=1` keeps every draw in the
 rasterizer, for comparison.
+
+## The Direct3D 7 renderer
+
+`d3d7_render.cpp` attaches to the presenter's device on first use and is
+dropped before the presenter stops. Every surface the shim names is a GPU
+texture (BGRA8, or Depth32F for a depth buffer; 16-bit formats are converted
+by the shim); a format without alpha is created opaque and drawn with an RGB
+write mask, so its alpha reads 1 as Direct3D says.
+
+There is one open command buffer and at most one open render pass, keyed by
+its colour and depth target: a fill or a blit into the surface being drawn
+(a software cursor between two draws) is encoded into the pass already open.
+Uploads (`copy_buffer_to_texture_level`) and readbacks end the pass and stay
+in submission order, so a draw already submitted samples the old pixels.
+Vertices, the expanded index list and upload staging go into 4 MB transient
+buffers recycled once their command buffer completes; uniforms go inline.
+
+The vertex program fetches the guest's vertex bytes by index (any FVF) and
+runs the fixed-function transform and lighting; Direct3D's integer pixel
+centres are met by moving every vertex half a pixel right and down, and the
+Direct3D viewport is remapped onto its intersection with the target. Present
+copies the presented rectangle into the presenter's frame on the same command
+buffer (`host_d7_show` in `present.cpp`); a host without a GPU presenter gets
+the pixels read back into `host_display_present_window`.
 
 ## Where the pixels meet
 

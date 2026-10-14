@@ -19,6 +19,10 @@ Metal and AVAudioEngine. That keeps every test here headless.
 | `dx.h/.cpp` | `dx_register_shims()`, `dx_reset()`, the audio channel allocator |
 | `ddraw.cpp` | IDirectDraw/2/4, IDirectDrawSurface/2/3/4, palette, clipper |
 | `d3d.cpp` | IDirect3D/2, device, viewport, material, light, texture |
+| `ddraw7.cpp`, `d3d7.cpp` | IDirectDraw7, IDirectDrawSurface7, IDirect3D7, IDirect3DDevice7, IDirect3DVertexBuffer7 |
+| `d3d7_host.h` | the seam between those and a renderer: surfaces, Blt, Flip and draws |
+| `d3d7_soft.cpp` | the software reference implementation of that seam |
+| `d3d7_types.h`, `d3d7_internal.h`, `d3d7_prim.h` | DirectX 7 layouts and constants; the surface model; topologies and vertex formats |
 | `dsound.cpp` | IDirectSound, buffer, 3D buffer, 3D listener, notify |
 | `mss32.cpp` | Miles digital drivers, PCM/MP3 samples and streams |
 | `redbook.cpp` | Miles CD audio backed by configured media files |
@@ -31,6 +35,7 @@ Metal and AVAudioEngine. That keeps every test here headless.
 | `weanetr.cpp` | the 17 MLDPlay methods, reporting no networking |
 | `tests/dx_tests.cpp` | the headless tests |
 | `tests/pad_tests.cpp` | the virtual pad through DirectInput, with its own host pad callbacks |
+| `tests/d3d7_tests.cpp`, `tests/d3d7_scenes.h`, `tests/d3d7_client.h` | DirectDraw 7 / Direct3D 7, headless; the scenes are shared with `host/tests/d3d7_gpu_tests.cpp` |
 
 ## Wiring it up
 
@@ -225,6 +230,62 @@ and `CreateDevice` at `+0x20` in `init_d3d`, `IDirectDraw2::CreatePalette` at
   `StartupNetwork` returns zero, so zero is failure across MLDPlay.
   `GetCurrentMs` is the exception and returns the real clock, because the game
   calls it from dozens of places that have nothing to do with networking.
+
+## DirectDraw 7 and Direct3D 7
+
+A separate object model from the version 1-6 shims, for a game written against
+DirectX 7 (and so for its T&L HAL device as well as its HAL device). A game
+opts in with `[runtime] ddraw7 = true` in its game.toml (`RECOMP_DDRAW7=0/1`
+overrides): `DirectDrawCreateEx(IID_IDirectDraw7)` is otherwise refused, which
+is what a game that only probes for version 7 and falls back expects.
+
+**Surfaces live on the renderer first.** `ddraw7.cpp` and `d3d7.cpp` own the
+guest objects and every rule the API states; pixels go through `d3d7_host.h`
+to a backend - the GPU renderer (`host/d3d7_render.cpp`) when the host has
+one, else `d3d7_soft.cpp` when `RECOMP_D3D7_SOFTWARE=1`, else none. Each
+surface (each mip level) records whether its guest memory or its backend
+copy is current, and pixels move only when the other side asks:
+
+| what the guest does | what moves |
+| --- | --- |
+| `Lock`, `GetDC` | the backend copy is read back if it is the newer one |
+| `Unlock`, `ReleaseDC` | nothing; the backend copy is now stale |
+| draw with a texture, `Blt` from a surface | the CPU copy is uploaded if it is the newer one |
+| draw, `Clear`, `Blt` into a surface | nothing; the CPU copy is now stale |
+| `Blt` between two video-memory surfaces | nothing: the copy runs on the backend |
+
+Without a backend every operation is done on the CPU and draws are dropped,
+which is how the headless tests drive DirectDraw.
+
+**Flip copies.** `Flip` copies the back buffer into the front buffer and
+presents the front, so the back buffer keeps its contents: a menu drawn once
+and then only patched by a software cursor stays on screen. It waits for the
+display's refresh unless `DDFLIP_NOVSYNC` (`RECOMP_D3D7_VSYNC=0` turns the
+wait off). A `Blt` to the primary presents its destination rectangle, which
+is the windowed present.
+
+**Direct3D records state and submits.** Each draw becomes one `HostD7Draw`:
+the guest's vertices (any FVF, `XYZRHW` included), its indices, and a
+snapshot of the device state. Transform, lighting (8 point, spot or
+directional lights, material sources, `NORMALIZENORMALS`, local viewer),
+vertex and table fog, the stage-0 combiner, alpha test, blending, depth and
+culling are the backend's. `d3d7_soft.cpp` implements them from the DirectX 7
+equations, in double precision, at Direct3D 7's integer pixel centres with the
+top-left rule: it is the reference the GPU renderer is tested against.
+
+| switch | effect |
+| --- | --- |
+| `RECOMP_D3D7_MODES=WxHxB,...` | the modes `EnumDisplayModes` offers (16 and 32 bpp) |
+| `RECOMP_D3D7_SOFTWARE=1` | render with the reference renderer, no GPU |
+| `RECOMP_D3D7_VSYNC=0` | `Flip` does not wait for the refresh |
+| `RECOMP_D3D7_DUMP_DIR=dir`, `RECOMP_D3D7_DUMP_EVERY=N` | every Nth presented frame as `dir/frame-NNNNNN.ppm` |
+
+Not implemented, each logged once when a game asks: texture stages above 0
+(stage 1 may only be disabled), stencil, state blocks, `ProcessVertices`,
+strided draws, user clip planes, vertex blending, texture transforms, fill
+modes other than solid, `LASTPIXEL` (lines omit their last pixel), border
+colours other than transparent black, destination colour keys, palettes,
+clippers, overlays and FOURCC surfaces.
 
 ## Known gaps
 

@@ -74,6 +74,17 @@ call sites.
 Add a case there first when the translator meets an instruction or table
 shape it does not handle.
 
+DirectDraw 7 and Direct3D 7 have two suites. `d3d7_tests` (`nogame`) drives the
+shims through the guest ABI: the object model, enumeration, locks, Blt and Flip
+on the CPU path and on the software reference renderer (which must agree
+exactly), GetDC, device state, coherence, and synthetic scenes against pixels
+computed by hand. `d3d7_gpu_tests` (`gpu`) renders the same scenes
+(`dx/tests/d3d7_scenes.h`) on the GPU and on the reference renderer and compares
+them channel by channel, each scene within its stated tolerance and edge
+budget; `RECOMP_D3D7_TEST_DUMP=<dir>` writes every compared pair as PPM. It also
+checks a software cursor over a flip chain and times a frame at an engine's
+call rate. `host_tests` checks that a presented surface reaches the presenter.
+
 The native `eh_tests` suite (`nogame`) runs MSVC C++ and structured exception
 handling (`runtime/msvc_eh.cpp`) over synthetic guest frames written the way
 the translator emits them: catch matching and catch objects, unwinding,
