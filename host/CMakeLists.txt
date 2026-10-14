@@ -170,6 +170,7 @@ set(POP_CONTROLS_SOURCES ${HOST}/controls/json.cpp ${HOST}/controls/layout.cpp
 set(POP_PRESENT_SOURCES ${HOST}/present_pixels.cpp ${HOST}/present_thread.cpp ${HOST}/compositor.cpp
                         ${HOST}/ui_layer.cpp ${HOST}/performance_overlay.cpp ${POP_CONTROLS_SOURCES}
                         ${HOST}/d3d_render.cpp
+                        ${HOST}/d3d7_render.cpp
                         ${HOST}/gpu2d.cpp
                         ${HOST}/indexed_frame.cpp)
 # The Direct3D 9 device's GPU renderer: the host entry points, and a backend
@@ -334,6 +335,20 @@ pop_link_sdl(host_tests)
 pop_test_binary(host_tests)
 add_test(NAME host_tests COMMAND host_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(host_tests PROPERTIES LABELS gpu)
+endif()
+
+# The Direct3D 7 / DirectDraw 7 GPU renderer against the software reference
+# renderer (dx/d3d7_soft.cpp), scene by scene, through the guest ABI.
+if(NOT IOS AND NOT ANDROID)
+add_executable(d3d7_gpu_tests ${HOST}/tests/d3d7_gpu_tests.cpp ${HOST}/d3d7_render.cpp
+  ${POP_ROOT}/runtime/tests/stub_recomp_call.cpp)
+target_include_directories(d3d7_gpu_tests PRIVATE ${POP_ROOT} ${HOST})
+target_link_libraries(d3d7_gpu_tests PRIVATE recomp_platform recomp_dx recomp_runtime gpu_backend)
+target_compile_options(d3d7_gpu_tests PRIVATE ${POP_WARN_HOST})
+pop_optimize(d3d7_gpu_tests 1)
+pop_test_binary(d3d7_gpu_tests)
+add_test(NAME d3d7_gpu_tests COMMAND d3d7_gpu_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(d3d7_gpu_tests PROPERTIES LABELS gpu)
 endif()
 
 # The production headless capture path with synthetic guest windows and no GPU.

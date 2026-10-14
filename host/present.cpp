@@ -19,6 +19,7 @@
 #include "present.h"
 #include "page_overlay.h"
 #include "boot.h"
+#include "d3d7_render.h"
 #include "d3d_render.h"
 #include "../dx/host_api.h"
 #include "indexed_frame.hpp"
@@ -252,6 +253,26 @@ extern "C" void host_display_present_gpu2d(uint32_t id, int w, int h) {
     {
         ReportLock held;
         ++g_present_count;
+    }
+    host_page_overlay(nullptr, w, h, 32, w * 4, nullptr);
+    host_present_seal_window();
+}
+// A Direct3D 7 frame (d3d7_render.cpp): the presented texture is copied into
+// the frame on the device, then the frame is sealed once that copy is committed.
+bool host_d7_show(gpu::Texture texture, int w, int h, int, int, gpu::CommandBuffer cb) {
+    if (!host_present_gpu_ready() || w <= 0 || h <= 0)
+        return false;
+    if (g_mode_w != w || g_mode_h != h)
+        host_set_display_mode(w, h, g_mode_bpp ? g_mode_bpp : 32);
+    host_present_first_write();
+    return host_present_stage_texture(texture, w, h, w, h, cb);
+}
+void host_d7_shown(int w, int h) {
+    {
+        ReportLock held;
+        ++g_present_count;
+        if (g_current_rate >= 0)
+            ++rates()[g_current_rate].presents;
     }
     host_page_overlay(nullptr, w, h, 32, w * 4, nullptr);
     host_present_seal_window();

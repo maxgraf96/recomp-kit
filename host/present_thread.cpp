@@ -1,6 +1,7 @@
 #include "page_overlay.h"
 #include "../runtime/display_seam.h"
 // Worker-owned swapchain and sealed-frame mailbox, over gpu.h. No window code here.
+#include "d3d7_render.h"
 #include "present.h"
 #include "present_frame.h"
 #include "present_test.h"
@@ -1153,6 +1154,7 @@ extern "C" void host_present_stop() {
     if (!s)
         return;
     host_gpu2d_release_device();
+    host_d7_release_device();
     {
         std::lock_guard lock(s->mutex);
         s->stop = true;
@@ -1291,6 +1293,11 @@ extern "C" void host_present_stage_rgba(const uint8_t *rgba, int w, int h) {
         if (t.pixels)
             s->device->upload(t.pixels, {0, 0, w, h}, rgba, w * 4);
     }
+}
+// The device the Direct3D 7 renderer (d3d7_render.cpp) draws on: the
+// presenter's, once it is presenting on a real one.
+gpu::Device *host_d7_presenter_device() {
+    return host_present_gpu_ready() ? host_present_device() : nullptr;
 }
 // Whether a real device is presenting, so a guest-side GPU path has a queue to
 // put its work on and a frame to stage it into.
