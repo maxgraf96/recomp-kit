@@ -42,6 +42,16 @@ mouse_device_ptr = 0x00600300
 mouse_device_right = 0x00600340
 camera = 0x00600400
 
+[runtime]
+# Strict mode by default (RECOMP_STRICT=0/1 overrides at run time): a call or
+# jump the translation cannot deliver, a call through an import whose stdcall
+# argument count is unknown and a divide error stop the run with a diagnostic.
+strict = false
+
+# [imports.argc] "DLL!name" = the stdcall argument count (dwords) or "cdecl" of
+# an import that no shim and no built-in table describes, e.g.
+#   "ENGINE.dll!SomeExport" = 2
+
 [controls]
 # The on-screen controls a fresh profile shows when no hardware keyboard is attached:
 # "pad", "keys", "pad+keys" or "hidden". pad: "mapped" (keys and mouse), "native"

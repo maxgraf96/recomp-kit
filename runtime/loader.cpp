@@ -248,6 +248,12 @@ bool patch_iat(const std::vector<uint8_t> &file, size_t opt_off, uint16_t opt_ma
             char namebuf[280];
             if (t & 0x80000000u) {
                 snprintf(namebuf, sizeof namebuf, "ord%u", t & 0xffff);
+                // A Winsock ordinal is a documented export: bind it by that name,
+                // where its shim and stdcall count are, unless a shim answers to
+                // the ordinal itself.
+                if (!imports_has_shim(dll.c_str(), namebuf))
+                    if (const char *known = imports_ordinal_name(dll.c_str(), t & 0xffff))
+                        snprintf(namebuf, sizeof namebuf, "%s", known);
             } else {
                 if (!rva_ok(t, 3)) {
                     g_error = "import name lies outside the image";

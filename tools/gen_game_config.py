@@ -62,6 +62,13 @@ def render_header(cfg):
     lines.append("#define RECOMP_CONTROLS_NATIVE_AXES %s" % c_string(",".join(native["axes"])))
     lines.append("#define RECOMP_CONTROLS_NATIVE_BUTTONS %s" % c_string(",".join(native["buttons"])))
     lines.append("#define RECOMP_GUEST_SIZE %s" % c_hex(game["guest_size"]))
+    # [runtime] strict and [imports.argc] (runtime/cpu.cpp, runtime/import_argc.cpp).
+    lines.append("#define RECOMP_STRICT_DEFAULT %d" % int(cfg.get("runtime", {}).get("strict", False)))
+    argc = cfg.get("imports", {}).get("argc", {})
+    if argc:
+        lines.append("#define RECOMP_IMPORT_ARGC {%s}" % ", ".join(
+            "{%s, %s}" % (c_string(k), "0xffu" if v == "cdecl" else "%du" % v)
+            for k, v in sorted(argc.items())))
     lines.append("#define RECOMP_RESUMABLE_STACKS %d" %
                  int(cfg["translate"].get("resumable_stacks", False)))
     lines.append("#define RECOMP_CD_AUDIO_TRACKS %s" % c_string_list(cfg.get("media", {}).get("cd_tracks", [])))

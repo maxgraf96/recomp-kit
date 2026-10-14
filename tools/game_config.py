@@ -217,16 +217,40 @@ def load(game_dir):
             raise ValueError("%s: [translate] overrides names no file: %s" % (source, path))
         cfg["overrides_header"] = path
     cfg["aux_modules"] = load_aux_modules(cfg, game_dir, source)
+    load_runtime(cfg, source)
     return cfg
 
 
+def load_runtime(cfg, source):
+    """[runtime] strict: the default of the runtime's strict mode (RECOMP_STRICT
+    overrides it at run time). [imports.argc]: "DLL!name" = the stdcall argument
+    count (dwords) of an import no shim and no built-in table describes, or
+    "cdecl" - what a game knows from its own symbol data."""
+    runtime = cfg.setdefault("runtime", {})
+    strict = runtime.setdefault("strict", False)
+    if not isinstance(strict, bool):
+        raise ValueError("%s: [runtime] strict must be a boolean" % source)
+    argc = cfg.setdefault("imports", {}).setdefault("argc", {})
+    if not isinstance(argc, dict):
+        raise ValueError("%s: [imports.argc] must be a table" % source)
+    for key, value in argc.items():
+        dll, bang, name = key.partition("!")
+        if not bang or not dll or not name:
+            raise ValueError('%s: [imports.argc] key %r must be "DLL!name"' % (source, key))
+        if value != "cdecl" and (type(value) is not int or not 0 <= value < 0xfe):
+            raise ValueError('%s: [imports.argc] %r must be a dword count below 254 or "cdecl"'
+                             % (source, key))
+
+
 def load_aux_modules(cfg, game_dir, source):
-    """[modules.aux.<key>]: a DLL the guest loads at run time (LoadLibrary) that
-    the kit translates as a second image and maps at its preferred base, so
+    """[modules.aux.<key>]: a DLL the guest loads (LoadLibrary or a static
+    import) that the kit translates as a second image and maps at `base`, so
     its code runs as translated code and its exports answer GetProcAddress.
     Keys: name (the file name the guest asks for), path (developer copy,
-    relative to game.toml), sha256, base and size (the PE's preferred base
-    and SizeOfImage), listings (Ghidra export directory, relative), and
+    relative to game.toml), sha256, base and size (where it is mapped - the
+    loader and the translator relocate a DLL that prefers another base - and
+    at least its SizeOfImage), listings (Ghidra export directory at the
+    PE's preferred base, relative), and
     function_alignment (default 4). [game] guest_size must reach past every
     module; the default arena is 0x10000000."""
     game = cfg["game"]

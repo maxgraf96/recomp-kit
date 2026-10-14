@@ -100,6 +100,28 @@ uint32_t imports_data_count();
 uint64_t imports_call_count();
 void imports_call_leaves_surfaces();
 
+// What an import no shim describes pops (runtime/import_argc.cpp): the game's
+// game.toml [imports.argc], the Win32 API table, the C runtimes' cdecl
+// convention, an MSVC-decorated C++ name. ARGC_UNKNOWN when nothing says.
+// imports_alloc_trampoline asks this after the shim registry and a
+// _name@bytes decoration.
+uint8_t imports_infer_argc(const char *dll, const char *name);
+// The calling convention spelled in an MSVC C++ name: ARGC_CDECL, the dwords a
+// __thiscall/__stdcall callee pops, or ARGC_UNKNOWN (data, a class by value,
+// anything not measured).
+uint8_t imports_msvc_argc(const char *mangled);
+// The Win32 API table alone: ARGC_UNKNOWN when it has no entry.
+uint8_t imports_known_win32_argc(const char *dll, const char *name);
+size_t imports_known_win32_count();
+bool imports_known_win32_sorted();
+// The documented name of import `ordinal` from a DLL whose ordinals are part of
+// its ABI (ws2_32 and wsock32, which disagree about 10-12), or nullptr.
+const char *imports_ordinal_name(const char *dll, uint32_t ordinal);
+// True when a shim table registered dll!name (with or without a function).
+bool imports_has_shim(const char *dll, const char *name);
+// Every registered shim with an explicit stdcall count, for consistency checks.
+void imports_for_each_registered(void (*fn)(const ImportShim &, void *), void *user);
+
 // Trampoline for an already-known import, or 0. Does not allocate.
 uint32_t imports_trampoline_for(const char *dll, const char *name);
 // Like imports_trampoline_for but allocates on demand when the name is one of

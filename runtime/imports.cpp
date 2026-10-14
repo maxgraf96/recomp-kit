@@ -129,6 +129,15 @@ bool imports_has_dll(const char *dll_lower) {
     return registered_dlls().count(lower_dll(dll_lower)) != 0;
 }
 
+bool imports_has_shim(const char *dll, const char *name) {
+    return registry().count(key_of(dll, name)) != 0;
+}
+
+void imports_for_each_registered(void (*fn)(const ImportShim &, void *), void *user) {
+    for (const auto &kv : registry())
+        fn(kv.second, user);
+}
+
 uint32_t imports_alloc_trampoline(const char *dll, const char *name, void (*fn)(X86 *),
                                   uint8_t argc_stdcall) {
     std::string k = key_of(dll, name);
@@ -159,6 +168,8 @@ uint32_t imports_alloc_trampoline(const char *dll, const char *name, void (*fn)(
     }
     if (t.argc == ARGC_UNKNOWN)
         t.argc = decorated_stdcall_args(name);
+    if (t.argc == ARGC_UNKNOWN)
+        t.argc = imports_infer_argc(dll, name);
 
     uint32_t idx = (uint32_t)tramps().size();
     if (idx >= TRAMP_MAX) {
