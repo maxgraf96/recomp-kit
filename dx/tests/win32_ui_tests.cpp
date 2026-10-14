@@ -434,6 +434,14 @@ static void test_translate() {
     check(user(c, "PeekMessageA", {msg, 0, 0, 0, 1}) && rd32(msg + 8) == '!',
           "Shift+1 is '!' on the US layout");
     host_set_key_state(0x10, false);
+    host_set_key_state(0x14, true); // Caps Lock on
+    check(user(c, "GetKeyState", {0x14}) == 1, "Caps Lock reads as toggled, not held");
+    user(c, "PostMessageA", {hwnd, 0x0100, 'Q', 0x00100001u});
+    user(c, "PeekMessageA", {msg, 0, 0, 0, 1});
+    user(c, "TranslateMessage", {msg});
+    check(user(c, "PeekMessageA", {msg, 0, 0, 0, 1}) && rd32(msg + 8) == 'Q',
+          "Caps Lock makes capitals");
+    host_set_key_state(0x14, false);
     host_set_key_state(0x11, true);
     user(c, "PostMessageA", {hwnd, 0x0100, 'C', 0x002e0001u});
     user(c, "PeekMessageA", {msg, 0, 0, 0, 1});

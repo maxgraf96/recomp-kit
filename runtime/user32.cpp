@@ -1655,8 +1655,14 @@ void u_GetAsyncKeyState(X86 *c) {
     uint32_t vk = arg(c, 0);
     set_eax(c, vk < 256 && g_key_state[vk] ? 0x8000 : 0);
 }
+// The high bit is "down", the low bit "toggled". A Mac reports Caps Lock as a
+// state, not a key held down, so VK_CAPITAL answers toggled rather than down.
 void u_GetKeyState(X86 *c) {
     uint32_t vk = arg(c, 0);
+    if (vk == 0x14) {
+        set_eax(c, g_key_state[0x14] ? 1u : 0u);
+        return;
+    }
     set_eax(c, vk < 256 && g_key_state[vk] ? 0xff80 : 0);
 }
 void u_ShowCursor(X86 *c) {
