@@ -49,6 +49,14 @@ For instruction-translation changes, use the original differential harness:
 .venv/bin/python -m pytest tools/recomp/tests/test_translate_hooks.py
 ```
 
+The x87 has its own: `test_x87_conformance.py` translates every x87
+operation and runs recorded hardware vectors through it, requiring every
+non-transcendental result bit for bit (`x87_conformance.py --vectors V
+--results R` takes a larger corpus; `tools/recomp/tests/data/x87/README.md`
+has the format); `test_x87_fma.py` checks that no fused multiply-add reaches
+x87 code (`tools/recomp/check_fma.py` scans any build's objects); and
+`tools/recomp/x87_bench.py` times the arithmetic paths.
+
 Five translator suites need no game and run in `tools/test.py`:
 `test_translate_insns.py` runs synthetic listings of individual instruction
 forms through the translator, compiles them with the test harness and

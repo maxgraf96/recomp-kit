@@ -25,7 +25,9 @@ zero-fills data tails and replaces import-table entries with runtime trampolines
 `imports.cpp` decodes calls and dispatches the original calling conventions.
 
 `runtime/x86.h` defines the register file, flags, x87 state and
-instruction helpers used by generated functions. Functions retain stable guest
+instruction helpers used by generated functions. The x87 is exact: its section
+of `x86.h` explains the double fast path and when `runtime/x87.c` takes over
+with 80-bit SoftFloat arithmetic. Functions retain stable guest
 addresses for dispatch, hooks and diagnostics. Those addresses are identifiers,
 not host pointers and not evidence of human-recovered intent.
 

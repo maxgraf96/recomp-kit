@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Make the x87 exact. A register is a double while its value is one and an
+  80-bit extended otherwise; arithmetic at 53-bit precision and
+  round-to-nearest stays the host's double operation, behind a test of the
+  result's exponent, and everything else - other precisions and rounding
+  modes, results beyond the double range, NaN operands, extended registers -
+  runs through Berkeley SoftFloat 3e (`third_party/softfloat`). Loads,
+  stores, integer conversions, constants, compares, FPREM's partial
+  remainder, FXTRACT, FSCALE and FNSAVE/FRSTOR follow the hardware. Over
+  1.15 million recorded hardware vectors under six control words, every
+  non-transcendental result is identical
+  (`tools/recomp/tests/x87_conformance.py`); the transcendental instructions
+  are still the double libm functions. msvcrt's `_controlfp`, `_control87`,
+  `__control87_2`, `_statusfp`, `_clearfp` and `_fpreset` work on the thread's
+  x87 state, and `sqrt`, `_CIsqrt` and `_ftol` are exact under any control
+  word. Generated code builds with `-ffp-contract=off`, which
+  `tools/recomp/check_fma.py` verifies.
+
 - Take a function database as the authority on what is code
   (`[translate] function_db`, `[modules.aux.<key>] function_db`, schema
   `recomp-funcdb/1`): code ranges replace section flags, its entry points and
