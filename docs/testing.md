@@ -51,8 +51,14 @@ Indeo 5/AVI and Vorbis/Ogg components and uses Wine to load `dx_tests.exe` with
 only its three copied FFmpeg DLLs. `RECOMP_TEST_AUDIO=/path/to/track.ogg` exercises
 the CD-music decoder and requires nonzero PCM; CI generates its own sine tone.
 `RECOMP_TEST_AVI=/path/to/movie.avi` exercises the guest AVIFile/Indeo imports,
-requiring changing nonblack frames. Movie probes use private local inputs,
-never uploaded. These headless probes do not open an audio device or game window.
+requiring changing nonblack frames. `RECOMP_TEST_MILES=/dir` loads every `.wav` and
+`.mp3` in a directory through the Miles calls a mixer plugin makes (load,
+granularity, rate, ms length, play), checks each WAVE against its own header
+and each MP3 against a second, cached load, and prints the census by format.
+`RECOMP_TEST_BINK_AV=/path/to/movie.bik` plays a whole Bink movie through the
+imports with the device consuming audio at the picture's rate, and fails on an
+underrun or an audio track much shorter than the picture. Movie and sound
+probes use private local inputs, never uploaded. These headless probes do not open an audio device or game window.
 
 For instruction-translation changes, use the original differential harness:
 

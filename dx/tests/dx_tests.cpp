@@ -42,6 +42,7 @@
 #include <vector>
 #include <string>
 #include <thread>
+#include <chrono>
 
 // ---------------------------------------------------------------------------
 // Captured host callbacks
@@ -13341,6 +13342,249 @@ static void test_audio_asset(const char *path) {
            media.audio_channels(), peak);
 }
 
+static bool read_host_file(const std::string &path, std::vector<uint8_t> *out) {
+    FILE *f = fopen(path.c_str(), "rb");
+    if (!f)
+        return false;
+    out->clear();
+    uint8_t buf[65536];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0)
+        out->insert(out->end(), buf, buf + n);
+    fclose(f);
+    return true;
+}
+
+static std::string lower_extension(const std::string &name) {
+    size_t dot = name.rfind('.');
+    std::string ext = dot == std::string::npos ? std::string() : name.substr(dot);
+    for (char &ch : ext)
+        ch = (char)tolower((unsigned char)ch);
+    return ext;
+}
+
+// RECOMP_TEST_MILES=<directory>: every .wav and .mp3 directly in a private
+// directory through the Miles calls a mixer plugin makes when it loads a sound
+// and plays it. A WAVE's format and length are read independently from its
+// own header and must agree with what Miles reports; an MP3 must decode, and
+// load a second time from the cache. Prints the census by format.
+static void test_miles_assets(const char *dir) {
+    std::vector<std::string> names;
+    CHECK(os_listdir(
+              dir,
+              [](const char *name, void *user) {
+                  static_cast<std::vector<std::string> *>(user)->push_back(name);
+                  return 0;
+              },
+              &names) == 0);
+    std::sort(names.begin(), names.end());
+    cpu_reset();
+    mss32_fresh();
+    g_sample_tracking = true;
+    uint32_t drv = ail("_AIL_open_digital_driver@16", {22050, 16, 2, 1});
+    uint32_t h = ail("_AIL_allocate_sample_handle@4", {drv});
+    uint32_t again = ail("_AIL_allocate_sample_handle@4", {drv});
+    struct Tally {
+        uint32_t files = 0;
+        double seconds = 0, longest = 0;
+    };
+    std::map<std::string, Tally> census;
+    uint32_t failures = 0;
+    for (const std::string &name : names) {
+        std::string ext = lower_extension(name);
+        if (ext != ".wav" && ext != ".mp3")
+            continue;
+        std::vector<uint8_t> bytes;
+        if (!read_host_file(std::string(dir) + "/" + name, &bytes) || bytes.empty() ||
+            bytes.size() > (64u << 20)) {
+            ++failures;
+            continue;
+        }
+        uint32_t size = (uint32_t)bytes.size();
+        uint32_t img = heap_alloc(size);
+        uint32_t gname = heap_alloc((uint32_t)name.size() + 1);
+        if (!img || !gname) {
+            ++failures;
+            continue;
+        }
+        memcpy(g_mem + img, bytes.data(), size);
+        gm_put_str(gname, name.c_str(), (uint32_t)name.size() + 1);
+        auto t0 = std::chrono::steady_clock::now();
+        uint32_t ok = ail("_AIL_set_named_sample_file@20", {h, gname, img, size, 0});
+        double load_ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
+                .count();
+        uint32_t rate = ail("_AIL_sample_playback_rate@4", {h});
+        uint32_t gran = ail("_AIL_sample_granularity@4", {h});
+        ail("_AIL_sample_ms_position@12", {h, sc(0), sc(4)});
+        uint32_t total_ms = rd32(sc(0));
+        std::string key;
+        bool good = ok == 1 && rate > 0 && gran > 0 && total_ms > 0;
+        if (good && ext == ".wav") {
+            // The header, read here without the shim's parser.
+            uint32_t fmt_rate = 0, data = 0;
+            uint16_t tag = 0, channels = 0, align = 0, bits = 0;
+            for (size_t at = 12; at + 8 <= bytes.size();) {
+                uint32_t len;
+                memcpy(&len, &bytes[at + 4], 4);
+                if (!memcmp(&bytes[at], "fmt ", 4) && at + 24 <= bytes.size()) {
+                    memcpy(&tag, &bytes[at + 8], 2);
+                    memcpy(&channels, &bytes[at + 10], 2);
+                    memcpy(&fmt_rate, &bytes[at + 12], 4);
+                    memcpy(&align, &bytes[at + 20], 2);
+                    memcpy(&bits, &bytes[at + 22], 2);
+                } else if (!memcmp(&bytes[at], "data", 4)) {
+                    data = (uint32_t)std::min<uint64_t>(len, bytes.size() - at - 8);
+                    break;
+                }
+                at += 8 + (size_t)len + (len & 1);
+            }
+            good = tag == 1 && rate == fmt_rate && gran == align &&
+                   total_ms == (uint32_t)std::nearbyint(data * 1000.0 / ((double)align * rate));
+            char buf[96];
+            snprintf(buf, sizeof buf, "WAVE PCM %u-bit %u ch %u Hz", bits, channels, fmt_rate);
+            key = buf;
+        } else if (good) {
+            // A compressed image counts positions in its own bytes.
+            good = gran == 1 && ail("_AIL_set_named_sample_file@20", {again, gname, img, size, 0});
+            uint64_t decodes = 0, hits = 0;
+            mss32_decode_stats(&decodes, &hits);
+            char buf[96];
+            snprintf(buf, sizeof buf, "MP3 %u Hz", rate);
+            key = buf;
+            printf("Miles asset %s: %.1f s, %u Hz, decoded in %.0f ms (%llu decodes, %llu cache "
+                   "hits so far)\n",
+                   name.c_str(), total_ms / 1000.0, rate, load_ms, (unsigned long long)decodes,
+                   (unsigned long long)hits);
+        }
+        if (good) {
+            size_t plays = g_plays.size();
+            ail("_AIL_start_sample@4", {h});
+            good = g_plays.size() == plays + 1 && g_plays.back().rate == (int32_t)rate;
+            if (good)
+                key += g_plays.back().channels == 1 ? ", plays mono" : ", plays stereo";
+            ail("_AIL_end_sample@4", {h});
+        }
+        CHECK(good);
+        if (!good) {
+            ++failures;
+            printf(
+                "Miles asset %s: not loaded as Miles would (ok %u, %u Hz, granularity %u, %u ms)\n",
+                name.c_str(), ok, rate, gran, total_ms);
+        } else {
+            Tally &t = census[key];
+            ++t.files;
+            t.seconds += total_ms / 1000.0;
+            t.longest = std::max(t.longest, total_ms / 1000.0);
+        }
+        ail("_AIL_init_sample@4", {h});
+        ail("_AIL_init_sample@4", {again});
+        heap_free(img);
+        heap_free(gname);
+    }
+    for (const auto &kv : census)
+        printf("Miles census: %4u x %s, %.1f s in all, longest %.1f s\n", kv.second.files,
+               kv.first.c_str(), kv.second.seconds, kv.second.longest);
+    printf("Miles census: %u failure(s)\n", failures);
+    CHECK(!census.empty());
+    ail("_AIL_shutdown@0", {});
+    g_plays.clear();
+    g_sample_playing.clear();
+    g_sample_tracking = false;
+}
+
+// RECOMP_TEST_BINK_AV=<movie.bik>: a whole private movie through the Bink
+// imports as a player loop drives them, with the device consuming audio at
+// the picture's own rate. Reports how far the audio stayed ahead of the
+// picture, and how long it runs against it; an underrun before the audio
+// track ends, or a track much shorter than the picture, fails.
+static void test_bink_av_asset(const char *path) {
+#ifdef RECOMP_HAVE_FFMPEG
+    std::vector<uint8_t> head;
+    CHECK(read_host_file(path, &head) && head.size() >= 44);
+    if (head.size() < 44)
+        return;
+    uint32_t fps_num, fps_den;
+    memcpy(&fps_num, &head[28], 4); // Bink 1: frame rate dividend and divider
+    memcpy(&fps_den, &head[32], 4);
+    CHECK(fps_num > 0 && fps_den > 0);
+    if (!fps_num || !fps_den)
+        return;
+    std::string host = path;
+    size_t slash = host.find_last_of("/\\");
+    CHECK(slash != std::string::npos);
+    if (slash == std::string::npos)
+        return;
+    cpu_reset();
+    std::string previous_dir = win32_game_dir();
+    win32_init(host.substr(0, slash ? slash : 1));
+    uint32_t name = sc(0x100);
+    gm_put_str(name, host.substr(slash + 1).c_str(), 0x100);
+    g_plays.clear();
+    g_queues.clear();
+    g_queue_enabled = true;
+    g_queued_bytes = 0;
+    g_test_audio_pos = 0;
+    g_ch_streaming = false;
+    auto t0 = std::chrono::steady_clock::now();
+    uint32_t rec = call_shim(tramp("binkw32.dll", "_BinkOpen@8"), {name, 0});
+    CHECK(rec != 0);
+    if (!rec) {
+        g_queue_enabled = false;
+        win32_init(previous_dir);
+        return;
+    }
+    uint32_t frames = rd32(rec + 0x10);
+    double per_frame = (double)fps_den / fps_num, consumed = 0, least_lead = 1e9;
+    uint32_t block = 0, rate = 0, underruns = 0;
+    std::vector<double> starved; // audio submitted when a frame found less than a frame ahead
+    std::vector<std::pair<double, double>> leads; // (lead, submitted) at each frame
+    for (uint32_t frame = 1; frame <= frames; ++frame) {
+        call_shim(tramp("binkw32.dll", "_BinkDoFrame@4"), {rec});
+        if (!block && !g_plays.empty()) {
+            rate = (uint32_t)g_plays[0].rate;
+            block = (uint32_t)g_plays[0].channels * 2;
+        }
+        if (block) {
+            // The device plays one frame's worth while the frame is shown.
+            double submitted = g_plays[0].bytes + (double)g_queued_accepted;
+            double lead = (submitted - consumed) / (rate * (double)block);
+            if (lead < per_frame)
+                starved.push_back(submitted);
+            leads.push_back({lead, submitted});
+            consumed = std::min(submitted, consumed + per_frame * rate * block);
+            g_queued_bytes = (uint32_t)(submitted - consumed);
+            g_stream_played = (uint32_t)consumed;
+        }
+        call_shim(tramp("binkw32.dll", "_BinkNextFrame@4"), {rec});
+    }
+    double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    double video = frames * per_frame;
+    double total = block ? g_plays[0].bytes + (double)g_queued_accepted : 0;
+    double audio = block ? total / (rate * (double)block) : 0;
+    // Short of audio at the end of the track is the track ending; short of it
+    // with more still to come is the decoder falling behind.
+    for (double at : starved)
+        underruns += at < total ? 1 : 0;
+    for (const auto &l : leads) // the decoder's lead while the track still had more to give
+        if (l.second < total)
+            least_lead = std::min(least_lead, l.first);
+    printf("Bink A/V %s: %u frames at %u/%u fps = %.3f s of picture; audio %u Hz x %u ch = %.3f s "
+           "(%+.0f ms); least lead %.0f ms; %u underrun(s); decoded in %.1f s (%.0fx)\n",
+           host.substr(slash + 1).c_str(), frames, fps_num, fps_den, video, rate, block / 2, audio,
+           (audio - video) * 1000, least_lead * 1000, underruns, wall, wall > 0 ? video / wall : 0);
+    CHECK(block != 0);
+    CHECK_EQ(underruns, 0u);
+    CHECK(audio >= video - 0.25);
+    call_shim(tramp("binkw32.dll", "_BinkClose@4"), {rec});
+    g_queue_enabled = false;
+    win32_init(previous_dir);
+#else
+    (void)path;
+    printf("note: Bink A/V probe skipped; video decoding is disabled\n");
+#endif
+}
+
 int main() {
     // Unbuffered, not line buffered: Windows treats _IOLBF as full buffering
     // and a fail-fast abort drops everything queued, including the name of
@@ -13363,6 +13607,16 @@ int main() {
     }
     if (const char *path = getenv("RECOMP_TEST_AUDIO")) {
         test_audio_asset(path);
+        return g_failures ? 1 : 0;
+    }
+    if (const char *path = getenv("RECOMP_TEST_MILES")) {
+        test_miles_assets(path);
+        printf("%d checks, %d failures\n", g_checks, g_failures);
+        return g_failures ? 1 : 0;
+    }
+    if (const char *path = getenv("RECOMP_TEST_BINK_AV")) {
+        test_bink_av_asset(path);
+        printf("%d checks, %d failures\n", g_checks, g_failures);
         return g_failures ? 1 : 0;
     }
 
