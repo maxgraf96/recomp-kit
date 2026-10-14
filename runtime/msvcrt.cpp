@@ -10,9 +10,9 @@
 // table itself at detach, so it must be a block of this heap.
 //
 // Exception handling (_CxxThrowException, __CxxFrameHandler,
-// __CxxLongjmpUnwind, _except_handler3, _setjmp3, longjmp) and the x87
-// control word (_controlfp) are implemented elsewhere and not registered
-// here.
+// __CxxLongjmpUnwind, _except_handler3, _setjmp3, longjmp, terminate) lives
+// in msvc_eh.cpp, registered last from msvcrt_register(); the x87 control
+// word (_controlfp) is implemented elsewhere.
 #include "msvcrt_internal.h"
 #include "kernel32_internal.h"
 #include "win32.h"
@@ -650,8 +650,7 @@ void crt_RTDynamicCast(X86 *c) {
         }
     }
     if (!found && is_ref)
-        LOGW("msvcrt: dynamic_cast to a reference failed at %08x (std::bad_cast is not thrown)",
-             rd32(c->r[R_ESP]));
+        msvc_eh_throw_bad_cast(c); // does not return
     set_eax(c, found ? result : 0);
 }
 
@@ -725,4 +724,5 @@ void msvcrt_register() {
     crt::register_float();
     crt::register_time();
     crt::register_process();
+    msvc_eh_register(); // after register_process: its terminate() replaces the plain one
 }

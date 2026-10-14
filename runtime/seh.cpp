@@ -1,4 +1,5 @@
-// x86 registration-chain dispatch and host checkpoints for Delphi frames.
+// x86 registration-chain dispatch and host checkpoints: Delphi frames, and
+// MSVC frames (msvc_eh.cpp) resumed at a catch continuation or __except block.
 #include "seh.h"
 #include "imports.h"
 #include "memory.h"
@@ -6,6 +7,9 @@
 #include "profile.h"
 // kernel32.cpp: a guest exception unwinding past an atomic stretch ends it.
 void sched_atomic_unwind_to_esp(uint32_t esp);
+// msvc_eh.cpp: catch blocks in progress belong to the same thread state.
+void msvc_eh_reset(X86 *c);
+void msvc_eh_callback_leave(X86 *c, uint32_t depth);
 #include <cstdlib>
 #include <cstdio>
 #include <map>
@@ -31,6 +35,10 @@ struct SehFrame {
     bool active_landing;
     bool retired;
     bool finished;
+    // MSVC: retired by the frame's own unlink, and resumed by running the
+    // continuation from the checkpoint (recomp_seh_resume) instead of after it.
+    bool msvc;
+    uint32_t resume_target;
 };
 
 // Heap records outlive guest callbacks, including those abandoned by longjmp.
@@ -188,6 +196,33 @@ uint32_t call_handler(X86 *c, uint32_t reg, SehDispatch *d) {
         fatal_abort();
     }
     return disposition;
+}
+
+// RtlUnwind's walk: every handler above `target` (the whole chain for 0)
+// with EXCEPTION_UNWINDING, each registration unlinked as its handler returns.
+void unwind_chain(X86 *c, uint32_t target, uint32_t record) {
+    SehDispatch *d = new_dispatch(c, record);
+    if (!record) {
+        wr32(d->record, 0xc0000027u); // STATUS_UNWIND
+        wr32(d->record + 12, rd32(c->r[R_ESP]));
+    }
+    wr32(d->record + 4, rd32(d->record + 4) | 2u);
+    ChainWalk walk;
+    uint32_t reg = chain_head(c);
+    uint32_t end = target ? target : END_CHAIN;
+    while (reg != end) {
+        if (reg == END_CHAIN)
+            invalid_chain(c, reg, target, "unwind target is absent from chain");
+        walk.visit(c, reg, target);
+        uint32_t next = rd32(reg);
+        call_handler(c, reg, d);
+        wr32(c->fs_base, next);
+        reg = next;
+    }
+    if (target)
+        validate_registration(c, target, target);
+    wr32(c->fs_base, end);
+    finish_dispatch(d);
 }
 } // namespace
 
@@ -363,6 +398,14 @@ void recomp_seh_intercept(X86 *c, uint32_t target) {
 void recomp_seh_land(X86 *c) {
     trace_frames(c, "landing");
     SehFrame *landing = state.landing;
+    if (landing && landing->cpu == c && landing->resume_target) {
+        // An MSVC continuation: the registers are set; the establishing
+        // activation runs the rest of itself, its RET included, from here.
+        // The record stays: the frame is live until it unlinks itself.
+        uint32_t target = recomp_seh_take_resume(c);
+        recomp_call(c, target);
+        return;
+    }
     if (!landing || landing->cpu != c || !landing->finished)
         invalid_chain(c, 0, c->eip, "landing without a checkpoint");
     size_t depth = landing->dispatch_depth;
@@ -383,6 +426,7 @@ void recomp_seh_land(X86 *c) {
 }
 
 void recomp_seh_callback_leave(X86 *c, uint32_t depth) {
+    msvc_eh_callback_leave(c, depth);
     for (size_t i = state.frames.size(); i-- > 0;) {
         SehFrame *f = state.frames[i];
         if (f->cpu != c)
@@ -402,6 +446,7 @@ void recomp_seh_callback_leave(X86 *c, uint32_t depth) {
 }
 
 void recomp_seh_reset(X86 *c) {
+    msvc_eh_reset(c);
     if (c)
         state.diagnostics.erase(c);
     else
@@ -425,7 +470,10 @@ void recomp_seh_reset(X86 *c) {
     }
 }
 
-int recomp_seh_raise(X86 *c, uint32_t code, uint32_t flags, uint32_t nargs, uint32_t args) {
+// The record's ExceptionAddress and the context's EIP: RaiseException's
+// return address for a software raise, the faulting instruction for a fault.
+static int raise_at(X86 *c, uint32_t code, uint32_t flags, uint32_t nargs, uint32_t args,
+                    uint32_t address) {
     recomp_seh_validate_chain(c, "raise", "");
     X86 saved = *c;
     if (nargs > 15)
@@ -435,10 +483,11 @@ int recomp_seh_raise(X86 *c, uint32_t code, uint32_t flags, uint32_t nargs, uint
     SehDispatch *d = new_dispatch(c);
     wr32(d->record, code);
     wr32(d->record + 4, flags);
-    wr32(d->record + 12, rd32(c->r[R_ESP]));
+    wr32(d->record + 12, address);
     wr32(d->record + 16, nargs);
     for (uint32_t i = 0; i < nargs; ++i)
         wr32(d->record + 20 + i * 4, rd32(args + i * 4));
+    wr32(d->context + 0xb8, address);
     ChainWalk walk;
     for (uint32_t reg = chain_head(c); reg != END_CHAIN;) {
         walk.visit(c, reg, 0);
@@ -461,6 +510,15 @@ int recomp_seh_raise(X86 *c, uint32_t code, uint32_t flags, uint32_t nargs, uint
     return intercepted;
 }
 
+int recomp_seh_raise(X86 *c, uint32_t code, uint32_t flags, uint32_t nargs, uint32_t args) {
+    return raise_at(c, code, flags, nargs, args, rd32(c->r[R_ESP]));
+}
+
+int recomp_seh_raise_at(X86 *c, uint32_t code, uint32_t flags, uint32_t nargs, uint32_t args,
+                        uint32_t address) {
+    return raise_at(c, code, flags, nargs, args, address);
+}
+
 // Delphi passes its own next instruction as TargetIp. Returning through the
 // import shim performs that transfer; only its later computed JMP abandons
 // the dispatcher and lands on the saved host checkpoint.
@@ -468,33 +526,155 @@ void recomp_seh_unwind(X86 *c, uint32_t target, uint32_t target_ip, uint32_t rec
                        uint32_t retval) {
     recomp_seh_validate_chain(c, "unwind", "");
     trace_frames(c, "unwind begin");
-    SehDispatch *d = new_dispatch(c, record);
-    if (!record) {
-        wr32(d->record, 0xc0000027u); // STATUS_UNWIND
-        wr32(d->record + 12, rd32(c->r[R_ESP]));
-    }
-    wr32(d->record + 4, rd32(d->record + 4) | 2u);
-    ChainWalk walk;
-    uint32_t reg = chain_head(c);
-    uint32_t end = target ? target : END_CHAIN;
-    while (reg != end) {
-        if (reg == END_CHAIN)
-            invalid_chain(c, reg, target, "unwind target is absent from chain");
-        walk.visit(c, reg, target);
-        uint32_t next = rd32(reg);
-        call_handler(c, reg, d);
-        wr32(c->fs_base, next);
-        reg = next;
-    }
-    if (target)
-        validate_registration(c, target, target);
-    wr32(c->fs_base, end);
+    unwind_chain(c, target, record);
     state.g_seh_pending_target = target;
     state.pending_cpu = target ? c : nullptr;
     c->r[R_EAX] = retval;
     LOGV("RtlUnwind: registration=%08x target_ip=%08x retval=%08x", target, target_ip, retval);
     trace_frames(c, "unwind ready");
-    finish_dispatch(d);
+}
+
+// MSVC's global unwind (_global_unwind2, and the C++ frame handler before a
+// catch): RtlUnwind's handler walk without arming a Delphi landing. The
+// catch continuation is reached through recomp_seh_resume instead.
+void recomp_seh_global_unwind(X86 *c, uint32_t target, uint32_t record) {
+    recomp_seh_validate_chain(c, "global unwind", "");
+    unwind_chain(c, target, record);
+}
+
+// ---------------------------------------------------------------------------
+// MSVC frames. The translator emits recomp_eh_frame_enter where a frame with
+// try blocks or an __except scope links its registration (MOV FS:[0],ESP),
+// and recomp_eh_frame_unlink after each store that unlinks it. A catch or
+// __except handler that accepts an exception resumes the establishing
+// activation through that checkpoint: longjmp to it, and run the
+// continuation from there (recomp_seh_land), so the host stack is no deeper
+// after a caught exception than before it, however often a loop throws.
+// ---------------------------------------------------------------------------
+static SehFrame *new_frame(X86 *c, uint32_t reg, bool msvc) {
+    SehFrame *f = new SehFrame{};
+    f->cpu = c;
+    f->registration = reg;
+    f->generation = ++state.generation;
+    f->establishing_eip = c->eip;
+    f->profile_depth = recomp_profile_depth();
+    f->dispatch_depth = state.dispatches.size();
+    f->callback_depth = recomp_callback_depth();
+    f->msvc = msvc;
+    state.frames.push_back(f); // individually allocated: growing the vector cannot move env
+    return f;
+}
+
+jmp_buf *recomp_eh_frame_enter(X86 *c) {
+    recomp_seh_validate_chain(c, "eh enter", "");
+    uint32_t reg = chain_head(c);
+    validate_registration(c, reg, 0);
+    SehFrame *f = new_frame(c, reg, true);
+    LOGV("EH enter: registration=%08x established=%08x handler=%08x", reg, f->establishing_eip,
+         rd32(reg + 4));
+    return &f->env;
+}
+
+jmp_buf *recomp_seh_frame_enter_at(X86 *c, uint32_t reg) {
+    validate_registration(c, reg, 0);
+    return &new_frame(c, reg, true)->env;
+}
+
+// A frame's epilogue stores its saved `next` into FS:[0]. Every MSVC record
+// below the new head has left the chain, whichever activation made it: this
+// one, or callees a longjmp or a caught exception abandoned.
+void recomp_eh_frame_unlink(X86 *c) {
+    recomp_seh_validate_chain(c, "eh unlink", "");
+    uint32_t head = chain_head(c);
+    for (size_t i = state.frames.size(); i-- > 0;) {
+        SehFrame *f = state.frames[i];
+        if (f->cpu != c || !f->msvc || f->registration >= head || state.landing == f)
+            continue;
+        LOGV("EH unlink: registration=%08x established=%08x head=%08x", f->registration,
+             f->establishing_eip, head);
+        state.frames.erase(state.frames.begin() + i);
+        delete f;
+    }
+}
+
+void recomp_seh_frame_drop(X86 *c, uint32_t reg) {
+    for (size_t i = state.frames.size(); i-- > 0;) {
+        SehFrame *f = state.frames[i];
+        if (f->cpu == c && f->registration == reg) {
+            if (state.landing == f)
+                state.landing = nullptr;
+            state.frames.erase(state.frames.begin() + i);
+            delete f;
+            return;
+        }
+    }
+}
+
+int recomp_seh_has_checkpoint(X86 *c, uint32_t reg) {
+    for (size_t i = state.frames.size(); i-- > 0;)
+        if (state.frames[i]->cpu == c && state.frames[i]->registration == reg &&
+            !state.frames[i]->orphan)
+            return 1;
+    return 0;
+}
+
+uint32_t recomp_seh_dispatch_depth(void) {
+    return (uint32_t)state.dispatches.size();
+}
+
+void recomp_seh_dispatch_truncate(uint32_t depth) {
+    while (state.dispatches.size() > depth) {
+        release_dispatch(state.dispatches.back());
+        state.dispatches.pop_back();
+    }
+}
+
+// The caller has already unwound the chain, run the frame's own cleanup and
+// set the guest registers the continuation expects (EBP, ESP, FS:[0]). What
+// is left is the host side: drop every checkpoint newer than the target's
+// (their activations are abandoned), the callbacks, profile entries, hook
+// invocations and dispatches made since, and longjmp. The checkpoint runs
+// `target` as a tail call of the establishing activation.
+void recomp_seh_resume(X86 *c, uint32_t reg, uint32_t target) {
+    SehFrame *landing = nullptr;
+    size_t at = 0;
+    for (size_t i = state.frames.size(); i-- > 0;)
+        if (state.frames[i]->cpu == c && state.frames[i]->registration == reg &&
+            !state.frames[i]->orphan) {
+            landing = state.frames[i];
+            at = i;
+            break;
+        }
+    if (!landing)
+        invalid_chain(c, reg, target,
+                      "the frame that accepted the exception has no checkpoint (its "
+                      "establishing MOV FS:[0],ESP was not translated as an MSVC frame site)");
+    for (size_t i = state.frames.size(); i-- > at + 1;)
+        if (state.frames[i]->cpu == c) {
+            delete state.frames[i];
+            state.frames.erase(state.frames.begin() + i);
+        }
+    LOGV("EH resume: registration=%08x target=%08x ESP=%08x EBP=%08x", reg, target, c->r[R_ESP],
+         c->r[R_EBP]);
+    mods_hooks_unwind_to_esp(c->r[R_ESP]);
+    sched_atomic_unwind_to_esp(c->r[R_ESP]);
+    recomp_profile_truncate(landing->profile_depth);
+    recomp_callback_truncate(landing->callback_depth);
+    recomp_seh_dispatch_truncate((uint32_t)landing->dispatch_depth);
+    landing->resume_target = target;
+    c->eip = target;
+    state.landing = landing;
+    longjmp(landing->env, 1);
+}
+
+uint32_t recomp_seh_take_resume(X86 *c) {
+    SehFrame *landing = state.landing;
+    if (!landing || landing->cpu != c || !landing->resume_target)
+        invalid_chain(c, 0, c->eip, "resumed checkpoint without a continuation");
+    state.landing = nullptr;
+    uint32_t target = landing->resume_target;
+    landing->resume_target = 0;
+    return target;
 }
 
 #ifdef POPM_TESTING

@@ -18,6 +18,11 @@
 #include <string>
 #include <vector>
 
+// Exception handling (msvc_eh.cpp): its shims, and the std::bad_cast a
+// failed dynamic_cast to a reference throws. The throw does not return.
+void msvc_eh_register();
+void msvc_eh_throw_bad_cast(X86 *c);
+
 namespace crt {
 
 // ---------------------------------------------------------------------------

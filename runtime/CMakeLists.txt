@@ -6,7 +6,7 @@ set(POP_RUNTIME_SOURCES
   misc.cpp misc_dlls.cpp comctl32.cpp gdi32.cpp gdi32_draw.cpp gdi32_text.cpp gdi32_truetype.cpp msimg32.cpp
   media_foundation.cpp layout.cpp interp.cpp discovery.cpp dispatch.cpp
   msvcrt.cpp msvcrt_heap.cpp msvcrt_locale.cpp msvcrt_string.cpp msvcrt_format.cpp msvcrt_stdio.cpp
-  msvcrt_math.cpp msvcrt_float.cpp msvcrt_time.cpp msvcp60.cpp
+  msvcrt_math.cpp msvcrt_float.cpp msvcrt_time.cpp msvcp60.cpp msvc_eh.cpp
   x87.c ${POP_ROOT}/third_party/softfloat/softfloat_x87.c)
 
 # The exact x87's out-of-line half and the part of SoftFloat 3e it uses
@@ -80,6 +80,15 @@ pop_optimize(seh_tests 1)
 pop_test_binary(seh_tests)
 add_test(NAME seh_tests COMMAND seh_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(seh_tests PROPERTIES LABELS nogame ENVIRONMENT RECOMP_PROFILE=1)
+# MSVC C++ and structured exception handling (msvc_eh.cpp) over synthetic
+# guest frames; spawns itself for the terminate and abort paths.
+add_executable(eh_tests tests/eh_tests.cpp)
+target_link_libraries(eh_tests PRIVATE recomp_platform recomp_runtime_testing)
+target_compile_options(eh_tests PRIVATE ${POP_WARN_HOST})
+pop_optimize(eh_tests 1)
+pop_test_binary(eh_tests)
+add_test(NAME eh_tests COMMAND eh_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(eh_tests PROPERTIES LABELS nogame TIMEOUT 120)
 
 add_executable(runtime_tests tests/runtime_tests.cpp tests/stub_recomp_call.cpp)
 target_link_libraries(runtime_tests PRIVATE recomp_platform recomp_runtime recomp_dx)

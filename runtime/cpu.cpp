@@ -348,9 +348,12 @@ void recomp_unknown_call(X86 *c, uint32_t target) {
 }
 
 // DIV/IDIV with a zero divisor or an out-of-range quotient. On real hardware
-// this raises #DE; there is no SEH here, so it is reported and the registers
-// are left untouched.
+// this raises #DE, which Windows delivers as EXCEPTION_INT_DIVIDE_BY_ZERO to
+// the guest's own handlers (an __except, or catch(...) as MSVC 6 compiled it);
+// one that accepts it resumes elsewhere and never returns here. Unhandled, it
+// is reported and the registers are left untouched.
 void recomp_div_error(X86 *c, uint32_t addr) {
+    recomp_seh_raise_at(c, 0xc0000094u, 0, 0, 0, addr);
     // Strict: Windows raises #DE and an unhandled one ends the process, so a
     // run that carried on would be computing with registers it never had.
     if (recomp_strict())
