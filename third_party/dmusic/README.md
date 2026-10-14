@@ -1,0 +1,60 @@
+# GothicKit/dmusic, vendored
+
+A DirectMusic implementation in C11: it reads DirectMusic Producer files
+(segments `.sgt`, styles `.sty`, bands, DLS collections `.dls`), composes the
+music from styles, chords and grooves, and renders it with a modified
+TinySoundFont. `dx/dmusic.cpp` puts the DirectMusic COM interfaces a game
+calls in front of it.
+
+| | |
+| --- | --- |
+| upstream | https://github.com/GothicKit/dmusic |
+| commit | `b73b270b94714b8ec8d9d0b2a9f3a5c445da52d1` (2026-03-02, `main`) |
+| licence | MIT (Modern Variant), see `LICENSE.md`; `vendor/TinySoundFont` is GothicKit's modified copy of TinySoundFont (MIT, Bernhard Schelling) under the same terms |
+
+## What is here
+
+From the upstream tree at that commit, byte for byte:
+
+- `LICENSE.md`;
+- `README.md`, renamed `UPSTREAM-README` (its links point into parts of the
+  tree that are not copied here);
+- `include/dmusic.h`;
+- every file under `src/` (`io/`, `thread/`, `util/` included);
+- `vendor/TinySoundFont/tsf.h` and `tsf.c`.
+
+Left out: the CMake build (the kit builds the library itself, below), `docs/`,
+`examples/` (a player built on miniaudio), `support/` (build helpers, a logo
+and an MP3 the examples play) and the CI configuration.
+
+## How the kit builds it
+
+`third_party/dmusic/CMakeLists.txt` compiles `src/` and the TinySoundFont copy
+as one object library, `recomp_dmusic`, which `recomp_dx` links:
+
+- C11, the C11-threads shim in `src/thread/` (Apple's C library has no
+  `<threads.h>`), `DM_STATIC=1`, warnings off for this directory only.
+- `recomp/dm_prefix.h` is force-included in every file. It renames each
+  external symbol the library defines but does not export as `Dm*`, chiefly
+  TinySoundFont's `tsf_*`: the host links the kit's own, unmodified
+  TinySoundFont (`third_party/tsf`, for MIDI) into the same executable, and
+  the two copies have different structures behind the same names.
+- `recomp/` holds only kit files; nothing under it is upstream's.
+
+## Local patches
+
+Each is its own commit on the kit's history touching only files above, with
+the reason in its message, so that it can go upstream as it is:
+
+```sh
+git log --oneline -- third_party/dmusic/src third_party/dmusic/include third_party/dmusic/vendor
+git format-patch --relative=third_party/dmusic <commit>^!   # one upstream-ready patch
+```
+
+| Patch | Why |
+| --- | --- |
+| (none yet) | |
+
+To move to a newer upstream commit, replace the files listed under *What is
+here*, re-apply the patches that upstream has not taken, and run
+`tools/test.py --native` (`dmusic_tests`).

@@ -20,6 +20,16 @@ TinySoundFont (third_party/tsf/tsf.h) is Copyright (C) 2017-2023 Bernhard Schell
 licensed under the MIT License; see third_party/tsf/LICENSE. It renders a game's
 own SoundFont, which is not included.
 
+dmusic (third_party/dmusic), upstream commit
+b73b270b94714b8ec8d9d0b2a9f3a5c445da52d1, is Copyright (C) 2024 GothicKit
+Contributors, licensed under the MIT License (Modern Variant); see
+third_party/dmusic/LICENSE.md, and README.md there for the files and the local
+patches. Its vendor/TinySoundFont is GothicKit's modified copy of
+TinySoundFont by Bernhard Schelling (MIT). It plays a game's own DirectMusic
+segments, styles and DLS instruments, which are not included; General MIDI
+instruments come from the player's own system bank or the GeneralUser GS bank
+below.
+
 minimp3 (third_party/minimp3/minimp3.h) by Lion (lieff) is dedicated to the
 public domain under CC0 1.0; see third_party/minimp3/LICENSE. It decodes a
 game's own MP3 music, which is not included.
