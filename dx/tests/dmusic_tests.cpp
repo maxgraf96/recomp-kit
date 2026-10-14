@@ -678,6 +678,29 @@ static void test_closedown() {
     CHECK_EQ(com_live_count(), live);
 }
 
+// A performance holds the DirectSound it is given, as DirectMusic does, and
+// given none, the one the audio libraries share; CloseDown lets it go.
+static void test_directsound() {
+    ComObj *shared = com_this(dsound_shared_device());
+    CHECK(shared != nullptr);
+    if (!shared)
+        return;
+    const int32_t before = shared->refs;
+    Music m = open_music(); // Init(&dm, NULL, NULL)
+    CHECK_EQ(shared->refs, before + 1);
+    close_music(m);
+    CHECK_EQ(shared->refs, before);
+    // Handed one explicitly, it holds that one.
+    const uint32_t perf = cocreate(CLSID_Performance, IID_Performance);
+    wr32(sc(0x20), 0);
+    CHECK_EQ(call_method(perf, PERF_INIT, {sc(0x20), dsound_shared_device(), 0}), S_OK_);
+    CHECK_EQ(shared->refs, before + 1);
+    CHECK_EQ(call_method(perf, PERF_CLOSEDOWN, {}), S_OK_);
+    CHECK_EQ(shared->refs, before);
+    call_method(rd32(sc(0x20)), RELEASE, {});
+    CHECK_EQ(call_method(perf, RELEASE, {}), 0u);
+}
+
 // The audio thread renders while a guest thread plays, transitions, changes
 // the groove and the volume and stops, as a game's music thread does.
 static void test_threads() {
@@ -768,6 +791,7 @@ int main() {
         {"no audio output", test_no_output},
         {"notifications", test_notifications},
         {"close down", test_closedown},
+        {"DirectSound", test_directsound},
         {"render thread", test_threads},
     };
     for (const auto &t : tests) {

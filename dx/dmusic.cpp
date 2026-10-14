@@ -463,6 +463,8 @@ struct Engine {
 struct Performance {
     std::shared_ptr<Engine> engine;
     uint32_t directmusic = 0; // IDirectMusic object, one reference held
+    uint32_t directsound =
+        0; // the IDirectSound it was given (or the shared one), one reference held
     std::vector<uint32_t> ports;
     bool initialised = false, closed = false;
     bool auto_download = false;
@@ -476,6 +478,7 @@ struct Performance {
 
 struct DirectMusicObj {
     bool active = false;
+    uint32_t directsound = 0; // SetDirectSound's, one reference held
 };
 
 std::map<uint32_t, Loader> g_loaders;
@@ -515,6 +518,18 @@ bool hand_out(uint32_t out, ComObj *o, ComIface iface) {
 void release_id(uint32_t id) {
     if (ComObj *o = com_get(id))
         com_release(o);
+}
+
+// The DirectSound a performance or IDirectMusic is handed, held as DirectMusic
+// holds it: one reference. Null means the one the audio libraries share
+// (dsound_shared_device), which is what DirectMusic would otherwise open for
+// itself. The synthesizer does not play through it: the host mixes its output.
+uint32_t hold_directsound(uint32_t guest_pointer) {
+    ComObj *ds = com_this(guest_pointer ? guest_pointer : dsound_shared_device(), IF_NONE);
+    if (!ds)
+        return 0;
+    com_addref(ds);
+    return ds->id;
 }
 
 // ===========================================================================
@@ -1804,7 +1819,27 @@ ComObj *directmusic_create() {
 }
 
 void directmusic_destroy(ComObj *o) {
-    g_dms.erase(o->id);
+    auto it = g_dms.find(o->id);
+    if (it == g_dms.end())
+        return;
+    const uint32_t ds = it->second.directsound;
+    g_dms.erase(it);
+    if (ds)
+        release_id(ds);
+}
+
+// SetDirectSound(pDirectSound, hWnd)
+void DM_SetDirectSound(X86 *c) {
+    DirectMusicObj *d = find(g_dms, com_this_arg(c, IF_DIRECTMUSIC));
+    if (!d) {
+        com_ret(c, E_POINTER);
+        return;
+    }
+    const uint32_t held = hold_directsound(arg(c, 1));
+    if (d->directsound)
+        release_id(d->directsound);
+    d->directsound = held;
+    com_ret(c, S_OK);
 }
 
 // ===========================================================================
@@ -1830,7 +1865,8 @@ Performance *live_perf(X86 *c) {
 }
 
 // Init(ppDirectMusic, pDirectSound, hWnd): the synthesizer, at the rate the
-// host mixes at, and the IDirectMusic the ports come from.
+// host mixes at, the IDirectMusic the ports come from, and a reference to the
+// DirectSound given (or, given none, the shared one).
 void Perf_Init(X86 *c) {
     ComObj *po = com_this_arg(c, IF_DMPERFORMANCE);
     Performance *p = find(g_perfs, po);
@@ -1873,6 +1909,7 @@ void Perf_Init(X86 *c) {
         }
     }
     p->directmusic = dm->id;
+    p->directsound = hold_directsound(arg(c, 2));
     p->engine = engine;
     p->start_ns = os_monotonic_ns();
     p->initialised = true;
@@ -2370,6 +2407,9 @@ void close_down(Performance &p) {
     if (p.directmusic)
         release_id(p.directmusic);
     p.directmusic = 0;
+    if (p.directsound)
+        release_id(p.directsound);
+    p.directsound = 0;
 }
 
 void Perf_CloseDown(X86 *c) {
@@ -2486,7 +2526,7 @@ const ComMethod kDirectMusic[] = {
     {"SetMasterClock", 2, DM_OkNoop},
     {"Activate", 2, DM_Activate},
     {"GetDefaultPort", 2, DM_GetDefaultPort},
-    {"SetDirectSound", 3, DM_OkNoop},
+    {"SetDirectSound", 3, DM_SetDirectSound},
 };
 static_assert(sizeof kDirectMusic / sizeof *kDirectMusic == 12, "IDirectMusic has 12 slots");
 
