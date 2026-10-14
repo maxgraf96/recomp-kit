@@ -841,11 +841,11 @@ def flag_effect(insn):
 
 # ------------------------------------------------------------------- image --
 
-def highlow_sites(data, reloc_dir, size):
-    """RVAs of the IMAGE_REL_BASED_HIGHLOW entries of a mapped image's base
-    relocation table, in table order. HIGHLOW (type 3) is the only relocation
-    a 32-bit x86 image uses for a full address; ABSOLUTE (type 0) is block
-    padding and names nothing."""
+def relocation_entries(data, reloc_dir, size):
+    """(type, rva) of every entry of a mapped image's base relocation table,
+    in table order, ABSOLUTE (type 0) block padding left out. The walk is the
+    runtime loader's (runtime/loader.cpp apply_relocations), so the two agree
+    on what moves."""
     rva, length = reloc_dir
     off, end = rva, rva + length
     while rva and length and off + 8 <= end:
@@ -855,9 +855,15 @@ def highlow_sites(data, reloc_dir, size):
             break
         for k in range(off + 8, off + blk, 2):
             e = int.from_bytes(data[k:k + 2], "little")
-            if e >> 12 == 3 and page + (e & 0xfff) + 4 <= size:
-                yield page + (e & 0xfff)
+            if e >> 12 and page + (e & 0xfff) + (4 if e >> 12 == 3 else 2) <= size:
+                yield e >> 12, page + (e & 0xfff)
         off += blk
+
+
+def highlow_sites(data, reloc_dir, size):
+    """RVAs of the IMAGE_REL_BASED_HIGHLOW entries: HIGHLOW (type 3) is the
+    relocation a 32-bit x86 image uses for a full address."""
+    return (rva for kind, rva in relocation_entries(data, reloc_dir, size) if kind == 3)
 
 
 class Image(object):
@@ -939,14 +945,21 @@ class Image(object):
         if base is None or base == self.base:
             return
         delta = (base - self.base) & 0xffffffff
-        if not self.reloc_sites:
+        if not any(relocation_entries(self.data, self.reloc_dir, self.size)):
             raise TranslateError("%s has no base relocations, so it can only be translated at "
                                  "its preferred base %08x, not %08x" % (self.path, self.base, base))
         image = bytearray(self.data)
-        for site in self.reloc_sites:
-            o = site - self.base
-            v = int.from_bytes(image[o:o + 4], "little")
-            image[o:o + 4] = ((v + delta) & 0xffffffff).to_bytes(4, "little")
+        for kind, o in relocation_entries(self.data, self.reloc_dir, self.size):
+            if kind == 3:
+                v = int.from_bytes(image[o:o + 4], "little")
+                image[o:o + 4] = ((v + delta) & 0xffffffff).to_bytes(4, "little")
+            elif kind in (1, 2):              # HIGH, LOW: as the loader applies them
+                v = int.from_bytes(image[o:o + 2], "little")
+                add = (delta >> 16) if kind == 1 else (delta & 0xffff)
+                image[o:o + 2] = ((v + add) & 0xffff).to_bytes(2, "little")
+            else:
+                raise TranslateError("%s: relocation type %d at rva %x, which a PE32 load "
+                                     "cannot apply" % (self.path, kind, o))
         self.data = bytes(image)
 
         def move(va):

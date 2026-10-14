@@ -111,6 +111,19 @@ def test_relocating_an_image_moves_every_relocated_dword_and_nothing_else():
     assert img.exec_ranges == [(0x10300000, 0x10304000, ".text")]
 
 
+def test_high_and_low_halves_move_as_the_loader_moves_them():
+    img = synthetic_image({0x10001000: b"\x34\x12\x78\x56"}, base=0x10000000, size=0x4000)
+    entries = [(1 << 12) | 0x000, (2 << 12) | 0x002]               # HIGH at +0, LOW at +2
+    table = struct.pack("<II", 0x1000, 8 + 2 * len(entries)) + struct.pack("<2H", *entries)
+    data = bytearray(img.data)
+    data[0x3000:0x3000 + len(table)] = table
+    img.data, img.reloc_dir, img.path = bytes(data), (0x3000, len(table)), "synthetic.dll"
+    img.reloc_sites, img.iat_names = frozenset(), {}
+    img.relocate(0x10300000)
+    assert img.rd8(0x10301000) | img.rd8(0x10301001) << 8 == 0x1234 + 0x1030 - 0x1000   # high half
+    assert img.rd8(0x10301002) | img.rd8(0x10301003) << 8 == 0x5678                     # low half: +0
+
+
 def test_an_image_without_relocations_stays_at_its_preferred_base():
     img = synthetic_image({}, base=0x00400000)
     img.reloc_sites, img.path = frozenset(), "synthetic.exe"
