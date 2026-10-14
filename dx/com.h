@@ -218,9 +218,8 @@ enum ComKind : uint16_t {
     K_SURFACE7,       // IDirectDrawSurface7
     K_D3DDEVICE7,     // IDirect3DDevice7
     K_D3DVB7,         // IDirect3DVertexBuffer7
-    K_KIND_COUNT      // the per-kind tables in com.cpp hold 64 entries
+    K_KIND_COUNT      // com.cpp sizes its per-kind tables and interface masks from this
 };
-static_assert(K_KIND_COUNT <= 64, "com.cpp keeps one bit per ComKind in a uint64_t");
 
 // A DirectInput joystick axis's DIPROP_RANGE, DIPROP_DEADZONE and
 // DIPROP_SATURATION (dx/dinput_joystick.cpp). The zone and saturation are in

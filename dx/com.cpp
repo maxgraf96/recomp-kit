@@ -16,9 +16,16 @@ std::deque<ComObj> &objects() {
 }
 
 uint32_t g_vtable[IF_COUNT] = {0};
-uint64_t g_kind_mask[IF_COUNT] = {0}; // bit per ComKind
-void (*g_dtor[64])(ComObj *) = {nullptr};
-ComQiHook g_qi_hook[64] = {nullptr};
+// One bit per ComKind, in as many words as K_KIND_COUNT needs.
+constexpr unsigned kKindWords = (K_KIND_COUNT + 63) / 64;
+uint64_t g_kind_mask[IF_COUNT][kKindWords] = {{0}};
+void (*g_dtor[K_KIND_COUNT])(ComObj *) = {nullptr};
+ComQiHook g_qi_hook[K_KIND_COUNT] = {nullptr};
+
+bool kind_in_mask(ComIface iface, unsigned kind) {
+    return (size_t)iface < IF_COUNT && kind < K_KIND_COUNT &&
+           (g_kind_mask[iface][kind / 64] & (uint64_t(1) << (kind % 64))) != 0;
+}
 const char *g_iface_name[IF_COUNT] = {nullptr};
 
 struct IidEntry {
@@ -275,11 +282,11 @@ void com_register_ole32() {
 }
 
 bool com_iface_binds(ComIface iface, ComKind kind) {
-    return (size_t)iface < IF_COUNT && (g_kind_mask[iface] & (uint64_t(1) << (unsigned)kind)) != 0;
+    return kind_in_mask(iface, (unsigned)kind);
 }
 
 void com_set_destructor(ComKind kind, void (*fn)(ComObj *)) {
-    if ((size_t)kind < 64)
+    if ((size_t)kind < K_KIND_COUNT)
         g_dtor[kind] = fn;
 }
 
@@ -305,7 +312,7 @@ void com_destroy(ComObj *o) {
     if (!o || !o->alive)
         return;
     o->refs = 0;
-    if ((size_t)o->kind < 64 && g_dtor[o->kind])
+    if ((size_t)o->kind < K_KIND_COUNT && g_dtor[o->kind])
         g_dtor[o->kind](o);
     for (uint32_t i = 0; i < IF_COUNT; ++i) {
         if (o->views[i]) {
@@ -347,8 +354,8 @@ uint32_t com_vtable_of(ComIface iface) {
 }
 
 void com_bind(ComIface iface, ComKind kind) {
-    if (iface < IF_COUNT && (uint32_t)kind < 64)
-        g_kind_mask[iface] |= uint64_t(1) << (uint32_t)kind;
+    if (iface < IF_COUNT && (uint32_t)kind < K_KIND_COUNT)
+        g_kind_mask[iface][kind / 64] |= uint64_t(1) << (kind % 64);
 }
 
 const char *com_iface_name(ComIface iface) {
@@ -690,7 +697,7 @@ ComIface com_iface_for_iid(uint32_t addr) {
 }
 
 void com_set_qi_hook(ComKind kind, ComQiHook hook) {
-    if ((size_t)kind < 64)
+    if ((size_t)kind < K_KIND_COUNT)
         g_qi_hook[kind] = hook;
 }
 
@@ -755,13 +762,12 @@ void com_QueryInterface(X86 *c) {
     }
 
     ComObj *target = o;
-    if ((size_t)o->kind < 64 && g_qi_hook[o->kind]) {
+    if ((size_t)o->kind < K_KIND_COUNT && g_qi_hook[o->kind]) {
         ComObj *alt = g_qi_hook[o->kind](o, want);
         if (alt)
             target = alt;
     }
-    if ((uint32_t)target->kind < 64 &&
-        !(g_kind_mask[want] & (uint64_t(1) << (uint32_t)target->kind))) {
+    if ((uint32_t)target->kind < K_KIND_COUNT && !kind_in_mask(want, (unsigned)target->kind)) {
         char key[64];
         snprintf(key, sizeof key, "qi.kind.%u.%u", (unsigned)target->kind, (unsigned)want);
         log_once(key, "dx: %s is not an interface on this %s object: E_NOINTERFACE",
