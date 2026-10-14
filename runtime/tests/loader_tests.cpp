@@ -2,7 +2,7 @@
 // relocation to a configured base, import binding across modules in any
 // configuration order, dependency-ordered DllMain and static TLS for static and
 // LoadLibrary'd modules, thread notifications, reference counts and failure
-// paths; a mapped DLL's resources; then the
+// paths; a mapped DLL's resources; file views; then the
 // guarded arena, heap growth, strict mode, the initial x87 control word and
 // the import argument counts. Needs no game: every image is
 // written to a temporary directory and its DllMain is a native stand-in
@@ -739,6 +739,57 @@ static void test_module_resources(X86 *c) {
     check(!resource_string_in(beta, 0x20, &s), "string 0x20 is in a block the module lacks");
 }
 
+// ---------------------------------------------------------------------------
+// File views are the file's pages, mapped at the view's guest address.
+// ---------------------------------------------------------------------------
+static void test_file_views(X86 *c) {
+    section("file views: MapViewOfFile maps the file, aligned, privately");
+    const size_t page = os_vm_page_size();
+    check(page >= 4096 && !(page & (page - 1)), "the host page size is a power of two (%zu)", page);
+    const uint32_t bytes = 3 * 0x10000 + 123;
+    std::vector<uint8_t> want(bytes);
+    for (uint32_t i = 0; i < bytes; ++i)
+        want[i] = (uint8_t)(i * 7 + (i >> 16));
+    const std::string path = g_dir + "/view.bin";
+    g_written.push_back(path);
+    FILE *f = fopen(path.c_str(), "wb");
+    fwrite(want.data(), 1, want.size(), f);
+    fclose(f);
+
+    const uint32_t name = guest_str((std::string(RECOMP_GUEST_ROOT) + "\\VIEW.BIN").c_str());
+    const uint32_t h =
+        call_import(c, "KERNEL32.dll", "CreateFileA", {name, 0x80000000u, 1, 0, 3, 0, 0});
+    const uint32_t m = call_import(c, "KERNEL32.dll", "CreateFileMappingA", {h, 0, 2, 0, 0, 0});
+    const uint32_t v = call_import(c, "KERNEL32.dll", "MapViewOfFile", {m, 4, 0, 0, 0});
+    check(h != 0xffffffffu && m && v && !memcmp(g_mem + v, want.data(), bytes),
+          "a whole-file FILE_MAP_READ view reads the file (%u bytes at %08x)", bytes, v);
+    check(v && !((uintptr_t)(g_mem + v) % page) && rd8(v + bytes) == 0,
+          "the view starts on a host page and reads zero past the end of the file");
+    const uint32_t v2 = call_import(c, "KERNEL32.dll", "MapViewOfFile", {m, 4, 0, 0x10000, 0x100});
+    check(v2 && v2 != v && !memcmp(g_mem + v2, want.data() + 0x10000, 0x100),
+          "a second view from 64 KB in reads from there");
+    set_last_error(0);
+    check(call_import(c, "KERNEL32.dll", "MapViewOfFile", {m, 4, 0, 0x1000, 0x100}) == 0 &&
+              call_import(c, "KERNEL32.dll", "GetLastError", {}) == 1132,
+          "an offset off the 64 KB granularity is ERROR_MAPPED_ALIGNMENT");
+    const uint32_t copy = call_import(c, "KERNEL32.dll", "MapViewOfFile", {m, 1, 0, 0, 0});
+    if (copy)
+        wr32(copy, 0xdeadbeefu);
+    std::vector<uint8_t> disk(4);
+    f = fopen(path.c_str(), "rb");
+    fread(disk.data(), 1, 4, f);
+    fclose(f);
+    check(copy && rd32(copy) == 0xdeadbeefu && !memcmp(disk.data(), want.data(), 4) &&
+              !memcmp(g_mem + v, want.data(), 4),
+          "a FILE_MAP_COPY view is writable, and neither the file nor another view sees it");
+    check(call_import(c, "KERNEL32.dll", "UnmapViewOfFile", {v}) == 1 && rd32(v) == 0,
+          "an unmapped view is zeroed memory again");
+    call_import(c, "KERNEL32.dll", "UnmapViewOfFile", {v2});
+    call_import(c, "KERNEL32.dll", "UnmapViewOfFile", {copy});
+    call_import(c, "KERNEL32.dll", "CloseHandle", {m});
+    call_import(c, "KERNEL32.dll", "CloseHandle", {h});
+}
+
 static void test_import_cycle(Config &cfg) {
     section("an import cycle");
     const std::string saved = g_dir;
@@ -1121,6 +1172,7 @@ int main(int argc, char **argv) {
     test_static_attach(c);
     test_dynamic_load(c);
     test_module_resources(c);
+    test_file_views(c);
     test_heap_growth(cfg);
     test_exact_ranges(cfg);
     test_import_cycle(cfg);

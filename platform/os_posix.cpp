@@ -100,6 +100,24 @@ int os_vm_commit(void *p, size_t bytes) {
 int os_vm_protect_none(void *p, size_t bytes) {
     return mprotect(p, bytes, PROT_NONE) == 0 ? 0 : -1;
 }
+size_t os_vm_page_size(void) {
+    long n = sysconf(_SC_PAGESIZE);
+    return n > 0 ? (size_t)n : 4096;
+}
+int os_vm_map_file(void *p, size_t bytes, int fd, uint64_t offset, int writable) {
+#ifdef __EMSCRIPTEN__
+    (void)p, (void)bytes, (void)fd, (void)offset, (void)writable;
+    return -1; // no fixed file mappings inside the wasm heap
+#else
+    int prot = PROT_READ | (writable ? PROT_WRITE : 0);
+    void *q = mmap(p, bytes, prot, MAP_PRIVATE | MAP_FIXED, fd, (off_t)offset);
+    return q == p ? 0 : -1;
+#endif
+}
+int os_vm_reset(void *p, size_t bytes) {
+    void *q = mmap(p, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
+    return q == p ? 0 : -1;
+}
 
 void *os_dlopen(const char *path) {
     return dlopen(path, RTLD_NOW | RTLD_LOCAL);

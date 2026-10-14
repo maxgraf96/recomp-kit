@@ -49,6 +49,16 @@ void *os_vm_reserve_guarded(size_t bytes);
 int os_vm_commit(void *p, size_t bytes);
 // Makes [p, p+bytes) fault again on every access; the contents are kept. 0 or -1.
 int os_vm_protect_none(void *p, size_t bytes);
+// The host's page size: 16 KB on Apple silicon, 4 KB on most others.
+size_t os_vm_page_size(void);
+// Maps `bytes` of the open file `fd` from `offset` over the committed memory at
+// `p`, privately: reads come from the file and are paged in as touched, a write
+// changes only this process's copy (and faults when `writable` is 0). `p`,
+// `bytes` and `offset` are multiples of os_vm_page_size(). 0, or -1 when the
+// host cannot map files there, in which case the caller reads the bytes in.
+int os_vm_map_file(void *p, size_t bytes, int fd, uint64_t offset, int writable);
+// Zeroed read-write memory at `p` again, replacing a file mapping. 0 or -1.
+int os_vm_reset(void *p, size_t bytes);
 
 // ---------------------------------------------------------------------------
 // Plugins.

@@ -201,6 +201,23 @@ int os_vm_protect_none(void *p, size_t bytes) {
     DWORD old = 0;
     return VirtualProtect(p, bytes, PAGE_NOACCESS, &old) ? 0 : -1;
 }
+size_t os_vm_page_size(void) {
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    return si.dwPageSize ? si.dwPageSize : 4096;
+}
+// A view cannot be mapped into part of an existing reservation here: the
+// caller reads the file in instead.
+int os_vm_map_file(void *p, size_t bytes, int fd, uint64_t offset, int writable) {
+    (void)p, (void)bytes, (void)fd, (void)offset, (void)writable;
+    return -1;
+}
+int os_vm_reset(void *p, size_t bytes) {
+    if (!VirtualAlloc(p, bytes, MEM_COMMIT, PAGE_READWRITE))
+        return -1;
+    memset(p, 0, bytes);
+    return 0;
+}
 
 void *os_dlopen(const char *path) {
     HMODULE m = LoadLibraryW(widen(path).c_str());

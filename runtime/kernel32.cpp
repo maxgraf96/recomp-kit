@@ -46,6 +46,7 @@ enum {
     ERROR_INVALID_HANDLE_ = 6,
     ERROR_NOT_ENOUGH_MEMORY_ = 8,
     ERROR_NO_MORE_FILES_ = 18,
+    ERROR_INVALID_PARAMETER_ = 87,
     ERROR_HANDLE_EOF_ = 38,
     ERROR_ALREADY_EXISTS_ = 183,
     ERROR_CALL_NOT_IMPLEMENTED_ = 120,
@@ -1266,34 +1267,96 @@ void k_CreateFileMappingA(X86 *c) {
     create_mapping_named(c, gm_str(arg(c, 5)));
 }
 
+// File views. A view of a file mapping is the file's pages mapped at the
+// view's guest address by the host (os_vm_map_file): nothing is read until it
+// is touched, and two views of a 160 MB archive cost no guest memory beyond
+// their address space - a game that maps its data archives whole works as it
+// does on Windows. Views are private: a write changes this process's copy and
+// never the file (a FILE_MAP_WRITE view is logged once), and a read-only view
+// (FILE_MAP_READ) faults on a write as Windows does. Where the host cannot map
+// files at a fixed address the bytes are read in instead.
+std::map<uint32_t, uint32_t> &file_views() { // guest address -> host-mapped bytes
+    static std::map<uint32_t, uint32_t> v;
+    return v;
+}
+
 void k_MapViewOfFile(X86 *c) {
     HObj *m = handle_get(arg(c, 0), H_MAPPING);
-    uint32_t off_low = arg(c, 3), bytes = arg(c, 4);
+    uint32_t access = arg(c, 1), off_low = arg(c, 3), bytes = arg(c, 4);
     if (!m) {
         set_last_error(ERROR_INVALID_HANDLE_);
         set_eax(c, 0);
         return;
     }
+    if (off_low & 0xffffu) {
+        // Offsets are multiples of the 64 KB allocation granularity.
+        set_last_error(1132); // ERROR_MAPPED_ALIGNMENT
+        set_eax(c, 0);
+        return;
+    }
+    if (arg(c, 2) || off_low > m->map_size) { // a 32-bit mapping has no high half
+        set_last_error(ERROR_INVALID_PARAMETER_);
+        set_eax(c, 0);
+        return;
+    }
     uint32_t n = bytes ? bytes : (m->map_size - off_low);
-    uint32_t addr = heap_alloc(n, true, 4096);
+    if (!n) {
+        set_last_error(ERROR_INVALID_PARAMETER_);
+        set_eax(c, 0);
+        return;
+    }
+    const bool writable = (access & 0x3u) != 0; // FILE_MAP_COPY or FILE_MAP_WRITE
+    if (access & 0x2u)
+        log_once("MapViewOfFile-write",
+                 "MapViewOfFile(%s, FILE_MAP_WRITE): writes stay in "
+                 "memory and never reach the file",
+                 m->path.c_str());
+    const uint32_t page = (uint32_t)os_vm_page_size();
+    const uint32_t align = page > 4096 ? page : 4096;
+    const uint32_t span = (n + align - 1) & ~(align - 1);
+    uint32_t addr = heap_alloc(span, false, align);
     if (!addr) {
         set_last_error(ERROR_NOT_ENOUGH_MEMORY_);
         set_eax(c, 0);
         return;
     }
-    os_fd_seek(m->fd, off_low, OS_SEEK_SET);
-    int64_t got = os_fd_read(m->fd, g_mem + addr, n);
-    if (got < 0)
-        got = 0;
+    OsStat st{};
+    uint64_t file_bytes = m->fd >= 0 && os_fd_stat(m->fd, &st) == 0 ? st.size : 0;
+    uint64_t in_file = file_bytes > off_low ? file_bytes - off_low : 0;
+    uint32_t mapped = (uint32_t)(in_file < span ? (in_file + page - 1) / page * page : span);
+    if (mapped > span)
+        mapped = span;
+    bool host_mapped = false;
+    if (mapped && (uintptr_t)(g_mem + addr) % page == 0 && off_low % page == 0) {
+        // Whatever the allocator handed back was zeroed memory; the file
+        // replaces it page for page, and the tail past the file stays zero.
+        memset(g_mem + addr + mapped, 0, span - mapped);
+        host_mapped = os_vm_map_file(g_mem + addr, mapped, m->fd, off_low, writable) == 0;
+    }
+    if (host_mapped) {
+        file_views()[addr] = mapped;
+    } else {
+        memset(g_mem + addr, 0, span);
+        os_fd_seek(m->fd, off_low, OS_SEEK_SET);
+        int64_t got = os_fd_read(m->fd, g_mem + addr, n);
+        (void)got;
+    }
     m->map_view = addr;
-    LOGV("MapViewOfFile(%s, %u bytes) -> %08x", m->path.c_str(), n, addr);
+    LOGV("MapViewOfFile(%s, %u bytes at %u, %s) -> %08x", m->path.c_str(), n, off_low,
+         host_mapped ? "mapped" : "read in", addr);
     set_eax(c, addr);
 }
 
 void k_UnmapViewOfFile(X86 *c) {
-    // Views are copies: nothing is written back. Log if the guest expected a
-    // shared, writable mapping.
-    heap_free(arg(c, 0));
+    uint32_t addr = arg(c, 0);
+    auto it = file_views().find(addr);
+    if (it != file_views().end()) {
+        // Ordinary zeroed memory again before the heap can hand it out.
+        if (os_vm_reset(g_mem + addr, it->second) != 0)
+            LOGW("UnmapViewOfFile(%08x): the host could not unmap the view", addr);
+        file_views().erase(it);
+    }
+    heap_free(addr);
     set_eax(c, 1);
 }
 
