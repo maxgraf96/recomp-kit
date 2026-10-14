@@ -482,6 +482,10 @@ uint32_t guest_current_thread_id();
 // and has not finished. The main thread is 1 and is alive from the start.
 bool guest_thread_alive(uint32_t id);
 bool host_cursor_visible();
+// Whether the guest has hidden the pointer over its window: ShowCursor's count
+// below zero, or SetCursor(NULL) - what a game drawing its own cursor answers
+// WM_SETCURSOR with.
+bool host_guest_pointer_hidden();
 bool host_cursor_clip(int32_t out[4]);
 
 // ---------------------------------------------------------------------------

@@ -100,7 +100,11 @@ bool g_close_requested = false; // the user asked to close
 // pump(), read on the main thread.
 std::atomic<bool> g_guest_mouse_exclusive{false};
 std::atomic<bool> g_relative{false}; // SDL relative mode is on (relative_mouse)
-bool g_focus_noted = false;          // the focus has been reported to the runtime at least once
+// The guest hides the pointer over its window (SetCursor(NULL), ShowCursor):
+// sampled under the baton in pump().
+std::atomic<bool> g_guest_pointer_hidden{false};
+bool relative_mouse_configured();
+bool g_focus_noted = false; // the focus has been reported to the runtime at least once
 bool g_focused = false;
 bool g_minimized = false; // minimised or hidden, as last reported
 int g_mode_w = 640, g_mode_h = 480;
@@ -429,16 +433,33 @@ bool pointer_capture_wanted() {
     return true;
 }
 
+bool pointer_in_window_points(double *px, double *py);
+// A game that owns its pointer (relative_mouse) and has hidden the system one
+// over its window - SetCursor(NULL) from WM_SETCURSOR - gets it hidden there,
+// as Windows hides it, while the window has the focus.
+bool guest_hides_pointer() {
+    if (!relative_mouse_configured() || !g_guest_pointer_hidden || !g_window || !g_focused ||
+        !window_focused() || mods_page_visible() || mods_controls_editing())
+        return false;
+    double px = 0, py = 0;
+    int w = 0, h = 0;
+    if (!pointer_in_window_points(&px, &py) || !SDL_GetWindowSize(g_window, &w, &h))
+        return false;
+    return px >= 0 && py >= 0 && px < w && py < h;
+}
+
 void update_platform_pointer_capture() {
     const bool want = g_platform_capture_requested && pointer_capture_wanted() &&
                       !g_close_requested && !g_fullscreen_transition;
-    if (want && !g_pointer_hidden) {
-        trace_state("capture ON: hiding the OS cursor");
+    const bool hide = want || guest_hides_pointer();
+    if (hide && !g_pointer_hidden) {
+        trace_state(want ? "capture ON: hiding the OS cursor"
+                         : "the guest hides the pointer over its window");
         SDL_HideCursor();
         g_pointer_hidden = true;
     }
-    if (!want && g_pointer_hidden) {
-        trace_state("capture OFF: showing the OS cursor");
+    if (!hide && g_pointer_hidden) {
+        trace_state("showing the OS cursor");
         SDL_ShowCursor();
         g_pointer_hidden = false;
     }
@@ -1555,6 +1576,7 @@ void pump() {
     deliver_pending_input();
     // The DirectInput devices belong to the baton holder, which this is.
     g_guest_mouse_exclusive = dinput_mouse_exclusive();
+    g_guest_pointer_hidden = host_guest_pointer_hidden();
     update_relative_mouse();
     apply_window_mode();
     apply_mode_change();

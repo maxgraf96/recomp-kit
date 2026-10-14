@@ -590,6 +590,14 @@ static void test_timer_and_cursor() {
             g_seen[i].lp == ((0x0200u << 16) | 1) && g_seen[i + 1].msg == 0x0200)
             setcursor_first = true;
     check(setcursor_first, "WM_SETCURSOR(HTCLIENT, WM_MOUSEMOVE) precedes WM_MOUSEMOVE");
+    check(host_guest_pointer_hidden(),
+          "a class with no cursor leaves the pointer hidden over the window");
+    user(c, "SetCursor", {0x0002a000u + 32512});
+    check(!host_guest_pointer_hidden(), "SetCursor(arrow) shows it");
+    user(c, "ShowCursor", {0});
+    check(host_guest_pointer_hidden(), "ShowCursor(FALSE) hides it");
+    user(c, "ShowCursor", {1});
+    check(!host_guest_pointer_hidden(), "and ShowCursor(TRUE) shows it again");
     user(c, "DestroyWindow", {hwnd});
     drain(c);
 }

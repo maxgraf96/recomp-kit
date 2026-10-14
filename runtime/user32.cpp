@@ -51,6 +51,7 @@ uint32_t g_next_hwnd = 0x00020004;
 uint32_t g_next_gdi = 0x00028004;
 uint32_t g_main_hwnd = 0;
 uint32_t g_cursor = 0;
+bool g_cursor_chosen = false; // the guest (or DefWindowProc for it) has set a cursor
 int32_t g_cursor_x = 0, g_cursor_y = 0;
 int32_t g_cursor_show = 0;
 int32_t g_clip[4] = {0, 0, 0, 0};
@@ -333,6 +334,9 @@ bool host_window_visible(uint32_t hwnd) {
 }
 bool host_cursor_visible() {
     return g_cursor_show >= 0;
+}
+bool host_guest_pointer_hidden() {
+    return g_cursor_show < 0 || (g_cursor_chosen && g_cursor == 0);
 }
 bool host_cursor_clip(int32_t *out) {
     if (!g_clipped)
@@ -1354,6 +1358,7 @@ void def_window_proc(X86 *c, bool wide) {
         if (w && arg(c, 2) == hwnd && (arg(c, 3) & 0xffff) == 1 /* HTCLIENT */) {
             auto ci = classes().find(w->cls);
             g_cursor = ci != classes().end() ? ci->second.hcursor : 0;
+            g_cursor_chosen = true;
             set_eax(c, 1);
             return;
         }
@@ -1624,6 +1629,7 @@ void u_LoadIconA(X86 *c) {
 void u_SetCursor(X86 *c) {
     uint32_t prev = g_cursor;
     g_cursor = arg(c, 0);
+    g_cursor_chosen = true;
     set_eax(c, prev);
 }
 void u_SetCursorPos(X86 *c) {

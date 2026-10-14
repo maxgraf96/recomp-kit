@@ -120,6 +120,7 @@ void peek_message(X86 *c);
 void dispatch_message(X86 *c);
 uint32_t deliver_message(X86 *c, uint32_t hwnd, uint32_t msg, uint32_t wp, uint32_t lp, bool wide);
 extern uint32_t g_main_hwnd, g_cursor;
+extern bool g_cursor_chosen;
 extern int32_t g_cursor_x, g_cursor_y;
 extern uint8_t g_key_state[256];
 extern bool (*g_message_waiter)();
