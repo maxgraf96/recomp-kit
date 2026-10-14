@@ -17,6 +17,13 @@ uint32_t resource_find(uint32_t type_id_or_name, uint32_t name_id_or_name,
                        std::string *why = nullptr);
 // Validate a data-entry handle and return its image-backed payload and size.
 uint32_t resource_data(uint32_t entry, uint32_t *size, std::string *why = nullptr);
+// The same, in the module whose handle (base address) is `module`: a DLL the
+// loader mapped, such as a resource-only language DLL. 0 or the executable's
+// base mean the executable.
+uint32_t resource_find_in(uint32_t module, uint32_t type_id_or_name, uint32_t name_id_or_name,
+                          std::string *why = nullptr);
+uint32_t resource_data_in(uint32_t module, uint32_t entry, uint32_t *size,
+                          std::string *why = nullptr);
 // Snapshot the names before guest callbacks run; no references into the directory
 // or temporary guest buffers escape this reader. False explains failure in why.
 bool resource_names(uint32_t type_id_or_name, std::vector<ResourceName> *names,

@@ -248,7 +248,8 @@ void find_ex_w(X86 *c) {
 // RT_STRING blocks contain sixteen WORD-length-prefixed UTF-16 strings.
 void load_string(X86 *c) {
     uint32_t id = arg(c, 1) & 0xffff, out = arg(c, 2), cap = arg(c, 3), bytes = 0;
-    uint32_t p = resource_data(resource_find(6, (id >> 4) + 1), &bytes), end = p + bytes;
+    uint32_t p = resource_data_in(arg(c, 0), resource_find_in(arg(c, 0), 6, (id >> 4) + 1), &bytes),
+             end = p + bytes;
     for (uint32_t i = 0; p && i < 16; ++i) {
         if (end - p < 2)
             break;
@@ -279,7 +280,8 @@ void load_string(X86 *c) {
     set_eax(c, 0);
 }
 void load_bitmap(X86 *c) {
-    uint32_t bytes = 0, p = resource_data(resource_find(2, arg(c, 1)), &bytes);
+    uint32_t bytes = 0,
+             p = resource_data_in(arg(c, 0), resource_find_in(arg(c, 0), 2, arg(c, 1)), &bytes);
     GdiImage image;
     set_eax(c, p && gdi_decode_image(p, bytes, &image) ? gdi_image_bitmap(image) : 0);
 }

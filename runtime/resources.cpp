@@ -24,9 +24,17 @@ struct Directory {
     bool relative(uint32_t offset, uint32_t bytes) const {
         return offset <= size && bytes <= size - offset;
     }
+    uint32_t module = 0; // 0: the executable
     bool open() {
         image = loader_image_base();
         image_size = loader_image_size();
+        if (module && module != image) {
+            const LoaderModule *m = loader_module_at_base(module);
+            if (!m)
+                return fail(why, "no module is loaded at that handle");
+            image = m->base;
+            image_size = m->size;
+        }
         if (!image || !gm_valid(image, image_size) || image_size < 64 || rd16(image) != 0x5a4d)
             return fail(why, "no loaded PE image");
         uint32_t nt = rd32(image + 0x3c);
@@ -143,7 +151,12 @@ bool identifier(uint32_t p, ResourceName &out, std::string *why) {
 } // namespace
 
 uint32_t resource_find(uint32_t type_id_or_name, uint32_t name_id_or_name, std::string *why) {
+    return resource_find_in(0, type_id_or_name, name_id_or_name, why);
+}
+uint32_t resource_find_in(uint32_t module, uint32_t type_id_or_name, uint32_t name_id_or_name,
+                          std::string *why) {
     Directory dir(why);
+    dir.module = module;
     ResourceName type, name;
     if (!dir.open() || !identifier(type_id_or_name, type, why) ||
         !identifier(name_id_or_name, name, why))
@@ -165,9 +178,13 @@ uint32_t resource_find(uint32_t type_id_or_name, uint32_t name_id_or_name, std::
     return dir.data(entry, nullptr) ? entry : 0;
 }
 uint32_t resource_data(uint32_t entry, uint32_t *size, std::string *why) {
+    return resource_data_in(0, entry, size, why);
+}
+uint32_t resource_data_in(uint32_t module, uint32_t entry, uint32_t *size, std::string *why) {
     if (size)
         *size = 0;
     Directory dir(why);
+    dir.module = module;
     return dir.open() ? dir.data(entry, size) : 0;
 }
 bool resource_names(uint32_t type_id_or_name, std::vector<ResourceName> *names, std::string *why) {

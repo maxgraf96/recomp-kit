@@ -142,7 +142,15 @@ void activation_window_destroyed(uint32_t hwnd);
 // SetFocus's body: WM_KILLFOCUS to the window losing the focus, WM_SETFOCUS
 // to the one gaining it. Returns the window that had it.
 uint32_t change_focus(X86 *c, uint32_t hwnd);
+// SetWindowPos's body (user32.cpp), for MoveWindow and the display code.
+void set_window_pos(X86 *c, Window *w, uint32_t after, int32_t x, int32_t y, int32_t cx, int32_t cy,
+                    uint32_t flags, bool refresh_size);
+// A window hook SetWindowsHookEx accepted (recorded, never called); its handle.
+uint32_t record_hook(uint32_t kind, uint32_t proc, uint32_t module, uint32_t thread);
+// wsprintfA's formatting over a guest argument array; the length written.
+uint32_t format_wsprintf(uint32_t out, uint32_t format, uint32_t va);
 } // namespace user32
+void user32_ansi_register();
 void user32_wide_register();
 
 void user32_vcl_register();

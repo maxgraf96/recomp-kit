@@ -516,6 +516,86 @@ static void test_timer_and_cursor() {
 }
 
 // ---------------------------------------------------------------------------
+// The ANSI odds and ends a Windows game of the time imports
+// ---------------------------------------------------------------------------
+static void test_ansi_entry_points() {
+    X86 *c = &g_main;
+    const uint32_t hwnd = make_window(c, false);
+    drain(c);
+    const uint32_t buf = scratch(0xc00), name = scratch(0xd00);
+
+    gm_put_str(name, "winuitest", 32); // class names match without case
+    gm_zero(buf, 48);
+    wr32(buf, 48);
+    check(user(c, "GetClassInfoExA", {0, name, buf}) != 0, "GetClassInfoExA finds the class");
+    check(rd32(buf + 8) != 0 && rd32(buf + 40) == name,
+          "WNDCLASSEXA: the window procedure, and the caller's name pointer");
+    gm_put_str(name, "NoSuchClass", 32);
+    check(user(c, "GetClassInfoExA", {0, name, buf}) == 0 &&
+              call(c, "KERNEL32.dll", "GetLastError", {}) == 1411,
+          "an unregistered class: FALSE and ERROR_CLASS_DOES_NOT_EXIST");
+    gm_zero(buf, 40);
+    gm_put_str(name, "WinUiTest", 32);
+    check(user(c, "GetClassInfoA", {0, name, buf}) != 0 && rd32(buf + 4) != 0,
+          "GetClassInfoA: WNDCLASSA with the window procedure");
+    check(user(c, "GetClassNameA", {hwnd, buf, 64}) == 9 && gm_str(buf) == "WinUiTest",
+          "GetClassNameA");
+
+    gm_put_str(name, "Empire", 32);
+    user(c, "SetWindowTextA", {hwnd, name});
+    check(user(c, "GetWindowTextA", {hwnd, buf, 64}) == 6 && gm_str(buf) == "Empire",
+          "GetWindowTextA reads the title back");
+    check(user(c, "GetWindowTextA", {hwnd, buf, 4}) == 3 && gm_str(buf) == "Emp",
+          "and truncates to the buffer");
+
+    g_seen.clear();
+    check(user(c, "MoveWindow", {hwnd, 10, 20, 300, 200, 1}) == 1, "MoveWindow");
+    user(c, "GetWindowRect", {hwnd, buf});
+    check(rd32(buf) == 10 && rd32(buf + 4) == 20 && rd32(buf + 8) == 310 && rd32(buf + 12) == 220,
+          "the window moved and resized");
+    bool moved = false, sized = false;
+    for (const Seen &s : g_seen) {
+        moved |= s.msg == 0x0003 && s.lp == ((20u << 16) | 10u);
+        sized |= s.msg == 0x0005 && s.lp == ((200u << 16) | 300u);
+    }
+    check(moved && sized, "WM_MOVE and WM_SIZE from DefWindowProc's WM_WINDOWPOSCHANGED");
+
+    gm_put_str(name, "%d-%s-%04x|%c", 32);
+    gm_put_str(name + 0x40, "ok", 8);
+    check(user(c, "wsprintfA", {buf, name, uint32_t(-7), name + 0x40, 0xab, 'Z'}) == 12 &&
+              gm_str(buf) == "-7-ok-00ab|Z",
+          "wsprintfA (cdecl, varargs): %s", gm_str(buf).c_str());
+
+    const uint32_t hook = imports_alloc_trampoline("test", "hook_proc", recording_proc, 3);
+    check(user(c, "SetWindowsHookExA", {4 /* WH_CALLWNDPROC */, hook, 0, 0}) == 0 &&
+              call(c, "KERNEL32.dll", "GetLastError", {}) == 1428,
+          "a global hook without a module fails with ERROR_HOOK_NEEDS_HMOD, as on Windows");
+    const uint32_t h = user(c, "SetWindowsHookExA", {4, hook, 0, 1});
+    check(h != 0, "a thread hook is accepted");
+    check(user(c, "UnhookWindowsHookEx", {h}) == 1, "and can be removed");
+
+    check(user(c, "ChangeDisplaySettingsA", {0, 0}) == 0, "ChangeDisplaySettings(NULL) restores");
+    gm_zero(buf, 156);
+    wr16(buf + 36, 156);
+    wr32(buf + 40, 0x1c0000); // BITSPERPEL | PELSWIDTH | PELSHEIGHT
+    uint32_t w = 0, hh = 0, bpp = 0;
+    win32_display_mode(&w, &hh, &bpp);
+    wr32(buf + 104, bpp);
+    wr32(buf + 108, w);
+    wr32(buf + 112, hh);
+    check(user(c, "ChangeDisplaySettingsA", {buf, 4 /* CDS_FULLSCREEN */}) == 0,
+          "the current mode is accepted");
+    wr32(buf + 108, 12345);
+    check(user(c, "ChangeDisplaySettingsA", {buf, 4}) == 0xfffffffeu,
+          "a mode nobody offers is DISP_CHANGE_BADMODE");
+    check(user(c, "CreateCursor", {0, 0, 0, 32, 32, buf, buf}) != 0, "CreateCursor");
+    check(user(c, "LoadStringA", {0, 1, buf, 16}) == 0 && rd8(buf) == 0,
+          "LoadStringA without a string resource: 0 and an empty buffer");
+    user(c, "DestroyWindow", {hwnd});
+    drain(c);
+}
+
+// ---------------------------------------------------------------------------
 // DirectInput: foreground, exclusive, buffers, objects
 // ---------------------------------------------------------------------------
 enum {
@@ -742,6 +822,7 @@ int main() {
         {"keyboard translation", test_translate},
         {"per-thread queues and cross-thread SendMessage", test_threads},
         {"timers and WM_SETCURSOR", test_timer_and_cursor},
+        {"ANSI entry points", test_ansi_entry_points},
         {"DirectInput foreground and exclusive mouse", test_dinput_foreground},
         {"DirectInput buffers and objects", test_dinput_buffers},
     };

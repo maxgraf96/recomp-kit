@@ -1170,14 +1170,19 @@ struct Hook {
 };
 std::map<uint32_t, Hook> hooks;
 uint32_t next_hook = 0x00071000;
+} // namespace
+uint32_t user32::record_hook(uint32_t kind, uint32_t proc, uint32_t module, uint32_t thread) {
+    uint32_t h = next_hook++;
+    hooks[h] = {kind, proc, module, thread};
+    return h;
+}
+namespace {
 void set_hook(X86 *c) {
     if (!arg(c, 1)) {
         set_eax(c, 0);
         return;
     }
-    uint32_t h = next_hook++;
-    hooks[h] = {arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3)};
-    set_eax(c, h);
+    set_eax(c, user32::record_hook(arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3)));
 }
 void unhook(X86 *c) {
     set_eax(c, hooks.erase(arg(c, 0)) != 0);

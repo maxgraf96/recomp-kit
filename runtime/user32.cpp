@@ -1736,12 +1736,12 @@ void u_MessageBoxW(X86 *c) {
     set_eax(c, answer);
 }
 
-// wvsprintfA: the Win32 subset (%s %c %d %i %u %x %X %% with width/precision
-// and the l/h size prefixes). `va` points at the guest argument array.
-void u_wvsprintfA(X86 *c) {
-    uint32_t out = arg(c, 0);
-    std::string fmt = gm_str(arg(c, 1), 4096);
-    uint32_t va = arg(c, 2);
+// wvsprintfA and wsprintfA: the Win32 subset (%s %c %d %i %u %x %X %% with
+// width/precision and the l/h size prefixes). `va` points at the guest
+// argument array. Windows writes at most 1024 bytes including the NUL; the
+// result is the length written.
+uint32_t format_wsprintf(uint32_t out, uint32_t format, uint32_t va) {
+    std::string fmt = gm_str(format, 4096);
     std::string res;
     size_t i = 0;
     while (i < fmt.size()) {
@@ -1808,9 +1808,14 @@ void u_wvsprintfA(X86 *c) {
         }
         res += buf;
     }
-    if (out)
+    if (res.size() > 1023)
+        res.resize(1023);
+    if (out && gm_valid(out, uint32_t(res.size()) + 1))
         memcpy(g_mem + out, res.c_str(), res.size() + 1);
-    set_eax(c, (uint32_t)res.size());
+    return (uint32_t)res.size();
+}
+void u_wvsprintfA(X86 *c) {
+    set_eax(c, format_wsprintf(arg(c, 0), arg(c, 1), arg(c, 2)));
 }
 
 } // namespace user32
