@@ -3,6 +3,12 @@
 // Samples play PCM WAVE images and streams decode MP3 through shared host
 // audio channels. The 3D provider API reports "no providers" so a game can
 // use its plain 2D path. Every entry preserves the guest's stdcall stack.
+//
+// Where a rule below says "Miles does", it is Miles 6.1's own behaviour, read
+// from the library rather than from its documentation: the preference
+// defaults AIL_startup installs, the balance pan law, the loop count that
+// counts down, a start that always begins at the top, and positions of a
+// compressed sample counted in its compressed bytes.
 #include "com.h"
 #include "dx.h"
 #include "host_api.h"
@@ -14,14 +20,39 @@
 #include "../platform/os.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstring>
 #include <vector>
 #include <iterator>
 #include <map>
+#include <memory>
 
 namespace {
 
 const uint32_t SMP_FREE = 1, SMP_DONE = 2, SMP_PLAYING = 4;
+
+// Miles' preference table as AIL_startup leaves it. A mixer reads the
+// DirectSound fragment settings back (34 DIG_DS_FRAGMENT_SIZE in ms, 35
+// DIG_DS_FRAGMENT_CNT, 42 DIG_DS_MIX_FRAGMENT_CNT) and divides by the first,
+// so a table of zeroes is a divide error in the guest, not a quiet default.
+// The others: 0 resampling tolerance, 1 DIG_MIXER_CHANNELS, 2
+// DIG_DEFAULT_VOLUME (a new sample's volume), 3-9 MIDI, 14 the maximum chain
+// element, 15 DIG_USE_WAVEOUT, 17 the 3D output rate, 31 the resampling
+// filter, 41 the input latency, 44 mutex protection, 45 the minimum chain
+// element time.
+constexpr std::array<int32_t, 64> kPreferenceDefaults = {
+    131,   64,    127, 120,  8,   127, 1, 0,     2, 0,   1536, 49152, 5, 16,  8192, 0,
+    32768, 44100, 0,   4096, 120, 24,  0, 1,     0, 1,   0,    1,     1, 0,   0,    1,
+    2048,  0,     8,   96,   0,   0,   0, 32768, 0, 250, 8,    1,     1, 100, 0,    0,
+};
+// Before anything runs the table already holds the defaults, so a mixer that
+// reads a preference ahead of AIL_startup still never divides by zero.
+std::array<int32_t, 64> g_preferences = kPreferenceDefaults;
+
+void preferences_default() {
+    g_preferences = kPreferenceDefaults;
+}
 
 int32_t miles_volume_mb(int32_t v) {
     v = std::clamp(v, 0, 127);
@@ -29,41 +60,107 @@ int32_t miles_volume_mb(int32_t v) {
                   : std::clamp((int32_t)std::lround(2000.0 * std::log10(v / 127.0)), -10000, 0);
 }
 
+// Miles pans by balance, not by power: a centred sound plays at full level on
+// both sides, and moving it right fades the left side linearly to nothing at
+// 127 while the right side stays where it was. Each side's scale is a table
+// entry out of 128 - twice the distance from the far end, saturating at 63 -
+// so pans 63 and 64 are both centre. DirectSound's pan attenuates exactly one
+// channel, which is the same shape, so the scale converts to hundredths of a
+// decibel on the far side.
+int32_t miles_pan_scale(int32_t i) {
+    return i < 63 ? 2 * i : 128;
+}
 int32_t miles_pan_mb(int32_t p) {
     p = std::clamp(p, 0, 127);
-    return std::clamp((p - 64) * 10000 / 63, -10000, 10000);
+    auto attenuation = [](int32_t scale) {
+        return scale <= 0
+                   ? 10000
+                   : std::min(10000, (int32_t)std::lround(-2000.0 * std::log10(scale / 128.0)));
+    };
+    if (int32_t right = miles_pan_scale(p); right < 128)
+        return -attenuation(right);
+    if (int32_t left = miles_pan_scale(127 - p); left < 128)
+        return attenuation(left);
+    return 0;
 }
 
 struct Driver {
     uint32_t rate = 22050, bits = 16, channels = 2;
     int master = 127;
+    uint32_t hwnd = 0;
 };
 std::map<uint32_t, Driver> g_drivers;
 uint32_t g_next_driver = 0x10000;
-// Preferences as Miles 6 starts with them, where a game reads one back before
-// it sets it: a DirectSound mixer sized from DIG_DS_FRAGMENT_SIZE (34, 8 ms),
-// DIG_DS_FRAGMENT_CNT (35, 96 fragments) and DIG_DS_MIX_FRAGMENT_CNT (42, 8
-// mixed ahead) divides by the first. Every other preference starts at 0.
-struct Preferences {
-    int32_t v[64] = {};
-    Preferences() {
-        v[34] = 8;
-        v[35] = 96;
-        v[42] = 8;
-    }
+
+uint32_t driver_open(uint32_t rate, uint32_t bits, uint32_t channels) {
+    uint32_t id = g_next_driver++;
+    g_drivers[id] = Driver{rate, bits, channels, 127, 0};
+    LOGV("mss32: opened digital driver %08x (%u Hz, %u-bit, %u channel(s))", id, rate, bits,
+         channels);
+    return id;
+}
+
+// AIL_last_error and AIL_set_redist_directory answer with a pointer to a
+// buffer Miles owns. Those buffers live in guest memory, allocated on first
+// use and forgotten with the arena.
+uint32_t g_last_error = 0, g_redist = 0;
+constexpr uint32_t kErrorBytes = 256, kRedistBytes = 260;
+
+uint32_t guest_buffer(uint32_t &slot, uint32_t bytes) {
+    if (!slot)
+        slot = heap_alloc(bytes, true);
+    return slot;
+}
+
+void set_error(const char *text) {
+    if (uint32_t buffer = guest_buffer(g_last_error, kErrorBytes))
+        gm_put_str(buffer, text, kErrorBytes);
+    LOGV("mss32: %s", text);
+}
+
+// A compressed sample: the whole image decoded to PCM the host can play.
+struct Decoded {
+    std::vector<int16_t> pcm;
+    uint32_t rate = 0, channels = 0;
 };
-Preferences g_prefs_store;
-int32_t *const g_preferences = g_prefs_store.v;
+constexpr size_t kDecodedLimit = 64u << 20; // samples of one image, as before
+
+std::shared_ptr<const Decoded> decode_mp3(uint32_t image, uint32_t bytes) {
+    const uint8_t *p = g_mem + image;
+    Mp3Source source;
+    if (!source.open(std::vector<uint8_t>(p, p + bytes)))
+        return nullptr;
+    auto out = std::make_shared<Decoded>();
+    out->rate = source.rate();
+    out->channels = source.channels();
+    std::vector<int16_t> frame;
+    while (source.decode_next(frame)) {
+        if ((out->pcm.size() + frame.size()) * 2 > kDecodedLimit)
+            return nullptr;
+        out->pcm.insert(out->pcm.end(), frame.begin(), frame.end());
+    }
+    if (out->pcm.empty())
+        return nullptr;
+    return out;
+}
 
 struct Sample {
     uint32_t handle = 0, driver = 0;
-    std::vector<int16_t> decoded;
     bool alive = false;
     int32_t channel = -1;
-    RiffWave wave{};
+    RiffWave wave{}; // the format; .pcm is a guest address unless decoded
+    // A compressed image, decoded. Miles counts such a sample's positions in
+    // the image's own bytes, so its length is kept beside the PCM.
+    std::shared_ptr<const Decoded> decoded;
+    uint32_t encoded_bytes = 0;
     int32_t volume = 127, pan = 64;
-    uint32_t loops = 1, remaining = 0;
+    // Miles' loop count: 0 plays for ever, n plays n more times counting the
+    // pass under way. Miles counts it down at each loop point.
+    uint32_t loops = 1;
+    uint32_t rate = 11025; // the playback rate, Hz
+    uint32_t position = 0; // PCM bytes: where a sample that is not playing stands
     bool playing = false;
+    bool retuned = false; // the host channel's rate was changed under a playing sound
 };
 std::vector<Sample> g_samples(64);
 
@@ -74,57 +171,139 @@ Sample *sample_for(uint32_t handle) {
     return s.alive ? &s : nullptr;
 }
 
-// The sample borrows its WAVE image. The host copies PCM on submission;
-// Miles keeps the shared channel reserved until init or handle release.
+const Driver *driver_of(const Sample &s) {
+    auto it = g_drivers.find(s.driver);
+    return it == g_drivers.end() ? nullptr : &it->second;
+}
+
+uint32_t frame_bytes(const Sample &s) {
+    return std::max<uint32_t>(1, (uint32_t)s.wave.channels * (s.wave.bits / 8));
+}
+
+// Bytes of sample data per "frame" in Miles' own units: a PCM frame, or one
+// byte of a compressed image.
+uint32_t granularity(const Sample &s) {
+    return s.decoded ? 1 : frame_bytes(s);
+}
+
+// Positions cross between the PCM the host plays and the units Miles reports:
+// a compressed image's bytes, in proportion, for a decoded sample.
+uint32_t to_miles(const Sample &s, uint32_t pcm) {
+    if (!s.decoded || !s.wave.pcm_bytes)
+        return pcm;
+    return (uint32_t)((uint64_t)pcm * s.encoded_bytes / s.wave.pcm_bytes);
+}
+uint32_t from_miles(const Sample &s, uint32_t pos) {
+    uint64_t pcm = pos;
+    if (s.decoded && s.encoded_bytes)
+        pcm = (uint64_t)pos * s.wave.pcm_bytes / s.encoded_bytes;
+    pcm = std::min<uint64_t>(pcm, s.wave.pcm_bytes);
+    return (uint32_t)(pcm - pcm % frame_bytes(s));
+}
+
+// Miles scales a sample by its driver's master volume in integer steps of
+// 1/127, then pans what is left. A mono driver has no sides to pan between.
+int32_t sample_volume(const Sample &s) {
+    const Driver *d = driver_of(s);
+    int32_t master = d ? d->master : 127;
+    return miles_volume_mb(master * std::clamp(s.volume, 0, 127) / 127);
+}
+int32_t sample_pan(const Sample &s) {
+    const Driver *d = driver_of(s);
+    return d && d->channels == 1 ? 0 : miles_pan_mb(s.pan);
+}
+
+// The sample borrows its WAVE image (or shares its decoded PCM). The host
+// copies PCM on submission; Miles keeps the shared channel reserved until
+// init or handle release.
 void sample_stop(Sample &s) {
     if (s.channel >= 0)
         host_audio_stop(s.channel);
     s.playing = false;
-    s.remaining = 0;
 }
 
-void sample_reset(Sample &s) {
+// Each play states its own rate. A rate changed under a playing sound
+// retuned the channel itself, and a retuned channel keeps that rate over the
+// rate a later play names, so it is put back first.
+void sample_untune(Sample &s) {
+    if (!s.retuned || s.channel < 0)
+        return;
+    host_audio_stop(s.channel);
+    host_audio_set_frequency(s.channel, 0);
+    s.retuned = false;
+}
+
+void sample_init(Sample &s) {
     sample_stop(s);
+    sample_untune(s);
     dx_free_audio_channel(s.channel);
     uint32_t handle = s.handle, driver = s.driver;
     s = Sample{};
     s.handle = handle;
     s.driver = driver;
     s.alive = true;
+    // AIL_init_sample's defaults: DIG_DEFAULT_VOLUME, centred on a stereo
+    // driver, one pass, 11025 Hz until a file states its own rate.
+    s.volume = std::clamp(g_preferences[2], 0, 127);
+    const Driver *d = driver_of(s);
+    s.pan = d && d->channels == 1 ? 0 : 64;
 }
 
-int sample_volume(const Sample &s) {
-    auto it = g_drivers.find(s.driver);
-    return miles_volume_mb(s.volume) +
-           miles_volume_mb(it == g_drivers.end() ? 127 : it->second.master);
-}
-
-void sample_play(Sample &s) {
+void sample_play(Sample &s, uint32_t from) {
+    sample_untune(s);
     HostAudioPlay p{};
     p.channel = s.channel;
-    p.pcm = s.decoded.empty() ? (const void *)(g_mem + s.wave.pcm) : s.decoded.data();
+    p.pcm = s.decoded ? (const void *)s.decoded->pcm.data() : (const void *)(g_mem + s.wave.pcm);
     p.bytes = s.wave.pcm_bytes;
-    p.sample_rate = (int32_t)s.wave.rate;
+    p.sample_rate = (int32_t)(s.rate ? s.rate : s.wave.rate);
     p.channels = s.wave.channels;
     p.bits = s.wave.bits;
     p.loop = s.loops == 0 ? 1 : 0;
-    p.volume = std::max(-10000, sample_volume(s));
-    p.pan = miles_pan_mb(s.pan);
+    p.volume = sample_volume(s);
+    p.pan = sample_pan(s);
+    p.start_offset = from;
     host_audio_play(&p);
     s.playing = true;
+    s.position = from;
 }
 
-// The host loop flag is boolean. Finite repeats restart at completion on
-// the runtime's frame seam (also observed by status), with n total plays.
-void sample_update(Sample &s) {
-    if (!s.playing || host_audio_is_playing(s.channel))
+// Where a sample has reached, in PCM bytes from the start of its data. The
+// host wraps a loop over the whole buffer, as Miles returns to the loop start.
+uint32_t sample_cursor(const Sample &s) {
+    if (!s.playing || s.channel < 0)
+        return s.position;
+    uint32_t pos = std::min(host_audio_position(s.channel), s.wave.pcm_bytes);
+    return pos - pos % frame_bytes(s);
+}
+
+// A pass reached the end of the data. Miles counts the loop field down and
+// goes round again, or finishes: status DONE, the position at the end. The
+// host loop flag is boolean, so finite repeats restart here on the runtime's
+// frame seam (also observed by status).
+void sample_pass_ended(Sample &s) {
+    if (s.loops > 1) {
+        --s.loops;
+        sample_play(s, 0);
         return;
-    if (s.remaining > 1) {
-        --s.remaining;
-        sample_play(s);
-    } else {
-        s.remaining = 0;
-        s.playing = false;
+    }
+    s.playing = false;
+    s.position = s.wave.pcm_bytes;
+}
+
+void sample_update(Sample &s) {
+    if (s.playing && !host_audio_is_playing(s.channel))
+        sample_pass_ended(s);
+}
+
+// The loop flag of a playing sound is fixed when it is scheduled. A change
+// of "for ever" while it plays reschedules it from where it is, so a loop
+// that is ended finishes its pass and a one-shot that becomes a loop goes round.
+void sample_relooped(Sample &s, bool was_forever) {
+    if (s.playing && (s.loops == 0) != was_forever && s.channel >= 0) {
+        uint32_t at = sample_cursor(s);
+        if (at >= s.wave.pcm_bytes)
+            at = 0;
+        sample_play(s, at);
     }
 }
 
@@ -134,14 +313,19 @@ void sample_update(Sample &s) {
 void ail_file_read(X86 *c) {
     set_eax(c, 0);
     std::string path = win32_host_path_op(gm_str(arg(c, 0)), WIN32_FILE_READ);
-    if (path.empty())
+    if (path.empty()) {
+        set_error("Unable to open file.");
         return;
+    }
     int fd = os_fd_open(path.c_str(), OS_O_RDONLY);
-    if (fd < 0)
+    if (fd < 0) {
+        set_error("Unable to open file.");
         return;
+    }
     OsStat st{};
     if (os_fd_stat(fd, &st) != 0 || !st.is_regular || !st.size || st.size > UINT32_MAX) {
         os_fd_close(fd);
+        set_error("Unable to open file.");
         return;
     }
     uint32_t bytes = (uint32_t)st.size, dest = arg(c, 1);
@@ -152,6 +336,7 @@ void ail_file_read(X86 *c) {
         if (allocate && dest)
             heap_free(dest);
         os_fd_close(fd);
+        set_error("Out of memory.");
         return;
     }
     uint32_t got = 0;
@@ -165,9 +350,31 @@ void ail_file_read(X86 *c) {
     if (got != bytes) {
         if (allocate)
             heap_free(dest);
+        set_error("Unable to read file.");
         return;
     }
     set_eax(c, dest);
+}
+
+// AIL_file_size(filename): the size in bytes, or -1 with "Unable to open file."
+void ail_file_size(X86 *c) {
+    std::string path = win32_host_path_op(gm_str(arg(c, 0)), WIN32_FILE_READ);
+    OsStat st{};
+    if (path.empty() || os_stat(path.c_str(), &st) != 0 || !st.is_regular || st.size > INT32_MAX) {
+        set_error("Unable to open file.");
+        set_eax(c, 0xffffffffu);
+        return;
+    }
+    set_eax(c, (uint32_t)st.size);
+}
+
+// AIL_mem_alloc_lock(bytes): Miles allocates GMEM_ZEROINIT, so the block is
+// zeroed; AIL_mem_free_lock gives it back.
+void ail_mem_alloc_lock(X86 *c) {
+    uint32_t block = heap_alloc(std::max(arg(c, 0), 1u), true);
+    if (!block)
+        set_error("Out of memory.");
+    set_eax(c, block);
 }
 
 void ail_mem_free_lock(X86 *c) {
@@ -185,23 +392,34 @@ void ail_allocate_sample_handle(X86 *c) {
         s.handle = i + 1;
         s.driver = arg(c, 0);
         s.alive = true;
+        sample_init(s);
         set_eax(c, s.handle);
         return;
     }
+    set_error("Out of sample handles.");
 }
 
 void ail_release_sample_handle(X86 *c) {
     if (Sample *s = sample_for(arg(c, 0))) {
-        sample_reset(*s);
-        s->alive = false;
+        sample_init(*s);
+        *s = Sample{};
     }
     set_eax(c, 0);
 }
 
 void ail_init_sample(X86 *c) {
     if (Sample *s = sample_for(arg(c, 0)))
-        sample_reset(*s);
+        sample_init(*s);
     set_eax(c, 0);
+}
+
+// Forget the data a sample had, ahead of a new image.
+void sample_unload(Sample &s) {
+    sample_stop(s);
+    s.wave = RiffWave{};
+    s.decoded.reset();
+    s.encoded_bytes = 0;
+    s.position = 0;
 }
 
 void ail_set_sample_file(X86 *c) {
@@ -209,9 +427,7 @@ void ail_set_sample_file(X86 *c) {
     Sample *s = sample_for(arg(c, 0));
     if (!s)
         return;
-    sample_stop(*s);
-    s->wave = RiffWave{};
-    s->decoded.clear();
+    sample_unload(*s);
     uint32_t image = arg(c, 1);
     if (!image || !gm_valid(image, 12))
         return;
@@ -221,42 +437,47 @@ void ail_set_sample_file(X86 *c) {
     uint32_t allocated = heap_size(image);
     if (bytes > UINT32_MAX || (allocated != UINT32_MAX && bytes > allocated))
         return;
-    if (riff_parse_wave(image, (uint32_t)bytes, &s->wave))
+    if (riff_parse_wave(image, (uint32_t)bytes, &s->wave)) {
+        s->rate = s->wave.rate;
         set_eax(c, 1);
+    } else {
+        s->wave = RiffWave{};
+        set_error("Unsupported wave file format.");
+    }
 }
 
-// Named samples carry a byte length, allowing packed MP3 effects as well as RIFF.
+// AIL_set_named_sample_file(S, name, image, bytes, block). Miles picks the
+// decoder by the name (an MP3 decoder provider claims "*.mp3"; ".wav" goes to
+// its own RIFF reader); this reads the image itself, which agrees on every
+// image Miles plays and also takes packed MP3 effects under other names.
+// RIFF PCM plays from guest memory; MP3 decodes here, whole.
 void ail_set_named_sample_file(X86 *c) {
     Sample *s = sample_for(arg(c, 0));
     set_eax(c, 0);
     if (!s)
         return;
-    sample_stop(*s);
-    s->wave = {};
-    s->decoded.clear();
+    sample_unload(*s);
     uint32_t data = arg(c, 2), bytes = arg(c, 3);
     if (!data || !bytes || !gm_valid(data, bytes))
         return;
     if (riff_parse_wave(data, bytes, &s->wave)) {
+        s->rate = s->wave.rate;
         set_eax(c, 1);
         return;
     }
-    Mp3Source source;
-    if (!source.open(std::vector<uint8_t>(g_mem + data, g_mem + data + bytes)))
+    s->wave = RiffWave{};
+    s->decoded = decode_mp3(data, bytes);
+    if (!s->decoded) {
+        set_error("Unknown file type.");
         return;
-    std::vector<int16_t> frame;
-    while (source.decode_next(frame)) {
-        if (s->decoded.size() + frame.size() > 64 * 1024 * 1024) {
-            s->decoded.clear();
-            return;
-        }
-        s->decoded.insert(s->decoded.end(), frame.begin(), frame.end());
     }
-    s->wave.pcm_bytes = uint32_t(s->decoded.size() * 2);
-    s->wave.rate = source.rate();
-    s->wave.channels = source.channels();
+    s->encoded_bytes = bytes;
+    s->wave.pcm_bytes = uint32_t(s->decoded->pcm.size() * 2);
+    s->wave.rate = s->decoded->rate;
+    s->wave.channels = (uint16_t)s->decoded->channels;
     s->wave.bits = 16;
-    set_eax(c, s->wave.pcm_bytes != 0);
+    s->rate = s->wave.rate;
+    set_eax(c, 1);
 }
 
 // A successful waveOutOpen must populate HDIGDRIVER, not just return zero.
@@ -269,23 +490,45 @@ void ail_wave_open(X86 *c) {
     if (!fmt || !gm_valid(fmt, 16) || rd16(fmt) != 1 || !rd32(fmt + 4) ||
         (rd16(fmt + 2) != 1 && rd16(fmt + 2) != 2) || (rd16(fmt + 14) != 8 && rd16(fmt + 14) != 16))
         return;
-    uint32_t id = g_next_driver++;
-    g_drivers[id] = {rd32(fmt + 4), rd16(fmt + 14), rd16(fmt + 2), 127};
+    uint32_t id = driver_open(rd32(fmt + 4), rd16(fmt + 14), rd16(fmt + 2));
     wr32(out, id);
     if (arg(c, 1) && gm_valid(arg(c, 1), 4))
         wr32(arg(c, 1), id);
-    LOGV("mss32: opened digital driver %08x (%u Hz)", id, rd32(fmt + 4));
     set_eax(c, 0);
 }
-void ail_wave_close(X86 *c) {
+
+void driver_close(uint32_t id) {
     for (auto &s : g_samples)
-        if (s.alive && s.driver == arg(c, 0)) {
-            sample_reset(s);
-            s.alive = false;
+        if (s.alive && s.driver == id) {
+            sample_init(s);
+            s = Sample{};
         }
-    g_drivers.erase(arg(c, 0));
+    g_drivers.erase(id);
+}
+
+void ail_wave_close(X86 *c) {
+    driver_close(arg(c, 0));
     set_eax(c, 0);
 }
+
+// AIL_open_digital_driver(rate, bits, channels, flags) -> HDIGDRIVER, or 0.
+// Miles builds the PCM format the way it does for every output: any channel
+// count but 1 is stereo, any width but 8 is 16-bit, rate 0 is 22050 Hz. Flag
+// bit 0 keeps the caller's DIG_USE_WAVEOUT; without it DirectSound is tried
+// first, which here is the same device.
+void ail_open_digital_driver(X86 *c) {
+    uint32_t rate = arg(c, 0) ? arg(c, 0) : 22050;
+    uint32_t bits = arg(c, 1) != 8 ? 16 : 8, channels = arg(c, 2) != 1 ? 2 : 1;
+    if (!(arg(c, 3) & 1))
+        g_preferences[15] = 0;
+    set_eax(c, driver_open(rate, bits, channels));
+}
+
+void ail_close_digital_driver(X86 *c) {
+    driver_close(arg(c, 0));
+    set_eax(c, 0);
+}
+
 void ail_configuration(X86 *c) {
     auto it = g_drivers.find(arg(c, 0));
     if (it != g_drivers.end()) {
@@ -304,7 +547,7 @@ void ail_master_volume(X86 *c) {
         it->second.master = std::clamp((int32_t)arg(c, 1), 0, 127);
     for (auto &s : g_samples)
         if (s.alive && s.channel >= 0 && s.driver == arg(c, 0))
-            host_audio_set_volume(s.channel, std::max(-10000, sample_volume(s)));
+            host_audio_set_volume(s.channel, sample_volume(s));
     set_eax(c, 0);
 }
 void ail_preference(X86 *c) {
@@ -317,21 +560,105 @@ void ail_get_preference(X86 *c) {
     set_eax(c, arg(c, 0) < 64 ? g_preferences[arg(c, 0)] : 0);
 }
 
+// AIL_startup installs the preference defaults (a preference set earlier is
+// lost, as in Miles) and reports success.
+void ail_startup(X86 *c) {
+    preferences_default();
+    set_eax(c, 1);
+}
+
+// AIL_shutdown closes every driver, and so every sample on it, and every stream.
+void streams_close();
+void ail_shutdown(X86 *c) {
+    while (!g_drivers.empty())
+        driver_close(g_drivers.begin()->first);
+    for (auto &s : g_samples)
+        if (s.alive) {
+            sample_init(s);
+            s = Sample{};
+        }
+    streams_close();
+    set_eax(c, 0);
+}
+
+// AIL_get_DirectSound_info(S, LPDIRECTSOUND *, LPDIRECTSOUNDBUFFER *): the
+// DirectSound object the driver plays through, which is the one the runtime
+// shares with DirectMusic and Bink. A sample here never has a DirectSound
+// buffer of its own, and Miles leaves that out-parameter untouched then; for
+// S = 0 Miles reports its mixing buffer, and there is none to report.
+void ail_get_directsound_info(X86 *c) {
+    uint32_t ds_out = arg(c, 1), dsb_out = arg(c, 2);
+    if (ds_out && gm_valid(ds_out, 4))
+        wr32(ds_out, dsound_shared_device());
+    if (!arg(c, 0) && dsb_out && gm_valid(dsb_out, 4)) {
+        log_once("mss32.dsb", "mss32: AIL_get_DirectSound_info reports no mixing buffer");
+        wr32(dsb_out, 0);
+    }
+    set_eax(c, 0);
+}
+
+// AIL_set_DirectSound_HWND(driver, hwnd): the window DirectSound's
+// cooperative level names. Nothing here depends on it.
+void ail_set_directsound_hwnd(X86 *c) {
+    auto it = g_drivers.find(arg(c, 0));
+    if (it != g_drivers.end())
+        it->second.hwnd = arg(c, 1);
+    set_eax(c, it != g_drivers.end() ? 1 : 0);
+}
+
+// AIL_set_redist_directory(dir): where Miles looks for its providers. It
+// keeps its own copy, ending in a backslash unless empty or a bare drive, and
+// returns that copy.
+void ail_set_redist_directory(X86 *c) {
+    uint32_t buffer = guest_buffer(g_redist, kRedistBytes);
+    if (!buffer) {
+        set_eax(c, 0);
+        return;
+    }
+    std::string dir = arg(c, 0) ? gm_str(arg(c, 0), kRedistBytes - 2) : std::string();
+    if (!dir.empty() && dir.back() != '\\' && dir.back() != ':')
+        dir += '\\';
+    gm_put_str(buffer, dir.c_str(), kRedistBytes);
+    set_eax(c, buffer);
+}
+
+// AIL_last_error(): the message of the last failure, "" before any.
+void ail_last_error(X86 *c) {
+    set_eax(c, guest_buffer(g_last_error, kErrorBytes));
+}
+
+// The host mixer is not Miles' mixer: it runs on the audio device's own
+// thread, so there is no Miles service timer to be late and no mixing cost to
+// report against it.
+void ail_digital_cpu_percent(X86 *c) {
+    set_eax(c, 0);
+}
+void ail_get_timer_highest_delay(X86 *c) {
+    set_eax(c, 0);
+}
+
 void ail_start_sample(X86 *c) {
+    // Miles starts at the top: AIL_start_sample zeroes the position, so a
+    // position set before it does not survive it.
     if (Sample *s = sample_for(arg(c, 0)); s && s->wave.pcm_bytes) {
         if (s->channel < 0)
             s->channel = dx_alloc_audio_channel();
         if (s->channel >= 0) {
-            s->remaining = s->loops;
-            sample_play(*s);
+            sample_play(*s, 0);
         }
     }
     set_eax(c, 0);
 }
 
+// A sample ended where it stands keeps that position.
 void ail_end_sample(X86 *c) {
-    if (Sample *s = sample_for(arg(c, 0)))
-        sample_stop(*s);
+    if (Sample *s = sample_for(arg(c, 0))) {
+        sample_update(*s);
+        if (s->playing) {
+            s->position = sample_cursor(*s);
+            sample_stop(*s);
+        }
+    }
     set_eax(c, 0);
 }
 
@@ -346,7 +673,7 @@ void ail_set_sample_volume(X86 *c) {
     if (Sample *s = sample_for(arg(c, 0))) {
         s->volume = std::clamp((int32_t)arg(c, 1), 0, 127);
         if (s->channel >= 0)
-            host_audio_set_volume(s->channel, std::max(-10000, sample_volume(*s)));
+            host_audio_set_volume(s->channel, sample_volume(*s));
     }
     set_eax(c, 0);
 }
@@ -355,20 +682,112 @@ void ail_set_sample_pan(X86 *c) {
     if (Sample *s = sample_for(arg(c, 0))) {
         s->pan = std::clamp((int32_t)arg(c, 1), 0, 127);
         if (s->channel >= 0)
-            host_audio_set_pan(s->channel, miles_pan_mb(s->pan));
+            host_audio_set_pan(s->channel, sample_pan(*s));
     }
     set_eax(c, 0);
 }
 
 void ail_set_sample_loop_count(X86 *c) {
-    if (Sample *s = sample_for(arg(c, 0)))
+    if (Sample *s = sample_for(arg(c, 0))) {
+        bool was_forever = s->loops == 0;
         s->loops = arg(c, 1);
+        sample_relooped(*s, was_forever);
+    }
     set_eax(c, 0);
 }
 
 void ail_sample_loop_count(X86 *c) {
     Sample *s = sample_for(arg(c, 0));
     set_eax(c, s ? s->loops : 0);
+}
+
+// AIL_sample_granularity: the bytes a position moves in - a PCM frame, or 1
+// for a compressed image. A mixer divides a sample's length by it.
+void ail_sample_granularity(X86 *c) {
+    Sample *s = sample_for(arg(c, 0));
+    set_eax(c, s ? granularity(*s) : 0);
+}
+
+void ail_sample_playback_rate(X86 *c) {
+    Sample *s = sample_for(arg(c, 0));
+    set_eax(c, s ? s->rate : 0);
+}
+
+// A rate set before the sample plays is what its next play states; one set
+// while it plays retunes the channel from where it is, without a restart.
+void ail_set_sample_playback_rate(X86 *c) {
+    if (Sample *s = sample_for(arg(c, 0))) {
+        s->rate = arg(c, 1);
+        sample_update(*s);
+        if (s->playing && s->rate && s->channel >= 0) {
+            host_audio_set_frequency(s->channel, s->rate);
+            s->retuned = true;
+        }
+    }
+    set_eax(c, 0);
+}
+
+// AIL_sample_position: bytes into the sample's data - PCM bytes, or the
+// compressed image's bytes for a compressed sample.
+void ail_sample_position(X86 *c) {
+    Sample *s = sample_for(arg(c, 0));
+    if (s)
+        sample_update(*s);
+    set_eax(c, s ? to_miles(*s, sample_cursor(*s)) : 0);
+}
+
+// AIL_set_sample_position: Miles rounds to the nearest whole granule. A
+// playing sample moves there at once; at or past the end, that is the end of
+// a pass. A sample that is not playing keeps it until the next start, which
+// begins at the top regardless.
+void ail_set_sample_position(X86 *c) {
+    if (Sample *s = sample_for(arg(c, 0))) {
+        uint32_t g = granularity(*s);
+        uint64_t pos = ((uint64_t)arg(c, 1) + g / 2) / g * g;
+        uint32_t pcm = from_miles(*s, (uint32_t)std::min<uint64_t>(pos, UINT32_MAX));
+        sample_update(*s);
+        if (!s->playing) {
+            s->position = pcm;
+        } else if (pcm < s->wave.pcm_bytes) {
+            sample_play(*s, pcm);
+        } else if (s->loops == 0) {
+            sample_play(*s, 0);
+        } else {
+            sample_stop(*s);
+            sample_pass_ended(*s);
+        }
+    }
+    set_eax(c, 0);
+}
+
+// AIL_sample_ms_position(S, &total_ms, &current_ms). Miles converts at the
+// data's byte rate: a PCM frame per sample at the current playback rate, or
+// the compressed image's bit rate, which is spread over the decoded length.
+void ail_sample_ms_position(X86 *c) {
+    Sample *s = sample_for(arg(c, 0));
+    uint32_t total_out = arg(c, 1), current_out = arg(c, 2);
+    set_eax(c, 0);
+    if (!s)
+        return;
+    sample_update(*s);
+    double per_second;
+    uint32_t length = s->wave.pcm_bytes, at = sample_cursor(*s);
+    if (s->decoded) {
+        double seconds =
+            s->wave.rate ? (double)(s->wave.pcm_bytes / frame_bytes(*s)) / s->wave.rate : 0.0;
+        per_second = seconds > 0 ? s->encoded_bytes / seconds : 0.0;
+        length = s->encoded_bytes;
+        at = to_miles(*s, at);
+    } else {
+        per_second = (double)frame_bytes(*s) * s->rate;
+    }
+    auto ms = [per_second](uint32_t bytes) {
+        return per_second > 0 ? (uint32_t)std::nearbyint(bytes * 1000.0 / per_second) : 0u;
+    };
+    if (total_out && gm_valid(total_out, 4))
+        wr32(total_out, ms(length));
+    if (current_out && gm_valid(current_out, 4))
+        wr32(current_out, ms(at));
 }
 
 // Stream handles own the encoded image, decoder and shared host channel.
@@ -543,6 +962,32 @@ void ail_set_stream_loop_count(X86 *c) {
     set_eax(c, 0);
 }
 
+void streams_close() {
+    for (auto &s : g_streams)
+        if (s.alive) {
+            host_audio_stop(s.channel);
+            dx_free_audio_channel(s.channel);
+            s = Stream{};
+        }
+}
+
+// Ends passes, restarts finite loops and keeps streams fed. From the frame
+// pump and from AIL_serve, both on a guest thread holding the baton.
+void service(X86 *c) {
+    for (auto &s : g_samples)
+        if (s.alive)
+            sample_update(s);
+    for (auto &s : g_streams)
+        if (s.alive)
+            stream_update(s);
+}
+
+// AIL_serve: a game's own call to service the mixer between timer ticks.
+void ail_serve(X86 *c) {
+    service(c);
+    set_eax(c, 0);
+}
+
 void ret0(X86 *c) {
     set_eax(c, 0);
 }
@@ -556,17 +1001,28 @@ void ret_done(X86 *c) {
 #define AIL(name, bytes, fn) {"mss32.dll", "_AIL_" #name "@" #bytes, (bytes) / 4, fn}
 
 const ImportShim g_mss32_shims[] = {
-    AIL(startup, 0, ret1),
-    AIL(shutdown, 0, ret0),
+    AIL(startup, 0, ail_startup),
+    AIL(shutdown, 0, ail_shutdown),
     AIL(set_preference, 8, ail_preference),
     AIL(get_preference, 4, ail_get_preference),
+    AIL(last_error, 0, ail_last_error),
+    AIL(set_redist_directory, 4, ail_set_redist_directory),
+    AIL(serve, 0, ail_serve),
+    AIL(get_timer_highest_delay, 0, ail_get_timer_highest_delay),
     AIL(waveOutOpen, 16, ail_wave_open),
     AIL(waveOutClose, 4, ail_wave_close),
+    AIL(open_digital_driver, 16, ail_open_digital_driver),
+    AIL(close_digital_driver, 4, ail_close_digital_driver),
     AIL(digital_configuration, 16, ail_configuration),
+    AIL(digital_CPU_percent, 4, ail_digital_cpu_percent),
     AIL(set_digital_master_volume, 8, ail_master_volume),
+    AIL(get_DirectSound_info, 12, ail_get_directsound_info),
+    AIL(set_DirectSound_HWND, 8, ail_set_directsound_hwnd),
     AIL(set_named_sample_file, 20, ail_set_named_sample_file),
+    AIL(mem_alloc_lock, 4, ail_mem_alloc_lock),
     AIL(mem_free_lock, 4, ail_mem_free_lock),
     AIL(file_read, 8, ail_file_read),
+    AIL(file_size, 4, ail_file_size),
     AIL(allocate_sample_handle, 4, ail_allocate_sample_handle),
     AIL(release_sample_handle, 4, ail_release_sample_handle),
     AIL(init_sample, 4, ail_init_sample),
@@ -579,6 +1035,12 @@ const ImportShim g_mss32_shims[] = {
     AIL(set_sample_loop_count, 8, ail_set_sample_loop_count),
     AIL(sample_loop_count, 4, ail_sample_loop_count),
     AIL(set_sample_reverb, 16, ret0),
+    AIL(sample_granularity, 4, ail_sample_granularity),
+    AIL(sample_playback_rate, 4, ail_sample_playback_rate),
+    AIL(set_sample_playback_rate, 8, ail_set_sample_playback_rate),
+    AIL(sample_position, 4, ail_sample_position),
+    AIL(set_sample_position, 8, ail_set_sample_position),
+    AIL(sample_ms_position, 12, ail_sample_ms_position),
     AIL(open_stream, 12, ail_open_stream),
     AIL(start_stream, 4, ail_start_stream),
     AIL(close_stream, 4, ail_close_stream),
@@ -609,12 +1071,20 @@ const ImportShim g_mss32_shims[] = {
 void mss32_frame_pump(X86 *c) {
     if (!c)
         return;
+    service(c);
+}
+
+void mss32_reset() {
+    // The samples' channels went with dx_reset's channel table, and their
+    // images, the static strings and every stream's channel with the arena.
     for (auto &s : g_samples)
-        if (s.alive)
-            sample_update(s);
+        s = Sample{};
     for (auto &s : g_streams)
-        if (s.alive)
-            stream_update(s);
+        s = Stream{};
+    g_drivers.clear();
+    g_next_driver = 0x10000;
+    g_last_error = g_redist = 0;
+    preferences_default();
 }
 
 void mss32_register() {

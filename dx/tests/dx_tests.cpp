@@ -7172,6 +7172,239 @@ static void test_mss32_stream() {
     CHECK_EQ(os_rmdir(dir), 0);
 }
 
+// ---------------------------------------------------------------------------
+// Miles as a mixer plugin drives it: the digital driver, the preferences, the
+// shared DirectSound, the sample position, rate, pan, loop and callback calls,
+// and compressed samples. The data is synthetic, built here.
+// ---------------------------------------------------------------------------
+static uint32_t ail(const char *name, std::initializer_list<uint32_t> args) {
+    return call_shim(tramp("mss32.dll", name), args);
+}
+
+// A RIFF WAVE image in guest memory holding `frames` frames of a byte ramp.
+static uint32_t build_wave(uint32_t rate, uint16_t channels, uint16_t bits, uint32_t frames,
+                           uint32_t *bytes) {
+    uint32_t align = channels * bits / 8u, data = frames * align, total = 44 + data;
+    uint32_t w = heap_alloc(total, true);
+    CHECK(w != 0);
+    if (!w)
+        return 0;
+    memcpy(g_mem + w, "RIFF", 4);
+    wr32(w + 4, total - 8);
+    memcpy(g_mem + w + 8, "WAVEfmt ", 8);
+    wr32(w + 16, 16);
+    wr16(w + 20, 1);
+    wr16(w + 22, channels);
+    wr32(w + 24, rate);
+    wr32(w + 28, rate * align);
+    wr16(w + 32, (uint16_t)align);
+    wr16(w + 34, bits);
+    memcpy(g_mem + w + 36, "data", 4);
+    wr32(w + 40, data);
+    for (uint32_t i = 0; i < data; ++i)
+        wr8(w + 44 + i, (uint8_t)(i * 7));
+    *bytes = total;
+    return w;
+}
+
+// Every Miles call left over from an earlier test is closed, and the module
+// starts again from its defaults.
+static void mss32_fresh() {
+    ail("_AIL_shutdown@0", {});
+    mss32_reset();
+    CHECK_EQ(ail("_AIL_startup@0", {}), 1u);
+}
+
+static void test_mss32_driver() {
+    cpu_reset();
+    struct {
+        const char *name;
+        uint32_t argc;
+    } expected[] = {
+        {"_AIL_open_digital_driver@16", 4},
+        {"_AIL_close_digital_driver@4", 1},
+        {"_AIL_get_DirectSound_info@12", 3},
+        {"_AIL_set_DirectSound_HWND@8", 2},
+        {"_AIL_set_redist_directory@4", 1},
+        {"_AIL_last_error@0", 0},
+        {"_AIL_digital_CPU_percent@4", 1},
+        {"_AIL_get_timer_highest_delay@0", 0},
+        {"_AIL_serve@0", 0},
+        {"_AIL_mem_alloc_lock@4", 1},
+        {"_AIL_file_size@4", 1},
+        {"_AIL_sample_granularity@4", 1},
+        {"_AIL_sample_playback_rate@4", 1},
+        {"_AIL_set_sample_playback_rate@8", 2},
+        {"_AIL_sample_position@4", 1},
+        {"_AIL_set_sample_position@8", 2},
+        {"_AIL_sample_ms_position@12", 3},
+        {"_AIL_get_preference@4", 1},
+        {"_AIL_set_named_sample_file@20", 5},
+        {"_AIL_set_digital_master_volume@8", 2},
+        {"_AIL_digital_configuration@16", 4},
+    };
+    for (auto &e : expected) {
+        uint32_t t = tramp("mss32.dll", e.name);
+        CHECK(t != 0);
+        CHECK_EQ(imports_argc(t), e.argc);
+    }
+    mss32_fresh();
+
+    // The preference table AIL_startup installs. A mixer plugin divides by the
+    // DirectSound fragment size, so it must never read 0.
+    auto pref = [](uint32_t i) { return ail("_AIL_get_preference@4", {i}); };
+    auto set_pref = [](uint32_t i, uint32_t v) { return ail("_AIL_set_preference@8", {i, v}); };
+    CHECK_EQ(pref(0), 131u);
+    CHECK_EQ(pref(1), 64u);
+    CHECK_EQ(pref(2), 127u);
+    CHECK_EQ(pref(15), 0u);
+    CHECK_EQ(pref(34), 8u);
+    CHECK_EQ(pref(35), 96u);
+    CHECK_EQ(pref(42), 8u);
+    CHECK_EQ(pref(45), 100u);
+    CHECK_EQ(set_pref(34, 5), 8u);
+    CHECK_EQ(pref(34), 5u);
+    CHECK_EQ(ail("_AIL_startup@0", {}), 1u); // startup installs the table again
+    CHECK_EQ(pref(34), 8u);
+    CHECK_EQ(pref(64), 0u); // past the table
+
+    // Flag bit 0 keeps the caller's DIG_USE_WAVEOUT; the format is normalised
+    // as Miles does it: stereo unless 1 channel, 16-bit unless 8, 22050 for 0.
+    set_pref(15, 1);
+    uint32_t drv = ail("_AIL_open_digital_driver@16", {22050, 16, 2, 1});
+    CHECK(drv != 0);
+    CHECK_EQ(pref(15), 1u);
+    uint32_t odd = ail("_AIL_open_digital_driver@16", {0, 12, 6, 0});
+    CHECK(odd != 0 && odd != drv);
+    CHECK_EQ(pref(15), 0u);
+    ail("_AIL_digital_configuration@16", {odd, sc(0), sc(4), 0});
+    CHECK_EQ(rd32(sc(0)), 22050u);
+    CHECK_EQ(rd32(sc(4)), 3u); // stereo | 16-bit
+    uint32_t mono = ail("_AIL_open_digital_driver@16", {11025, 8, 1, 1});
+    ail("_AIL_digital_configuration@16", {mono, sc(0), sc(4), 0});
+    CHECK_EQ(rd32(sc(0)), 11025u);
+    CHECK_EQ(rd32(sc(4)), 0u);
+    CHECK_EQ(ail("_AIL_set_DirectSound_HWND@8", {drv, 0x1234}), 1u);
+    CHECK_EQ(ail("_AIL_set_DirectSound_HWND@8", {0xdead, 0x1234}), 0u);
+    CHECK_EQ(ail("_AIL_digital_CPU_percent@4", {drv}), 0u);
+    CHECK_EQ(ail("_AIL_get_timer_highest_delay@0", {}), 0u);
+    CHECK_EQ(ail("_AIL_serve@0", {}), 0u);
+
+    // AIL_last_error: one buffer, "" until something fails.
+    uint32_t error = ail("_AIL_last_error@0", {});
+    CHECK(error != 0);
+    CHECK(gm_str(error).empty());
+    char dir[512];
+    snprintf(dir, sizeof dir, "%s/recomp-mss32-driver-XXXXXX", os_temp_dir());
+    CHECK(os_mkdtemp(dir) == 0);
+    std::string previous_dir = win32_game_dir();
+    win32_init(dir);
+    std::string file = std::string(dir) + "/Data.bin";
+    FILE *f = fopen(file.c_str(), "wb");
+    CHECK(f != nullptr);
+    if (f) {
+        CHECK_EQ(fwrite("0123456789", 1, 10, f), 10u);
+        CHECK_EQ(fclose(f), 0);
+    }
+    uint32_t name = sc(0x300);
+    gm_put_str(name, "C:\\data.BIN", 0x100);
+    CHECK_EQ(ail("_AIL_file_size@4", {name}), 10u);
+    CHECK(gm_str(error).empty());
+    gm_put_str(name, "absent.bin", 0x100);
+    CHECK_EQ(ail("_AIL_file_size@4", {name}), 0xffffffffu);
+    CHECK_EQ(ail("_AIL_last_error@0", {}), error);
+    CHECK(gm_str(error) == std::string("Unable to open file."));
+    gm_put_str(name, "C:\\", 0x100); // a directory is not a file
+    CHECK_EQ(ail("_AIL_file_size@4", {name}), 0xffffffffu);
+    CHECK_EQ(remove(file.c_str()), 0);
+    CHECK_EQ(os_rmdir(dir), 0);
+    win32_init(previous_dir);
+
+    // AIL_set_redist_directory keeps its own copy, ending in a backslash.
+    gm_put_str(name, "redist\\win32", 0x100);
+    uint32_t redist = ail("_AIL_set_redist_directory@4", {name});
+    CHECK(redist != 0 && redist != name);
+    CHECK(gm_str(redist) == std::string("redist\\win32\\"));
+    gm_put_str(name, "C:", 0x100);
+    CHECK_EQ(ail("_AIL_set_redist_directory@4", {name}), redist);
+    CHECK(gm_str(redist) == std::string("C:"));
+    gm_put_str(name, "x\\", 0x100);
+    ail("_AIL_set_redist_directory@4", {name});
+    CHECK(gm_str(redist) == std::string("x\\"));
+    CHECK_EQ(ail("_AIL_set_redist_directory@4", {0}), redist);
+    CHECK(gm_str(redist).empty());
+
+    // AIL_mem_alloc_lock zero-fills, as Miles' GMEM_ZEROINIT does.
+    uint32_t junk = heap_alloc(256);
+    memset(g_mem + junk, 0xcd, 256);
+    heap_free(junk);
+    uint32_t block = ail("_AIL_mem_alloc_lock@4", {200});
+    CHECK(block != 0);
+    if (block) {
+        CHECK(heap_size(block) >= 200u);
+        bool zero = true;
+        for (uint32_t i = 0; i < 200; ++i)
+            zero &= rd8(block + i) == 0;
+        CHECK(zero);
+        ail("_AIL_mem_free_lock@4", {block});
+        CHECK(!heap_owns(block));
+    }
+    block = ail("_AIL_mem_alloc_lock@4", {0});
+    CHECK(block != 0);
+    ail("_AIL_mem_free_lock@4", {block});
+
+    // Closing a driver frees its samples; shutdown closes everything.
+    uint32_t h = ail("_AIL_allocate_sample_handle@4", {odd});
+    CHECK(h != 0);
+    CHECK_EQ(ail("_AIL_sample_status@4", {h}), 2u);
+    ail("_AIL_close_digital_driver@4", {odd});
+    CHECK_EQ(ail("_AIL_sample_status@4", {h}), 1u);
+    h = ail("_AIL_allocate_sample_handle@4", {drv});
+    CHECK_EQ(ail("_AIL_sample_status@4", {h}), 2u);
+    ail("_AIL_shutdown@0", {});
+    CHECK_EQ(ail("_AIL_sample_status@4", {h}), 1u);
+    wr32(sc(0), 0xabababab);
+    ail("_AIL_digital_configuration@16", {drv, sc(0), 0, 0});
+    CHECK_EQ(rd32(sc(0)), 0xababababu); // the driver is gone
+    (void)mono;
+}
+
+// The IDirectSound Miles reports is the runtime's shared one, and it answers
+// what a mixer plugin asks of it.
+static void test_mss32_directsound() {
+    cpu_reset();
+    mss32_fresh();
+    uint32_t drv = ail("_AIL_open_digital_driver@16", {22050, 16, 2, 1});
+    uint32_t h = ail("_AIL_allocate_sample_handle@4", {drv});
+    wr32(sc(0), 0);
+    wr32(sc(4), 0xabababab);
+    ail("_AIL_get_DirectSound_info@12", {h, sc(0), sc(4)});
+    uint32_t ds = rd32(sc(0));
+    CHECK(ds != 0);
+    CHECK_EQ(ds, dsound_shared_device());
+    CHECK_EQ(rd32(sc(4)), 0xababababu); // a sample has no buffer of its own: untouched
+    wr32(sc(8), 0);
+    wr32(sc(12), 0xabababab);
+    ail("_AIL_get_DirectSound_info@12", {0, sc(8), sc(12)});
+    CHECK_EQ(rd32(sc(8)), ds);
+    CHECK_EQ(rd32(sc(12)), 0u);
+    ail("_AIL_get_DirectSound_info@12", {h, 0, 0});
+
+    // The plugin: AddRef, GetCaps with a 0x60-byte DSCAPS, the voice count from
+    // dwFreeHwMixingAllBuffers (0, so its own 16), Release.
+    CHECK_EQ(call_method(ds, 1), 2u);
+    uint32_t caps = sc(0x200);
+    gm_zero(caps, 0x60);
+    wr32(caps, 0x60);
+    CHECK_EQ(call_method(ds, 4, {caps}), DS_OK);
+    CHECK(rd32(caps + 4) != 0);
+    CHECK_EQ(rd32(caps + 0x14), 0u);  // dwMaxHwMixingAllBuffers
+    CHECK_EQ(rd32(caps + 0x20), 0u);  // dwFreeHwMixingAllBuffers
+    CHECK_EQ(call_method(ds, 2), 1u); // the runtime's own reference remains
+    ail("_AIL_release_sample_handle@4", {h});
+    ail("_AIL_close_digital_driver@4", {drv});
+}
+
 static uint32_t make_buffer(uint32_t ds, uint32_t chans, uint32_t rate, uint32_t bits,
                             uint32_t bytes, uint32_t out);
 
@@ -7256,6 +7489,220 @@ static void test_dsound_shared_device() {
     CHECK(com_this(fresh) != com_this(ds));
     wr32(caps, 0x60);
     CHECK_EQ(call_method(fresh, 4, {caps}), DS_OK);
+}
+
+static void test_mss32_sample_calls() {
+    cpu_reset();
+    mss32_fresh();
+    g_sample_tracking = true;
+    g_plays.clear();
+    g_test_audio_pos = 0;
+    uint32_t drv = ail("_AIL_open_digital_driver@16", {22050, 16, 2, 1});
+    uint32_t h = ail("_AIL_allocate_sample_handle@4", {drv});
+    CHECK(h != 0);
+    // AIL_init_sample's defaults: done, 11025 Hz, one pass, no data.
+    CHECK_EQ(ail("_AIL_sample_status@4", {h}), 2u);
+    CHECK_EQ(ail("_AIL_sample_playback_rate@4", {h}), 11025u);
+    CHECK_EQ(ail("_AIL_sample_granularity@4", {h}), 1u);
+    CHECK_EQ(ail("_AIL_sample_loop_count@4", {h}), 1u);
+    CHECK_EQ(ail("_AIL_sample_granularity@4", {0}), 0u);
+    CHECK_EQ(ail("_AIL_sample_playback_rate@4", {0}), 0u);
+
+    // One second of 8-bit mono at 22050 Hz.
+    uint32_t bytes = 0;
+    uint32_t wav = build_wave(22050, 1, 8, 22050, &bytes);
+    uint32_t name = sc(0x300);
+    gm_put_str(name, "fx\\tone.wav", 0x100);
+    CHECK_EQ(ail("_AIL_set_named_sample_file@20", {h, name, wav, bytes, 0}), 1u);
+    CHECK_EQ(ail("_AIL_sample_playback_rate@4", {h}), 22050u);
+    CHECK_EQ(ail("_AIL_sample_granularity@4", {h}), 1u);
+    wr32(sc(0), 0xffffffff);
+    wr32(sc(4), 0xffffffff);
+    ail("_AIL_sample_ms_position@12", {h, sc(0), sc(4)});
+    CHECK_EQ(rd32(sc(0)), 1000u);
+    CHECK_EQ(rd32(sc(4)), 0u);
+    ail("_AIL_sample_ms_position@12", {h, 0, 0});
+    ail("_AIL_sample_ms_position@12", {0, sc(0), sc(4)});
+
+    // A position set before the start is kept until it, and the start begins
+    // at the top regardless: Miles' AIL_start_sample zeroes the position.
+    ail("_AIL_set_sample_position@8", {h, 5000});
+    CHECK_EQ(ail("_AIL_sample_position@4", {h}), 5000u);
+    ail("_AIL_start_sample@4", {h});
+    CHECK_EQ(ail("_AIL_sample_status@4", {h}), 4u);
+    CHECK_EQ(g_plays.size(), 1u);
+    if (g_plays.empty())
+        return;
+    int32_t ch = g_plays.back().channel;
+    CHECK_EQ(g_plays.back().start_offset, 0u);
+    CHECK_EQ(g_plays.back().rate, 22050);
+    CHECK_EQ(g_plays.back().bits, 8);
+    CHECK_EQ(g_plays.back().channels, 1);
+    CHECK_EQ(g_plays.back().bytes, 22050u);
+    CHECK_EQ(g_plays.back().loop, 0);
+    CHECK_EQ(g_plays.back().volume, 0);
+    CHECK_EQ(g_plays.back().pan, 0);
+
+    // Playing, the position is the host's cursor, in bytes and in ms.
+    g_test_audio_pos = 11025;
+    CHECK_EQ(ail("_AIL_sample_position@4", {h}), 11025u);
+    ail("_AIL_sample_ms_position@12", {h, sc(0), sc(4)});
+    CHECK_EQ(rd32(sc(0)), 1000u);
+    CHECK_EQ(rd32(sc(4)), 500u);
+    // A seek while playing reschedules from there; past the end of a one-shot
+    // is its end, with the position at the end.
+    size_t n = g_plays.size();
+    ail("_AIL_set_sample_position@8", {h, 2000});
+    CHECK_EQ(g_plays.size(), n + 1);
+    CHECK_EQ(g_plays.back().start_offset, 2000u);
+    ail("_AIL_set_sample_position@8", {h, bytes});
+    CHECK_EQ(ail("_AIL_sample_status@4", {h}), 2u);
+    CHECK_EQ(ail("_AIL_sample_position@4", {h}), 22050u);
+    g_test_audio_pos = 0;
+
+    // Pitch. A rate set before the start is the rate the play states, and the
+    // ms position counts at it; one set while playing retunes the channel
+    // without a restart; the next start puts the channel back.
+    ail("_AIL_set_sample_playback_rate@8", {h, 23152});
+    CHECK_EQ(ail("_AIL_sample_playback_rate@4", {h}), 23152u);
+    ail("_AIL_start_sample@4", {h});
+    CHECK_EQ(g_plays.back().rate, 23152);
+    ail("_AIL_sample_ms_position@12", {h, sc(0), sc(4)});
+    CHECK_EQ(rd32(sc(0)), 952u);
+    n = g_plays.size();
+    ail("_AIL_set_sample_playback_rate@8", {h, 21000});
+    CHECK_EQ(g_plays.size(), n);
+    CHECK_EQ(g_audio_rates[ch], 21000u);
+    ail("_AIL_start_sample@4", {h});
+    CHECK_EQ(g_audio_rates[ch], 0u);
+    CHECK_EQ(g_plays.back().rate, 21000);
+    ail("_AIL_set_sample_playback_rate@8", {h, 22050});
+
+    // Miles' balance pan: centre is full on both sides, and the far side fades
+    // linearly - by 6.3 dB at three quarters right, not to silence.
+    struct {
+        uint32_t pan;
+        int32_t mb;
+    } pans[] = {{0, -10000}, {32, -602}, {62, -28},   {63, 0},      {64, 0},
+                {65, 28},    {96, 630},  {126, 3612}, {127, 10000}, {300, 10000}};
+    for (auto p : pans) {
+        ail("_AIL_set_sample_pan@8", {h, p.pan});
+        ail("_AIL_start_sample@4", {h});
+        CHECK_EQ(g_plays.back().pan, p.mb);
+    }
+    ail("_AIL_set_sample_pan@8", {h, 32});
+    CHECK_EQ(g_audio_pans[ch], -602);
+    ail("_AIL_set_sample_pan@8", {h, 64});
+    // Volume: the sample's times the driver's, in Miles' integer 1/127 steps.
+    ail("_AIL_set_digital_master_volume@8", {drv, 64});
+    ail("_AIL_set_sample_volume@8", {h, 127});
+    ail("_AIL_start_sample@4", {h});
+    CHECK_EQ(g_plays.back().volume, -595);
+    ail("_AIL_set_sample_volume@8", {h, 64});
+    CHECK_EQ(g_audio_volumes[ch], -1197);
+    ail("_AIL_set_digital_master_volume@8", {drv, 127});
+    CHECK_EQ(g_audio_volumes[ch], -595);
+    ail("_AIL_set_sample_volume@8", {h, 0});
+    CHECK_EQ(g_audio_volumes[ch], -10000);
+    ail("_AIL_set_sample_volume@8", {h, 127});
+
+    // Loops. Miles counts the loop field down at each loop point, and the
+    // pass that ends with it at 1 is the last; AIL_serve and the frame pump
+    // both service it.
+    ail("_AIL_set_sample_loop_count@8", {h, 3});
+    ail("_AIL_start_sample@4", {h});
+    CHECK_EQ(g_plays.back().loop, 0);
+    n = g_plays.size();
+    g_sample_playing[ch] = false;
+    ail("_AIL_serve@0", {});
+    CHECK_EQ(g_plays.size(), n + 1);
+    CHECK_EQ(g_plays.back().start_offset, 0u);
+    CHECK_EQ(ail("_AIL_sample_loop_count@4", {h}), 2u);
+    g_sample_playing[ch] = false;
+    host_pump_timers(&g_cpu);
+    CHECK_EQ(g_plays.size(), n + 2);
+    CHECK_EQ(ail("_AIL_sample_loop_count@4", {h}), 1u);
+    g_sample_playing[ch] = false;
+    CHECK_EQ(ail("_AIL_sample_status@4", {h}), 2u);
+    CHECK_EQ(g_plays.size(), n + 2);
+    CHECK_EQ(ail("_AIL_sample_position@4", {h}), 22050u);
+    // A loop told to stop finishes the pass it is in; a one-shot told to loop
+    // goes round. Both continue from where they are.
+    ail("_AIL_set_sample_loop_count@8", {h, 0});
+    ail("_AIL_start_sample@4", {h});
+    CHECK_EQ(g_plays.back().loop, 1);
+    g_test_audio_pos = 4000;
+    n = g_plays.size();
+    ail("_AIL_set_sample_loop_count@8", {h, 1});
+    CHECK_EQ(g_plays.size(), n + 1);
+    CHECK_EQ(g_plays.back().loop, 0);
+    CHECK_EQ(g_plays.back().start_offset, 4000u);
+    ail("_AIL_set_sample_loop_count@8", {h, 0});
+    CHECK_EQ(g_plays.size(), n + 2);
+    CHECK_EQ(g_plays.back().loop, 1);
+    ail("_AIL_set_sample_loop_count@8", {h, 0});
+    CHECK_EQ(g_plays.size(), n + 2);
+    // Past the end of a loop goes round to the top.
+    ail("_AIL_set_sample_position@8", {h, 30000});
+    CHECK_EQ(g_plays.back().start_offset, 0u);
+    CHECK_EQ(ail("_AIL_sample_status@4", {h}), 4u);
+    ail("_AIL_end_sample@4", {h});
+    CHECK_EQ(ail("_AIL_sample_status@4", {h}), 2u);
+    g_test_audio_pos = 0;
+
+    // 16-bit stereo: a granule is a whole frame, positions round to the
+    // nearest one, and ms count frames.
+    uint32_t bytes2 = 0;
+    uint32_t wav2 = build_wave(44100, 2, 16, 4410, &bytes2);
+    CHECK_EQ(ail("_AIL_set_named_sample_file@20", {h, name, wav2, bytes2, 0}), 1u);
+    CHECK_EQ(ail("_AIL_sample_granularity@4", {h}), 4u);
+    CHECK_EQ(ail("_AIL_sample_playback_rate@4", {h}), 44100u);
+    ail("_AIL_set_sample_position@8", {h, 7});
+    CHECK_EQ(ail("_AIL_sample_position@4", {h}), 8u);
+    ail("_AIL_set_sample_position@8", {h, 5});
+    CHECK_EQ(ail("_AIL_sample_position@4", {h}), 4u);
+    ail("_AIL_sample_ms_position@12", {h, sc(0), sc(4)});
+    CHECK_EQ(rd32(sc(0)), 100u);
+    ail("_AIL_start_sample@4", {h});
+    CHECK_EQ(g_plays.back().bits, 16);
+    CHECK_EQ(g_plays.back().channels, 2);
+    ail("_AIL_end_sample@4", {h});
+
+    // A mono driver has no sides to pan between.
+    uint32_t mono = ail("_AIL_open_digital_driver@16", {22050, 8, 1, 1});
+    uint32_t m = ail("_AIL_allocate_sample_handle@4", {mono});
+    CHECK_EQ(ail("_AIL_set_named_sample_file@20", {m, name, wav, bytes, 0}), 1u);
+    ail("_AIL_set_sample_pan@8", {m, 0});
+    ail("_AIL_start_sample@4", {m});
+    CHECK_EQ(g_plays.back().pan, 0);
+    ail("_AIL_release_sample_handle@4", {m});
+    ail("_AIL_close_digital_driver@4", {mono});
+
+    // A new sample's volume is DIG_DEFAULT_VOLUME.
+    ail("_AIL_set_preference@8", {2, 100});
+    ail("_AIL_init_sample@4", {h});
+    CHECK_EQ(ail("_AIL_sample_playback_rate@4", {h}), 11025u);
+    CHECK_EQ(ail("_AIL_set_named_sample_file@20", {h, name, wav, bytes, 0}), 1u);
+    ail("_AIL_start_sample@4", {h});
+    CHECK_EQ(g_plays.back().volume, -208);
+    ail("_AIL_end_sample@4", {h});
+    ail("_AIL_set_preference@8", {2, 127});
+
+    // Data that is neither RIFF PCM nor MPEG audio is refused, with a reason.
+    uint32_t junk = sc(0x400);
+    memset(g_mem + junk, 0x11, 64);
+    CHECK_EQ(ail("_AIL_set_named_sample_file@20", {h, name, junk, 64, 0}), 0u);
+    CHECK(gm_str(ail("_AIL_last_error@0", {})) == std::string("Unknown file type."));
+    n = g_plays.size();
+    ail("_AIL_start_sample@4", {h});
+    CHECK_EQ(g_plays.size(), n);
+
+    ail("_AIL_release_sample_handle@4", {h});
+    ail("_AIL_close_digital_driver@4", {drv});
+    heap_free(wav);
+    heap_free(wav2);
+    g_sample_playing.clear();
+    g_sample_tracking = false;
 }
 
 static void test_bink_smack_stubs() {
@@ -12868,7 +13315,10 @@ int main() {
         {"Legacy audio", test_legacy_audio},
         {"AVI reader", test_avi_reader},
         {"Miles streams", test_mss32_stream},
+        {"Miles driver and preferences", test_mss32_driver},
+        {"Miles DirectSound", test_mss32_directsound},
         {"DirectSound shared device", test_dsound_shared_device},
+        {"Miles sample calls", test_mss32_sample_calls},
         {"Bink/Smacker stubs", test_bink_smack_stubs},
         {"Bink entry points resolve", test_bink_entry_points_resolve},
         {"video frame conversion", test_video_frame_convert},

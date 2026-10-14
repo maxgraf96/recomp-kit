@@ -64,6 +64,9 @@ void dsound_reset();
 void dshow_reset();
 void dinput_reset();
 void bink_reset();
+// Drops Miles drivers, sample and stream handles and the static strings it
+// hands out, and restores the preference defaults.
+void mss32_reset();
 void fmod_reset();
 void soundlib_reset();
 

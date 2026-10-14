@@ -640,6 +640,7 @@ void dx_reset() {
     dshow_reset();
     dinput_reset();
     bink_reset();
+    mss32_reset();
     mf_reset();
     audio_channels().clear();
     com_reset();
