@@ -61,6 +61,10 @@ class MetalDevice final : public Device {
     void copy_texture_to_buffer(CommandBuffer cb, Texture src, Region src_region, Buffer dst,
                                 uint64_t offset, int pitch) override;
     void generate_mipmaps(CommandBuffer cb, Texture t) override;
+    bool copy_buffer_to_texture_level(CommandBuffer cb, Buffer src, uint64_t offset, int pitch,
+                                      Texture dst, Region dst_region, int level) override;
+    bool copy_texture_to_buffer_level(CommandBuffer cb, Texture src, Region src_region, int level,
+                                      Buffer dst, uint64_t offset, int pitch) override;
     void on_complete(CommandBuffer cb, std::function<void(CommandStatus, double)> fn) override;
     void commit(CommandBuffer cb) override;
     void wait(CommandBuffer cb) override;
@@ -119,7 +123,7 @@ class MetalDevice final : public Device {
 
     id<MTLDevice> device_;
     id<MTLCommandQueue> queue_;
-    id<MTLLibrary> compositor_lib_, hud_lib_, d3d_lib_;
+    id<MTLLibrary> compositor_lib_, hud_lib_, d3d_lib_, d3d7_lib_;
     std::mutex mutex_;
     uint64_t next_id_ = 1;
     std::unordered_map<uint64_t, Tex> textures_;

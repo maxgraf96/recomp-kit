@@ -123,6 +123,10 @@ MTLPrimitiveType primitive(Primitive p) {
     return MTLPrimitiveTypeTriangle;
 }
 const char *vertex_name(const std::string &shader) {
+    if (shader == "d3d7")
+        return "d3d7_vertex";
+    if (shader == "d3d7_quad")
+        return "d3d7_quad_vertex";
     if (shader == "compositor")
         return "compositor_vertex";
     if (shader == "hud")
@@ -132,6 +136,10 @@ const char *vertex_name(const std::string &shader) {
     return "d3d_vertex";
 }
 const char *fragment_name(const std::string &shader) {
+    if (shader == "d3d7")
+        return "d3d7_fragment";
+    if (shader == "d3d7_quad")
+        return "d3d7_quad_fragment";
     if (shader == "compositor")
         return "compositor_fragment";
     if (shader == "hud")
@@ -164,12 +172,15 @@ MetalDevice::MetalDevice(id<MTLDevice> device) : device_(device), queue_([device
     compositor_lib_ = compile(device, metal::kCompositorSource, "compositor");
     hud_lib_ = compile(device, metal::kHudSource, "hud");
     d3d_lib_ = compile(device, metal::kD3DSource, "Direct3D");
+    d3d7_lib_ = compile(device, metal::kD3D7Source, "Direct3D 7");
 }
 MetalDevice::~MetalDevice() {
     wait_for_gpu();
 }
 
 id<MTLLibrary> MetalDevice::library_for(const std::string &shader) {
+    if (shader == "d3d7" || shader == "d3d7_quad")
+        return d3d7_lib_;
     if (shader == "compositor")
         return compositor_lib_;
     if (shader == "hud")
@@ -207,6 +218,8 @@ Texture MetalDevice::create_texture(const TextureDesc &desc) {
                                                            width:desc.width
                                                           height:desc.height
                                                        mipmapped:desc.mip_levels > 1];
+    if (desc.mip_levels > 1 && NSUInteger(desc.mip_levels) < d.mipmapLevelCount)
+        d.mipmapLevelCount = NSUInteger(desc.mip_levels);
     MTLTextureUsage usage = 0;
     if (desc.usage & UsageSampled)
         usage |= MTLTextureUsageShaderRead;
@@ -416,7 +429,10 @@ Pipeline MetalDevice::render_pipeline(const std::string &shader, const RenderSta
     for (int i = 0; i < state.color_count && i < 2; ++i) {
         MTLRenderPipelineColorAttachmentDescriptor *a = d.colorAttachments[i];
         a.pixelFormat = pixel_format(state.color_format[i]);
-        a.writeMask = state.write_color ? MTLColorWriteMaskAll : MTLColorWriteMaskNone;
+        a.writeMask = !state.write_color ? MTLColorWriteMaskNone
+                      : (i == 0 && !state.write_alpha)
+                          ? (MTLColorWriteMaskRed | MTLColorWriteMaskGreen | MTLColorWriteMaskBlue)
+                          : MTLColorWriteMaskAll;
         // Attachment 1 is the coverage mask: it never blends.
         a.blendingEnabled = i == 0 && state.blend_enabled;
         if (a.blendingEnabled) {
@@ -769,6 +785,46 @@ void MetalDevice::copy_texture_to_buffer(CommandBuffer cb, Texture src, Region r
                     destinationOffset:offset
                destinationBytesPerRow:pitch
              destinationBytesPerImage:NSUInteger(pitch) * r.h];
+}
+bool MetalDevice::copy_buffer_to_texture_level(CommandBuffer cb, Buffer src, uint64_t offset,
+                                               int pitch, Texture dst, Region r, int level) {
+    std::lock_guard lock(mutex_);
+    Cmd *c = cmd(cb);
+    auto b = buffers_.find(src.id);
+    auto d = textures_.find(dst.id);
+    if (!c || b == buffers_.end() || d == textures_.end() || r.w <= 0 || r.h <= 0 || level < 0 ||
+        NSUInteger(level) >= d->second.texture.mipmapLevelCount)
+        return false;
+    [blit_encoder(*c) copyFromBuffer:b->second
+                        sourceOffset:offset
+                   sourceBytesPerRow:pitch
+                 sourceBytesPerImage:NSUInteger(pitch) * r.h
+                          sourceSize:MTLSizeMake(r.w, r.h, 1)
+                           toTexture:d->second.texture
+                    destinationSlice:0
+                    destinationLevel:NSUInteger(level)
+                   destinationOrigin:MTLOriginMake(r.x, r.y, 0)];
+    return true;
+}
+bool MetalDevice::copy_texture_to_buffer_level(CommandBuffer cb, Texture src, Region r, int level,
+                                               Buffer dst, uint64_t offset, int pitch) {
+    std::lock_guard lock(mutex_);
+    Cmd *c = cmd(cb);
+    auto s = textures_.find(src.id);
+    auto b = buffers_.find(dst.id);
+    if (!c || s == textures_.end() || b == buffers_.end() || r.w <= 0 || r.h <= 0 || level < 0 ||
+        NSUInteger(level) >= s->second.texture.mipmapLevelCount)
+        return false;
+    [blit_encoder(*c) copyFromTexture:s->second.texture
+                          sourceSlice:0
+                          sourceLevel:NSUInteger(level)
+                         sourceOrigin:MTLOriginMake(r.x, r.y, 0)
+                           sourceSize:MTLSizeMake(r.w, r.h, 1)
+                             toBuffer:b->second
+                    destinationOffset:offset
+               destinationBytesPerRow:pitch
+             destinationBytesPerImage:NSUInteger(pitch) * r.h];
+    return true;
 }
 void MetalDevice::generate_mipmaps(CommandBuffer cb, Texture t) {
     std::lock_guard lock(mutex_);

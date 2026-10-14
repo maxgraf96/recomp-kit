@@ -273,4 +273,308 @@ fragment float4 surface_upload_fragment(float4 position [[position]],
 }
 )MSL";
 
+// "d3d7": d3d7_vertex / d3d7_fragment, the Direct3D 7 fixed-function
+// pipeline (host/d3d7_render.cpp). "d3d7_quad": d3d7_quad_vertex /
+// d3d7_quad_fragment, DirectDraw fills and blits. Layouts: d3d7_render.cpp's
+// VS7, FS7 and Q7, which this source must match field for field.
+inline const char *const kD3D7Source = R"MSL(
+#include <metal_stdlib>
+using namespace metal;
+
+struct Light7 {
+    float4 diffuse, specular, ambient;
+    float4 position;  // xyz eye space; w: D3DLIGHTTYPE
+    float4 direction; // xyz eye space: towards a directional light, a spot's axis; w: range
+    float4 atten;     // attenuation 0, 1, 2; falloff
+    float4 spot;      // cos(theta / 2), cos(phi / 2)
+};
+struct VS7 {
+    float4x4 wvp;
+    float4x4 wv;
+    float4 nrm[3]; // rows of the inverse transpose of the world-view 3x3
+    float4 mat_diffuse, mat_ambient, mat_specular, mat_emissive;
+    float4 ambient;
+    float4 ndc;      // xy scale, zw offset: Direct3D NDC to this pass's NDC
+    float4 viewport; // Direct3D viewport x, y, w, h, for pre-transformed vertices
+    float4 fog;      // start, end, density, material power
+    uint flags, offsets, stride, light_count;
+    uint sources, fog_mode, pad0, pad1;
+    Light7 lights[8];
+};
+struct V7 {
+    float4 position [[position]];
+    float point_size [[point_size]];
+    float4 diffuse;
+    float4 specular;
+    float4 diffuse_flat [[flat]];
+    float4 specular_flat [[flat]];
+    float2 uv;
+    float fog;
+    float eye_w;
+};
+constant uint F_LIGHTING = 1u, F_NORMAL = 2u, F_DIFFUSE = 4u, F_SPECULAR = 8u, F_TEX = 16u,
+              F_RHW = 32u, F_SPECULARENABLE = 64u, F_LOCALVIEWER = 128u, F_NORMALIZE = 256u,
+              F_COLORVERTEX = 512u, F_RANGEFOG = 1024u, F_VERTEXFOG = 2048u, F_TEX1D = 4096u;
+
+static float4 d3dcolor(uint c) {
+    return float4(float((c >> 16) & 255u), float((c >> 8) & 255u), float(c & 255u), float(c >> 24)) / 255.0f;
+}
+static float ldf(device const uchar *p, uint off) {
+    return *(device const float *)(p + off);
+}
+static float4 pick(uint source, float4 material, bool has_diffuse, float4 vdiffuse,
+                   bool has_specular, float4 vspecular) {
+    if (source == 1u && has_diffuse) return vdiffuse;
+    if (source == 2u && has_specular) return vspecular;
+    return material;
+}
+static float fog_of(uint mode, float d, float4 fog) {
+    if (mode == 3u) return fog.y == fog.x ? (d < fog.x ? 1.0f : 0.0f) : saturate((fog.y - d) / (fog.y - fog.x));
+    if (mode == 1u) return saturate(exp(-fog.z * d));
+    if (mode == 2u) return saturate(exp(-(fog.z * d) * (fog.z * d)));
+    return 1.0f;
+}
+
+vertex V7 d3d7_vertex(uint vid [[vertex_id]], device const uchar *vb [[buffer(0)]],
+                      constant VS7 &u [[buffer(1)]], device const uint *list [[buffer(2)]]) {
+    device const uchar *v = vb + list[vid] * u.stride;
+    const uint o_normal = u.offsets & 255u, o_diffuse = (u.offsets >> 8) & 255u,
+               o_specular = (u.offsets >> 16) & 255u, o_tex = u.offsets >> 24;
+    const bool has_diffuse = (u.flags & F_DIFFUSE) != 0u, has_specular = (u.flags & F_SPECULAR) != 0u;
+    const float4 vdiffuse = has_diffuse ? d3dcolor(*(device const uint *)(v + o_diffuse)) : float4(1.0f);
+    const float4 vspecular = has_specular ? d3dcolor(*(device const uint *)(v + o_specular)) : float4(0.0f);
+    V7 o;
+    o.point_size = 1.0f;
+    o.uv = float2(0.0f);
+    if ((u.flags & F_TEX) != 0u)
+        o.uv = float2(ldf(v, o_tex), (u.flags & F_TEX1D) != 0u ? 0.0f : ldf(v, o_tex + 4u));
+    float4 clip;
+    if ((u.flags & F_RHW) != 0u) {
+        const float rhw = ldf(v, 12u);
+        const float w = rhw != 0.0f ? 1.0f / rhw : 1.0f;
+        const float2 ndc = float2((ldf(v, 0u) - u.viewport.x) / u.viewport.z * 2.0f - 1.0f,
+                                  1.0f - (ldf(v, 4u) - u.viewport.y) / u.viewport.w * 2.0f);
+        clip = float4(ndc * w, ldf(v, 8u) * w, w);
+        o.diffuse = vdiffuse;
+        o.specular = vspecular;
+        o.fog = vspecular.a;
+        o.eye_w = w;
+    } else {
+        const float4 p = float4(ldf(v, 0u), ldf(v, 4u), ldf(v, 8u), 1.0f);
+        clip = u.wvp * p;
+        const float3 pe = (u.wv * p).xyz;
+        o.eye_w = clip.w;
+        if ((u.flags & F_LIGHTING) == 0u) {
+            o.diffuse = vdiffuse;
+            o.specular = vspecular;
+        } else {
+            const bool cv = (u.flags & F_COLORVERTEX) != 0u;
+            const float4 cd = cv ? pick(u.sources & 3u, u.mat_diffuse, has_diffuse, vdiffuse, has_specular, vspecular) : u.mat_diffuse;
+            const float4 ca = cv ? pick((u.sources >> 2) & 3u, u.mat_ambient, has_diffuse, vdiffuse, has_specular, vspecular) : u.mat_ambient;
+            const float4 cs = cv ? pick((u.sources >> 4) & 3u, u.mat_specular, has_diffuse, vdiffuse, has_specular, vspecular) : u.mat_specular;
+            const float4 ce = cv ? pick((u.sources >> 6) & 3u, u.mat_emissive, has_diffuse, vdiffuse, has_specular, vspecular) : u.mat_emissive;
+            float3 n = float3(0.0f);
+            if ((u.flags & F_NORMAL) != 0u) {
+                const float3 m = float3(ldf(v, o_normal), ldf(v, o_normal + 4u), ldf(v, o_normal + 8u));
+                n = m.x * u.nrm[0].xyz + m.y * u.nrm[1].xyz + m.z * u.nrm[2].xyz;
+                if ((u.flags & F_NORMALIZE) != 0u && dot(n, n) > 0.0f)
+                    n = normalize(n);
+            }
+            const float3 eye = (u.flags & F_LOCALVIEWER) != 0u ? normalize(-pe) : float3(0.0f, 0.0f, -1.0f);
+            float3 amb = u.ambient.rgb, dif = float3(0.0f), spc = float3(0.0f);
+            for (uint i = 0u; i < u.light_count; ++i) {
+                const Light7 l = u.lights[i];
+                float3 L;
+                float k = 1.0f;
+                if (l.position.w == 3.0f) {
+                    L = l.direction.xyz;
+                } else {
+                    const float3 d = l.position.xyz - pe;
+                    const float dist = length(d);
+                    if (dist > l.direction.w)
+                        continue;
+                    L = dist > 0.0f ? d / dist : float3(0.0f);
+                    const float den = l.atten.x + l.atten.y * dist + l.atten.z * dist * dist;
+                    k = den > 0.0f ? 1.0f / den : 1.0f;
+                    if (l.position.w == 2.0f) {
+                        const float rho = -dot(l.direction.xyz, L);
+                        k *= rho > l.spot.x ? 1.0f
+                             : rho <= l.spot.y ? 0.0f
+                             : pow((rho - l.spot.y) / (l.spot.x - l.spot.y), l.atten.w);
+                    }
+                }
+                amb += l.ambient.rgb * k;
+                const float ndl = max(0.0f, dot(n, L));
+                dif += l.diffuse.rgb * (ndl * k);
+                if ((u.flags & F_SPECULARENABLE) != 0u && ndl > 0.0f) {
+                    const float ndh = max(0.0f, dot(n, normalize(L + eye)));
+                    // pow(0, 0) is 1, as Direct3D's specular power 0 means.
+                    spc += l.specular.rgb * ((u.fog.w == 0.0f ? 1.0f : pow(ndh, u.fog.w)) * k);
+                }
+            }
+            o.diffuse = saturate(float4(ce.rgb + ca.rgb * amb + cd.rgb * dif, cd.a));
+            o.specular = saturate(float4(cs.rgb * spc, 0.0f));
+        }
+        if ((u.flags & F_VERTEXFOG) != 0u)
+            o.fog = fog_of(u.fog_mode, (u.flags & F_RANGEFOG) != 0u ? length(pe) : pe.z, u.fog);
+        else
+            o.fog = o.specular.a;
+    }
+    // Into this pass's viewport, half a pixel down and right of Direct3D's
+    // pixel-centre convention (folded into ndc.zw by the renderer).
+    clip.xy = clip.xy * u.ndc.xy + u.ndc.zw * clip.w;
+    o.position = clip;
+    o.diffuse_flat = o.diffuse;
+    o.specular_flat = o.specular;
+    return o;
+}
+
+struct FS7 {
+    float4 fog_color;
+    float4 tfactor;
+    float4 fog; // start, end, density
+    uint colorop, colorarg1, colorarg2, alphaop;
+    uint alphaarg1, alphaarg2, textured, tex_has_alpha;
+    uint alpha_func, alpha_ref, fog_enable, table_fog;
+    uint fog_w, flat, specular, colorkey;
+    uint4 key_max, key_lo, key_hi;
+    float lod_bias, min_lod, pad0, pad1;
+};
+static bool cmp(uint f, float a, float b) {
+    switch (f) {
+    case 1u: return false;
+    case 2u: return a < b;
+    case 3u: return a == b;
+    case 4u: return a <= b;
+    case 5u: return a > b;
+    case 6u: return a != b;
+    case 7u: return a >= b;
+    default: return true;
+    }
+}
+static float4 arg(uint a, float4 diffuse, float4 current, float4 tex, float4 tfactor, float4 spec) {
+    float4 v;
+    switch (a & 15u) {
+    case 1u: v = current; break;
+    case 2u: v = tex; break;
+    case 3u: v = tfactor; break;
+    case 4u: v = spec; break;
+    default: v = diffuse; break;
+    }
+    if ((a & 16u) != 0u) v = 1.0f - v;
+    if ((a & 32u) != 0u) v = v.aaaa;
+    return v;
+}
+static float4 op(uint o, float4 a1, float4 a2, float4 diffuse, float4 tex, float4 tfactor, float4 current) {
+    switch (o) {
+    case 2u: return a1;
+    case 3u: return a2;
+    case 4u: return a1 * a2;
+    case 5u: return saturate(a1 * a2 * 2.0f);
+    case 6u: return saturate(a1 * a2 * 4.0f);
+    case 7u: return saturate(a1 + a2);
+    case 8u: return saturate(a1 + a2 - 0.5f);
+    case 9u: return saturate((a1 + a2 - 0.5f) * 2.0f);
+    case 10u: return saturate(a1 - a2);
+    case 11u: return saturate(a1 + a2 - a1 * a2);
+    case 12u: return a1 * diffuse.a + a2 * (1.0f - diffuse.a);
+    case 13u: return a1 * tex.a + a2 * (1.0f - tex.a);
+    case 14u: return a1 * tfactor.a + a2 * (1.0f - tfactor.a);
+    case 15u: return saturate(a1 + a2 * (1.0f - tex.a));
+    case 16u: return a1 * current.a + a2 * (1.0f - current.a);
+    default: return a1 * a2;
+    }
+}
+fragment float4 d3d7_fragment(V7 in [[stage_in]], constant FS7 &u [[buffer(1)]],
+                              texture2d<float> tex [[texture(0)]], sampler s [[sampler(0)]],
+                              sampler nearest [[sampler(1)]]) {
+    const float4 diffuse = u.flat != 0u ? in.diffuse_flat : in.diffuse;
+    const float4 spec = u.flat != 0u ? in.specular_flat : in.specular;
+    float4 t = float4(1.0f);
+    if (u.textured != 0u) {
+        t = u.min_lod > 0.0f ? tex.sample(s, in.uv, bias(u.lod_bias), min_lod_clamp(u.min_lod))
+                             : tex.sample(s, in.uv, bias(u.lod_bias));
+        if (u.tex_has_alpha == 0u)
+            t.a = 1.0f;
+        if (u.colorkey != 0u) {
+            const float4 k = tex.sample(nearest, in.uv, level(0.0f));
+            const uint3 c8 = uint3(round(saturate(k.rgb) * 255.0f));
+            const uint3 q = (c8 * u.key_max.xyz + 127u) / 255u;
+            if (all(q >= u.key_lo.xyz) && all(q <= u.key_hi.xyz))
+                discard_fragment();
+        }
+    }
+    const float4 tfactor = u.tfactor;
+    float4 c = diffuse;
+    if (u.colorop != 1u) {
+        const float4 current = diffuse;
+        const float3 rgb = op(u.colorop, arg(u.colorarg1, diffuse, current, t, tfactor, spec),
+                              arg(u.colorarg2, diffuse, current, t, tfactor, spec), diffuse, t, tfactor, current).rgb;
+        float a = current.a;
+        if (u.alphaop != 1u)
+            a = op(u.alphaop, arg(u.alphaarg1, diffuse, current, t, tfactor, spec),
+                   arg(u.alphaarg2, diffuse, current, t, tfactor, spec), diffuse, t, tfactor, current).a;
+        c = float4(rgb, a);
+    }
+    c = saturate(c);
+    if (u.specular != 0u)
+        c.rgb = saturate(c.rgb + spec.rgb);
+    if (u.fog_enable != 0u) {
+        float f = in.fog;
+        if (u.table_fog != 0u)
+            f = fog_of(u.table_fog, u.fog_w != 0u ? in.eye_w : in.position.z, u.fog);
+        c.rgb = c.rgb * f + u.fog_color.rgb * (1.0f - f);
+    }
+    if (u.alpha_func != 0u) {
+        const float a8 = floor(saturate(c.a) * 255.0f + 0.5f);
+        if (!cmp(u.alpha_func, a8, float(u.alpha_ref)))
+            discard_fragment();
+    }
+    return c;
+}
+
+struct Q7 {
+    float4 dst;   // x0, y0, x1, y1 in target pixels
+    int4 src;     // texel rectangle of the source level
+    float4 color; // fill colour
+    float2 target;
+    float depth;
+    uint mode;    // 0 nearest copy, 1 colour fill, 2 depth fill, 3 bilinear copy
+    uint level, key_enabled, src_has_alpha, mirror;
+    uint4 key_max, key_lo, key_hi;
+};
+vertex float4 d3d7_quad_vertex(uint vid [[vertex_id]], constant Q7 &q [[buffer(0)]]) {
+    const float2 corner = float2(float(vid & 1u), float(vid >> 1));
+    const float2 p = mix(q.dst.xy, q.dst.zw, corner);
+    return float4(p.x / q.target.x * 2.0f - 1.0f, 1.0f - p.y / q.target.y * 2.0f, q.depth, 1.0f);
+}
+fragment float4 d3d7_quad_fragment(float4 pos [[position]], constant Q7 &q [[buffer(0)]],
+                                   texture2d<float> tex [[texture(0)]], sampler s [[sampler(0)]]) {
+    if (q.mode == 1u || q.mode == 2u)
+        return q.color;
+    const int2 d = int2(floor(pos.xy)) - int2(q.dst.xy);
+    const int2 dsz = int2(q.dst.zw - q.dst.xy), ssz = q.src.zw - q.src.xy;
+    float4 c;
+    if (q.mode == 0u) {
+        int2 idx = ((2 * d + 1) * ssz) / (2 * dsz);
+        if ((q.mirror & 1u) != 0u) idx.x = ssz.x - 1 - idx.x;
+        if ((q.mirror & 2u) != 0u) idx.y = ssz.y - 1 - idx.y;
+        c = tex.read(uint2(q.src.xy + idx), q.level);
+    } else {
+        const float2 size = float2(float(tex.get_width(q.level)), float(tex.get_height(q.level)));
+        const float2 uv = (float2(q.src.xy) + (float2(d) + 0.5f) * float2(ssz) / float2(dsz)) / size;
+        c = tex.sample(s, uv, level(float(q.level)));
+    }
+    if (q.key_enabled != 0u) {
+        const uint3 c8 = uint3(round(saturate(c.rgb) * 255.0f));
+        const uint3 k = (c8 * q.key_max.xyz + 127u) / 255u;
+        if (all(k >= q.key_lo.xyz) && all(k <= q.key_hi.xyz))
+            discard_fragment();
+    }
+    if (q.src_has_alpha == 0u)
+        c.a = 1.0f;
+    return c;
+}
+)MSL";
+
 } // namespace gpu::metal

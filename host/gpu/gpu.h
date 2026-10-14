@@ -65,7 +65,7 @@ struct TextureDesc {
     int width = 0, height = 0;
     Format format = Format::RGBA8;
     uint32_t usage = UsageSampled;
-    int mip_levels = 1; // 1 or the full chain
+    int mip_levels = 1; // 1, the full chain, or (Metal) any count in between
 };
 struct Region {
     int x = 0, y = 0, w = 0, h = 0;
@@ -105,6 +105,9 @@ struct RenderState {
     Blend src_alpha = Blend::One, dst_alpha = Blend::Zero;
     bool write_color = true; // colour write mask for attachment 0 and 1 together
     bool writes_point_size = false;
+    // With write_color: false keeps attachment 0's alpha, for a format whose
+    // alpha must stay as it was (an opaque Direct3D render target).
+    bool write_alpha = true;
     uint64_t key() const; // a total order over the fields above, for caches
 };
 struct DepthState {
@@ -205,6 +208,23 @@ class Device {
     virtual void copy_texture_to_buffer(CommandBuffer cb, Texture src, Region src_region,
                                         Buffer dst, uint64_t offset, int pitch) = 0;
     virtual void generate_mipmaps(CommandBuffer cb, Texture t) = 0;
+    // The same copies, to or from one mip level. A backend that has no
+    // per-level copy handles level 0 only and returns false for the rest.
+    virtual bool copy_buffer_to_texture_level(CommandBuffer cb, Buffer src, uint64_t offset,
+                                              int pitch, Texture dst, Region dst_region,
+                                              int level) {
+        if (level != 0)
+            return false;
+        copy_buffer_to_texture(cb, src, offset, pitch, dst, dst_region);
+        return true;
+    }
+    virtual bool copy_texture_to_buffer_level(CommandBuffer cb, Texture src, Region src_region,
+                                              int level, Buffer dst, uint64_t offset, int pitch) {
+        if (level != 0)
+            return false;
+        copy_texture_to_buffer(cb, src, src_region, dst, offset, pitch);
+        return true;
+    }
 
     // Runs on a backend thread after the buffer finishes; `status` says how.
     virtual void on_complete(CommandBuffer cb,
@@ -250,6 +270,7 @@ inline uint64_t RenderState::key() const {
     k |= uint64_t(dst_alpha) << 24;
     k |= uint64_t(write_color) << 28;
     k |= uint64_t(writes_point_size) << 29;
+    k |= uint64_t(!write_alpha) << 30;
     return k;
 }
 } // namespace gpu
