@@ -2744,9 +2744,10 @@ size_t winsock_open_sockets() {
 }
 
 // ---------------------------------------------------------------------------
-// Registration. Each export is registered under its name for both DLLs and
-// under every ordinal the DLL gives it (imports_ordinal_name), so an import
-// by ordinal reaches the same function.
+// Registration. Each export is registered under its name for both DLLs. An
+// import by ordinal binds by name already (the loader asks
+// imports_ordinal_name); GetProcAddress by ordinal asks for "#N", which is
+// registered too.
 // ---------------------------------------------------------------------------
 namespace {
 struct Export {
@@ -2836,12 +2837,15 @@ void winsock_register() {
                 for (const Export &e : kExports) {
                     if (strcmp(e.name, name) != 0 || (ws1 && e.ws2_only))
                         continue;
-                    names.push_back("ord" + std::to_string(ord));
+                    names.push_back("#" + std::to_string(ord));
                     table.push_back(
                         {dll, names.back().c_str(), e.argc, ws1 && e.fn_ws1 ? e.fn_ws1 : e.fn});
                 }
             }
         }
+        // Overlapped I/O is not modelled; its completion query keeps its
+        // stack cleanup.
+        table.push_back({"WS2_32.dll", "WSAGetOverlappedResult", 5, nullptr});
         mem_add_reset_hook(close_all_on_reset);
     }
     imports_register(table.data(), table.size());

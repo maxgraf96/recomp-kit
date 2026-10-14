@@ -819,20 +819,33 @@ static void test_winsock_startup(X86 *c) {
                   call_import(c, dll, "htonl", {0x11223344}) == 0x44332211u &&
                   call_import(c, dll, "ntohl", {0x44332211}) == 0x11223344u,
               "%s: byte order", dll);
+        // inet_addr's grammar is BSD's: one to four parts, the last filling
+        // the bytes the others left (winsock_tests has the rest).
         check(call_import(c, dll, "inet_addr", {guest_str("192.168.1.2")}) == 0x0201a8c0u &&
-                  call_import(c, dll, "inet_addr", {guest_str("1.2.3")}) == 0xffffffffu &&
-                  call_import(c, dll, "inet_addr", {guest_str("256.1.1.1")}) == 0xffffffffu,
-              "%s: inet_addr takes dotted quads and nothing else", dll);
+                  call_import(c, dll, "inet_addr", {guest_str("1.2.3")}) == 0x03000201u &&
+                  call_import(c, dll, "inet_addr", {guest_str("256.1.1.1")}) == 0xffffffffu &&
+                  call_import(c, dll, "inet_addr", {guest_str("host.example")}) == 0xffffffffu,
+              "%s: inet_addr takes dotted addresses and nothing else", dll);
+        // Name resolution needs a start-up, as on Windows.
+        check(call_import(c, dll, "gethostbyname", {guest_str("10.0.0.7")}) == 0 &&
+                  call_import(c, dll, "WSAGetLastError", {}) == 10093,
+              "%s: gethostbyname before WSAStartup is WSANOTINITIALISED", dll);
+        call_import(c, dll, "WSAStartup", {0x0101, data});
         const uint32_t he = call_import(c, dll, "gethostbyname", {guest_str("10.0.0.7")});
         check(he && rd16(he + 8) == 2 && rd16(he + 10) == 4 &&
                   rd32(rd32(rd32(he + 12))) == 0x0700000au && rd32(rd32(he + 12) + 4) == 0,
               "%s: gethostbyname of a dotted quad is that address, without DNS", dll);
+        // A server long gone is named in [network] offline_hosts (or here,
+        // RECOMP_NET_OFFLINE_HOSTS) and fails without asking a resolver.
+        os_setenv("RECOMP_NET_OFFLINE_HOSTS", "gone.server.example");
         const uint64_t t0 = os_monotonic_ns();
         const uint32_t gone =
-            call_import(c, dll, "gethostbyname", {guest_str("empireearth.m1.sierra.com")});
+            call_import(c, dll, "gethostbyname", {guest_str("gone.server.example")});
         const double ms = (os_monotonic_ns() - t0) / 1e6;
+        os_unsetenv("RECOMP_NET_OFFLINE_HOSTS");
         check(gone == 0 && call_import(c, dll, "WSAGetLastError", {}) == 11001 && ms < 50,
-              "%s: any other name fails at once with WSAHOST_NOT_FOUND (%.2f ms)", dll, ms);
+              "%s: an offline host fails at once with WSAHOST_NOT_FOUND (%.2f ms)", dll, ms);
+        call_import(c, dll, "WSACleanup", {});
     }
 }
 

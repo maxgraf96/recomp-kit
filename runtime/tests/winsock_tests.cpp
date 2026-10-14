@@ -271,12 +271,13 @@ static void test_errors_and_addresses() {
     uint32_t b = ws("inet_ntoa", {0x0100007fu});
     check(first == "192.168.1.227" && a == b && gm_str(b) == "127.0.0.1",
           "inet_ntoa: one buffer per thread, overwritten by the next call");
-    check(w1("ord11", {0x0100007fu}) == b, "WSOCK32 ordinal 11 is inet_ntoa");
-    check(ws("ord11", {gstr("1.2.3.4")}) == 0x04030201u, "WS2_32 ordinal 11 is inet_addr");
-    check(w1("ord10", {gstr("1.2.3.4")}) == 0x04030201u, "WSOCK32 ordinal 10 is inet_addr");
+    // GetProcAddress by ordinal: "#N", each DLL's own numbering.
+    check(w1("#11", {0x0100007fu}) == b, "WSOCK32 ordinal 11 is inet_ntoa");
+    check(ws("#11", {gstr("1.2.3.4")}) == 0x04030201u, "WS2_32 ordinal 11 is inet_addr");
+    check(w1("#10", {gstr("1.2.3.4")}) == 0x04030201u, "WSOCK32 ordinal 10 is inet_addr");
     uint32_t v = gbuf(4);
     wr32(v, 1);
-    check(ws("ord10", {0x1234, FIONBIO, v}) == SOCKET_ERROR && last_error() == 10038,
+    check(ws("#10", {0x1234, FIONBIO, v}) == SOCKET_ERROR && last_error() == 10038,
           "WS2_32 ordinal 10 is ioctlsocket");
 }
 
