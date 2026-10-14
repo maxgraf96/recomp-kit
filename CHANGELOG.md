@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Play a Miles 6 game's sound effects the way Miles 6.1a does. The 17
+  `mss32` imports a mixer plugin needed and the kit lacked -
+  `AIL_open_digital_driver`/`close_digital_driver`, `get_DirectSound_info`,
+  `set_DirectSound_HWND`, `set_redist_directory`, `last_error`,
+  `digital_CPU_percent`, `get_timer_highest_delay`, `serve`,
+  `mem_alloc_lock`, `file_size`, the sample granularity, playback rate,
+  position and ms position calls - plus EOS callbacks and sample user data.
+  Miles' own rules where they differ from a reading of the manual: its whole
+  preference table from `AIL_startup`, a start that always begins at the top,
+  a loop count that counts down, and its balance pan law (the old linear
+  sweep in millibels put a sound three quarters right 51 dB down on the left
+  instead of 6.3 dB). Each MP3 image decodes once, by content. One shared
+  `IDirectSound` (`dsound_shared_device`) is what Miles reports and a game
+  hands to DirectMusic and Bink. `dx_tests` covers them, and
+  `RECOMP_TEST_MILES` / `RECOMP_TEST_BINK_AV` probe a game's own sounds and
+  movies.
+
 - Boot a multi-module game further without stand-ins. kernel32's resource
   functions take any mapped module (a resource-only DLL relocated like any
   other, which the translator now places too), with `FindResourceA`,

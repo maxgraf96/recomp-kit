@@ -24,7 +24,7 @@ Metal and AVAudioEngine. That keeps every test here headless.
 | `d3d7_soft.cpp` | the software reference implementation of that seam |
 | `d3d7_types.h`, `d3d7_internal.h`, `d3d7_prim.h` | DirectX 7 layouts and constants; the surface model; topologies and vertex formats |
 | `dsound.cpp` | IDirectSound, buffer, 3D buffer, 3D listener, notify |
-| `mss32.cpp` | Miles digital drivers, PCM/MP3 samples and streams |
+| `mss32.cpp` | Miles digital drivers, preferences, PCM/MP3 samples (MP3 decoded once per image), EOS callbacks and streams |
 | `redbook.cpp` | Miles CD audio backed by configured media files |
 | `waveout.cpp` | WinMM PCM/IMA ADPCM queues and device-clock WAVEHDR completion |
 | `avi.cpp` | Read-only AVIFile streams and Indeo 5 Video for Windows decoding |
@@ -230,6 +230,24 @@ and `CreateDevice` at `+0x20` in `init_d3d`, `IDirectDraw2::CreatePalette` at
   `StartupNetwork` returns zero, so zero is failure across MLDPlay.
   `GetCurrentMs` is the exception and returns the real clock, because the game
   calls it from dozens of places that have nothing to do with networking.
+- **Miles answers as Miles 6.1a does, not as its manual reads.** The rules
+  below were read from the library itself. `AIL_startup` installs the whole
+  preference table, and a mixer that divides by `DIG_DS_FRAGMENT_SIZE` (8 ms)
+  before setting it gets a divisor. `AIL_start_sample` always begins at the
+  top: a position set before it is lost, so a "random start offset" a game
+  sets ahead of the start plays from 0 on Windows too. The loop count counts
+  down per pass. Pan is a balance: the centre is full on both sides and the
+  far side fades linearly, so it converts to DirectSound's one-sided
+  attenuation rather than being swept in millibels. A compressed sample's
+  positions are its image's bytes and its granularity is 1.
+- **Every audio library shares one IDirectSound.** `dsound_shared_device()`
+  is what `AIL_get_DirectSound_info` reports, and so what a game passes on to
+  DirectMusic and Bink. The runtime holds its creation reference; the
+  borrowers' AddRef/Release pairs balance around it. Nothing plays through
+  it: each library reaches the host mixer directly.
+- **Miles' end-of-sample callback runs on a guest thread holding the baton**:
+  the frame pump or `AIL_serve` for a natural end, and `AIL_end_sample`
+  itself, synchronously. Never from `AIL_sample_status`.
 
 ## DirectDraw 7 and Direct3D 7
 
