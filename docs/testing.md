@@ -104,6 +104,17 @@ budget; `RECOMP_D3D7_TEST_DUMP=<dir>` writes every compared pair as PPM. It also
 checks a software cursor over a flip chain and times a frame at an engine's
 call rate. `host_tests` checks that a presented surface reaches the presenter.
 
+`winsock_tests` (`nogame`) drives WSOCK32, WS2_32, the IP helper API and
+Netbios through the guest ABI on real sockets on the loopback interface:
+datagram and stream echo, non-blocking calls, select, WSAEventSelect's
+re-signalling while datagrams are queued, a blocking call in one guest thread
+while another runs, per-thread HOSTENTs, an offline host and a resolver that
+runs off the baton; on fake interface lists, the adapter order and limits,
+GetAdaptersInfo's layout and its agreement with the own host's HOSTENT, and
+broadcast fan-out. Nothing leaves the machine unless
+`RECOMP_NET_TEST_BROADCAST=1` asks for one real broadcast on the host's own
+interfaces. `platform_tests` covers the `os_net_*` layer beneath it.
+
 The native `eh_tests` suite (`nogame`) runs MSVC C++ and structured exception
 handling (`runtime/msvc_eh.cpp`) over synthetic guest frames written the way
 the translator emits them: catch matching and catch objects, unwinding,

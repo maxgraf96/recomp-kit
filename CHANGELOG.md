@@ -18,6 +18,19 @@
   hands to DirectMusic and Bink. `dx_tests` covers them, and
   `RECOMP_TEST_MILES` / `RECOMP_TEST_BINK_AV` probe a game's own sounds and
   movies.
+- Network a game: WSOCK32 and WS2_32 on the host's sockets
+  (`runtime/winsock.cpp`, `os_net_*` in `platform/os.h`) - TCP and UDP,
+  blocking calls that let other guest threads run, select, WSAEventSelect
+  with Windows' recording and re-enabling rules, the socket options, name
+  resolution that answers the own host and dotted addresses without DNS,
+  fails a game's dead servers at once (`[network] offline_hosts`) and asks
+  the system resolver for the rest without blocking other threads, and a
+  broadcast to 255.255.255.255 sent on every adapter, so that LAN discovery
+  works over the local network and ZeroTier together. The IP helper API
+  (GetAdaptersInfo, GetAdaptersAddresses, GetIpForwardTable, GetBestRoute,
+  ...) and Netbios answer from the same adapter list, ordered and limited for
+  programs of the period (`runtime/net_adapters.h`). `RECOMP_NET_TRACE=1`
+  traces every socket call. macOS and Linux; not yet on a Windows host.
 
 - Boot a multi-module game further without stand-ins. kernel32's resource
   functions take any mapped module (a resource-only DLL relocated like any

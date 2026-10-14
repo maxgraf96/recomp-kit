@@ -27,7 +27,10 @@ owns. Compile the runtime with `-I<repo root>` so `guest.h` can find it.
 | `user32_ansi.cpp` | the ANSI odds and ends: class queries, window text, LoadStringA/LoadBitmapA from any loaded module, MoveWindow, ChangeDisplaySettingsA, wsprintfA, SetWindowsHookExA |
 | `gdi32_text.cpp`, `gdi32_truetype.cpp`, `gdi32_fontdb.cpp` | GDI text: fonts realized and measured as GDI measures them (VDMX, hdmx, OS/2), the installed copies of Windows faces with `[runtime] system_fonts`, the A and W text calls |
 | `gdi_surface.h` | a DC over pixels the caller owns, for a DirectDraw surface's GetDC/ReleaseDC |
-| `misc.cpp` | GDI32, ADVAPI32 registry, SHELL32, ole32, IMM32, WSOCK32, WINMM (clock, mmio, MIDI out) |
+| `misc.cpp` | GDI32, ADVAPI32 registry, SHELL32, ole32, IMM32, WINMM (clock, mmio, MIDI out) |
+| `winsock.cpp`, `winsock.h` | WSOCK32 and WS2_32 on the host's sockets ("Networking" below) |
+| `iphlpapi.cpp` | the IP helper API (GetAdaptersInfo and friends) and NETAPI32's Netbios |
+| `net_adapters.h/.cpp` | the network adapters a guest is shown, one list for Winsock and the IP helper API |
 | `x87.c` | the exact x87's out-of-line half: SoftFloat-backed arithmetic, stores, FPREM, FXTRACT, FSCALE, FNSAVE/FRSTOR, transcendentals, and the msvcrt float-control mapping (the inline half is `x86.h`'s x87 section) |
 | `msvcrt*.cpp` | msvcrt.dll: start-up and exit, heap, locale and ctype, strings, printf/scanf/strtod, stdio, maths, float control (`msvcrt_float.cpp`), time, RTTI (`msvcrt_internal.h` says which file holds what) |
 | `msvcp60.cpp` | msvcp60.dll: `std::_Lockit`, `std::bad_cast`, the locale vectors and conversions |
@@ -303,6 +306,78 @@ a guest thread cannot longjmp, because the landing pad is on the main thread's
 stack: it records the request, hands the baton to the main thread and ends
 itself, and the main thread performs the exit as soon as it is running again.
 
+## Networking
+
+WSOCK32 (Winsock 1.1) and WS2_32 (Winsock 2.2) are one implementation
+(`winsock.cpp`) over `platform/os.h`'s `os_net_*` layer, as WSOCK32 forwards
+to WS2_32 on Windows. They differ where their ABIs do: the IPPROTO_IP option
+numbers (Winsock 1.1 has its own) and ordinals 10-12 (`import_argc.cpp`).
+IPv4 only; the Windows host has no socket layer yet, and there WSAStartup
+reports the network as unavailable.
+
+**Sockets and blocking.** A guest SOCKET is a small integer (0x100, 0x104,
+...) naming a record that owns a host descriptor. Host descriptors are always
+non-blocking; a guest socket blocks until FIONBIO or WSAEventSelect says
+otherwise, and a blocking call is a loop of non-blocking attempts with a guest
+wait between them (`guest_wait_objects` on a per-thread event, in slices of at
+most a second), so other guest threads run while one waits, and SO_RCVTIMEO /
+SO_SNDTIMEO bound it. `closesocket` ends a call blocked on the socket with
+WSAEINTR. A non-blocking connect reports WSAEWOULDBLOCK, as Windows does; a
+refused one lands in select's except set, not its write set. Datagrams too
+long for the buffer are truncated with WSAEMSGSIZE, and ICMP errors are never
+reported on a datagram socket (Windows' WSAECONNRESET on recvfrom included).
+Errors are per guest thread (WSAGetLastError) and also GetLastError's.
+WSACleanup counts start-ups but never closes sockets, so a module that cleans
+up and starts again mid-session keeps them.
+
+**WSAEventSelect** follows Windows' recording rules: an event is recorded once
+and set, and then stays quiet until the call that re-enables it (recv/recvfrom
+for FD_READ, accept for FD_ACCEPT, a send that would block for FD_WRITE);
+the re-enabling call records it again at once while its condition still holds,
+so a reader that takes one datagram per wake-up is woken again while datagrams
+are queued. WSAEventSelect records what already holds, a later call replaces
+the earlier one, and an accepted socket inherits its listener's selection.
+One host thread (the monitor) polls the descriptors with armed events or
+blocked callers and signals through `guest_event_signal_from_host`.
+
+**Broadcast.** BSD sends 255.255.255.255 out of the default route's interface
+only. A datagram to it from a socket bound to the wildcard address is sent
+once per adapter instead, to the adapter's directed broadcast address (or out
+of a point-to-point tunnel by interface index), so a LAN game's discovery
+reaches the local network and an overlay such as ZeroTier alike; a socket bound
+to one adapter's address broadcasts on that adapter only. BSD also delivers
+broadcasts only to wildcard sockets, where Windows delivers them to a socket
+bound to the receiving interface's address: a datagram socket the guest binds
+to an adapter's address is the wildcard on the host, reports the guest's
+address from getsockname, and drops what Windows would not have delivered.
+TCP sockets get SO_REUSEADDR on the host, which lets a port be bound again
+while old connections linger as Windows does, and still refuses a second
+socket on the same address and port.
+
+**Adapters** (`net_adapters.h`): the host's up IPv4 interfaces without
+loopback; the local network first (`en*`, `eth*`, `wl*`, the default route's
+ahead of the rest), then overlay networks (ZeroTier's `feth*`, `zt*`), then
+tunnels (`utun*`, `tun*`, `tap*`, `wg*`, `ppp*`, `ipsec*`), then the rest;
+at most ten, and no more than fit a 6,400-byte GetAdaptersInfo buffer, which
+programs of the period allocated as a fixed size. Winsock's own-host lookup,
+its broadcast fan-out, SIO_GET_INTERFACE_LIST, GetAdaptersInfo,
+GetAdaptersAddresses, GetIpForwardTable, GetIpAddrTable, GetBestInterface,
+GetBestRoute and Netbios (NCBENUM, NCBRESET, NCBASTAT) all answer from this
+list in this order.
+
+**Names.** `gethostname` is the host's name up to its first dot.
+`gethostbyname` answers a dotted address, `localhost` and the own name (every
+adapter address, in adapter order) without DNS; a name in game.toml's
+`[network] offline_hosts` or `RECOMP_NET_OFFLINE_HOSTS` fails at once with
+WSAHOST_NOT_FOUND, as does every other name under `RECOMP_NET_DNS=0`; the rest
+go to the system resolver on a host thread while the guest thread waits (ten
+seconds at most, then WSATRY_AGAIN). `gethostbyaddr` does no reverse lookup.
+The HOSTENT and `inet_ntoa`'s string are per thread and overwritten by the
+thread's next call, as Windows documents them.
+
+Not modelled: overlapped I/O (WSARecv and friends work without an
+OVERLAPPED), WSAAsyncSelect, IPv6, raw sockets.
+
 ## The guest file system
 
 The guest root `C:\Populous\` maps to the directory holding the loaded EXE
@@ -323,6 +398,10 @@ paths resolve against the guest current directory, which starts at
 | `RECOMP_IMPORT_STATS=1` | at exit, classify every import as called / not reached / logging-only |
 | `RECOMP_STRICT=1` / `0` | strict mode on or off (default: `[runtime] strict`): an undeliverable call or jump, a call through an import of unknown stdcall argument count, or a divide error stops the run with a diagnostic; the null page faults |
 | `RECOMP_NULL_GUARD=1` / `0` | arm or disarm the null-page guard independently of strict mode |
+| `RECOMP_NET_TRACE=1` | every socket call and its outcome on stderr, broadcast fan-out included |
+| `RECOMP_NET_DNS=0` | gethostbyname answers only what it can without DNS |
+| `RECOMP_NET_OFFLINE_HOSTS` | comma-separated host names gethostbyname fails at once, besides `[network] offline_hosts` |
+| `RECOMP_NET_ADAPTERS` | comma-separated interface names: the adapters a guest sees, in that order |
 
 ## Tests
 
