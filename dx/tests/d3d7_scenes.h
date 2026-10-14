@@ -530,6 +530,231 @@ inline Image scene_vb_565() {
     return img;
 }
 
+// Specular highlights (SPECULARENABLE, material power, local and infinite
+// viewer) and a spot light with its cone and falloff.
+inline Image scene_specular_spot() {
+    Device d = make_device(64, 32);
+    set_transform(d.dev, d7::TS_PROJECTION, perspective(1.0f, 2.0f, 1.0f, 100.0f));
+    rs(d.dev, d7::RS_LIGHTING, 1);
+    rs(d.dev, d7::RS_COLORVERTEX, 0);
+    rs(d.dev, d7::RS_NORMALIZENORMALS, 1);
+    rs(d.dev, d7::RS_SPECULARENABLE, 1);
+    rs(d.dev, d7::RS_AMBIENT, 0xff101010u);
+    const float diffuse[4] = {0.3f, 0.3f, 0.6f, 1.0f}, ambient[4] = {1, 1, 1, 1},
+                specular[4] = {1.0f, 0.9f, 0.5f, 1.0f}, emissive[4] = {0.05f, 0, 0, 0};
+    material(d.dev, diffuse, ambient, specular, emissive, 12.0f);
+    Light l;
+    l.direction[0] = 0.3f;
+    l.direction[1] = -0.2f;
+    l.direction[2] = 1;
+    l.specular[0] = l.specular[1] = l.specular[2] = 1;
+    set_light(d.dev, 0, l);
+    Light spot;
+    spot.type = d7::LIGHT_SPOT;
+    spot.position[0] = 2;
+    spot.position[2] = 2;
+    spot.direction[2] = 1;
+    spot.diffuse[0] = 0.2f;
+    spot.diffuse[1] = 1;
+    spot.diffuse[2] = 0.2f;
+    spot.theta = 0.3f;
+    spot.phi = 0.8f;
+    spot.falloff = 2;
+    spot.range = 50;
+    set_light(d.dev, 1, spot);
+    clear(d.dev, d7::CLEAR_TARGET | d7::CLEAR_ZBUFFER, 0xff000000u);
+    call_method(d.dev, DEV_BeginScene, {});
+    tss(d.dev, 0, d7::TSS_COLOROP, d7::TOP_SELECTARG2);
+    tss(d.dev, 0, d7::TSS_COLORARG2, d7::TA_DIFFUSE);
+    // A bumpy grid: normals vary across it so the highlight has a shape.
+    std::vector<Vertex> v;
+    std::vector<uint16_t> idx;
+    const int n = 12;
+    for (int j = 0; j <= n; ++j)
+        for (int i = 0; i <= n; ++i) {
+            const float x = -4 + 8.0f * i / n, y = 2 - 4.0f * j / n;
+            v.push_back(
+                {x, y, 6, 0.4f * std::sin(x), 0.4f * std::cos(y * 2), -1, 0xffffffffu, 0, 0});
+        }
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) {
+            const uint16_t a = uint16_t(j * (n + 1) + i);
+            idx.insert(idx.end(), {a, uint16_t(a + 1), uint16_t(a + n + 1), uint16_t(a + n + 1),
+                                   uint16_t(a + 1), uint16_t(a + n + 2)});
+        }
+    draw(d.dev, d7::PT_TRIANGLELIST, v, idx);
+    rs(d.dev, d7::RS_LOCALVIEWER, 0);
+    set_transform(d.dev, d7::TS_WORLD, translate(0, 0, 4));
+    draw(d.dev, d7::PT_TRIANGLELIST, v, idx);
+    call_method(d.dev, DEV_EndScene, {});
+    Image img = read(d.rt);
+    release_all(d);
+    return img;
+}
+
+// Table (pixel) fog: EXP, EXP2 and LINEAR on eye depth, and range-based vertex
+// fog for comparison.
+inline Image scene_table_fog() {
+    Device d = make_device(64, 48);
+    set_transform(d.dev, d7::TS_PROJECTION, perspective(1.2f, 64.0f / 48, 1.0f, 100.0f));
+    rs(d.dev, d7::RS_FOGENABLE, 1);
+    rs(d.dev, d7::RS_FOGCOLOR, 0xff8080ffu);
+    rs(d.dev, d7::RS_FOGSTART, fbits(3.0f));
+    rs(d.dev, d7::RS_FOGEND, fbits(30.0f));
+    rs(d.dev, d7::RS_FOGDENSITY, fbits(0.08f));
+    clear(d.dev, d7::CLEAR_TARGET | d7::CLEAR_ZBUFFER, 0xff000000u);
+    call_method(d.dev, DEV_BeginScene, {});
+    tss(d.dev, 0, d7::TSS_COLOROP, d7::TOP_SELECTARG2);
+    tss(d.dev, 0, d7::TSS_COLORARG2, d7::TA_DIFFUSE);
+    const uint32_t modes[4][2] = {
+        {d7::FOG_EXP, 0}, {d7::FOG_EXP2, 0}, {d7::FOG_LINEAR, 0}, {d7::FOG_NONE, d7::FOG_LINEAR}};
+    for (int m = 0; m < 4; ++m) {
+        rs(d.dev, d7::RS_FOGTABLEMODE, modes[m][0]);
+        rs(d.dev, d7::RS_FOGVERTEXMODE, modes[m][1]);
+        rs(d.dev, d7::RS_RANGEFOGENABLE, m == 3);
+        const float x0 = -4 + 2.0f * m;
+        std::vector<Vertex> v;
+        std::vector<uint16_t> idx;
+        for (int j = 0; j <= 8; ++j) {
+            const float z = 2 + 4.0f * j;
+            v.push_back({x0, -1.5f, z, 0, 1, 0, 0xff20c020u, 0, 0});
+            v.push_back({x0 + 1.8f, -1.5f, z, 0, 1, 0, 0xff20c020u, 0, 0});
+        }
+        for (uint16_t j = 0; j < 8; ++j)
+            idx.insert(idx.end(), {uint16_t(2 * j), uint16_t(2 * j + 2), uint16_t(2 * j + 1),
+                                   uint16_t(2 * j + 1), uint16_t(2 * j + 2), uint16_t(2 * j + 3)});
+        draw(d.dev, d7::PT_TRIANGLELIST, v, idx);
+    }
+    call_method(d.dev, DEV_EndScene, {});
+    Image img = read(d.rt);
+    release_all(d);
+    return img;
+}
+
+// Texture addressing past [0, 1]: WRAP, MIRROR, CLAMP; and TFACTOR / SPECULAR
+// as combiner arguments.
+inline Image scene_addressing() {
+    Device d = make_device(64, 32);
+    const uint32_t tex = texture(d.dd, 4, 4, PF_A1R5G5B5);
+    write(tex, [](int x, int y) {
+        return 0x8000u | uint32_t(x * 8) << 10 | uint32_t(y * 8) << 5 | 0x1fu;
+    });
+    clear(d.dev, d7::CLEAR_TARGET | d7::CLEAR_ZBUFFER, 0xff000000u);
+    call_method(d.dev, DEV_BeginScene, {});
+    call_method(d.dev, DEV_SetTexture, {0, tex});
+    tss(d.dev, 0, d7::TSS_COLOROP, d7::TOP_SELECTARG1);
+    tss(d.dev, 0, d7::TSS_COLORARG1, d7::TA_TEXTURE);
+    const uint32_t modes[3] = {d7::TADDRESS_WRAP, d7::TADDRESS_MIRROR, d7::TADDRESS_CLAMP};
+    for (int m = 0; m < 3; ++m) {
+        tss(d.dev, 0, d7::TSS_ADDRESSU, modes[m]);
+        tss(d.dev, 0, d7::TSS_ADDRESSV, modes[(m + 1) % 3]);
+        draw(d.dev, d7::PT_TRIANGLELIST,
+             quad2d(float(16 * m), 0, float(16 * m + 16), 16, 0xffffffffu, -1, -1, 2, 2),
+             QUAD_INDICES);
+    }
+    rs(d.dev, d7::RS_TEXTUREFACTOR, 0x80ff4020u);
+    tss(d.dev, 0, d7::TSS_COLOROP, d7::TOP_MODULATE);
+    tss(d.dev, 0, d7::TSS_COLORARG2, d7::TA_TFACTOR);
+    draw(d.dev, d7::PT_TRIANGLELIST, quad2d(48, 0, 64, 16, 0xffffffffu), QUAD_INDICES);
+    tss(d.dev, 0, d7::TSS_COLOROP, d7::TOP_BLENDFACTORALPHA);
+    tss(d.dev, 0, d7::TSS_COLORARG2, d7::TA_DIFFUSE);
+    draw(d.dev, d7::PT_TRIANGLELIST, quad2d(0, 16, 32, 32, 0xff0000ffu), QUAD_INDICES);
+    tss(d.dev, 0, d7::TSS_COLOROP, d7::TOP_ADDSIGNED);
+    draw(d.dev, d7::PT_TRIANGLELIST, quad2d(32, 16, 64, 32, 0xff406080u), QUAD_INDICES);
+    call_method(d.dev, DEV_EndScene, {});
+    call_method(d.dev, DEV_SetTexture, {0, 0});
+    Image img = read(d.rt);
+    release_all(d, {tex});
+    return img;
+}
+
+// Pre-transformed vertices (XYZRHW | DIFFUSE | SPECULAR | TEX1, 32 bytes):
+// screen space, perspective-correct by RHW, depth as given, vertex fog from
+// the specular alpha.
+inline Image scene_pretransformed() {
+    Device d = make_device(64, 32);
+    const uint32_t tex = texture(d.dd, 8, 8, PF_X8R8G8B8);
+    write(tex, [](int x, int y) { return ((x ^ y) & 1) ? 0x00ffffffu : 0x00402010u; });
+    clear(d.dev, d7::CLEAR_TARGET | d7::CLEAR_ZBUFFER, 0xff000000u);
+    call_method(d.dev, DEV_BeginScene, {});
+    call_method(d.dev, DEV_SetTexture, {0, tex});
+    tss(d.dev, 0, d7::TSS_COLOROP, d7::TOP_MODULATE);
+    tss(d.dev, 0, d7::TSS_COLORARG1, d7::TA_TEXTURE);
+    tss(d.dev, 0, d7::TSS_COLORARG2, d7::TA_DIFFUSE);
+    rs(d.dev, d7::RS_FOGENABLE, 1);
+    rs(d.dev, d7::RS_FOGCOLOR, 0xff00ff00u);
+    struct TL {
+        float x, y, z, rhw;
+        uint32_t diffuse, specular;
+        float u, v;
+    };
+    // Texture coordinates inset by a fraction of a texel, so no pixel centre
+    // samples exactly on a texel boundary, where float and double may part.
+    // (Chosen so every pixel centre is at least 1/700 texel from an edge.)
+    const TL quad[4] = {{4, 2, 0.2f, 1.0f, 0xffffffffu, 0xff000000u, 0.013f, 0.017f},
+                        {60, 6, 0.2f, 0.25f, 0xffff8080u, 0x80000000u, 0.971f, 0.017f},
+                        {4, 30, 0.6f, 1.0f, 0xff8080ffu, 0xff000000u, 0.013f, 0.973f},
+                        {60, 26, 0.6f, 0.25f, 0xffffffffu, 0x00000000u, 0.971f, 0.973f}};
+    const uint32_t vb = gmem(sizeof quad), ib = gmem(12);
+    memcpy(gm_ptr(vb), quad, sizeof quad);
+    memcpy(gm_ptr(ib), QUAD_INDICES.data(), 12);
+    CHECK_EQ(
+        call_method(d.dev, DEV_DrawIndexedPrimitive, {d7::PT_TRIANGLELIST, 0x1c4, vb, 4, ib, 6, 0}),
+        0);
+    call_method(d.dev, DEV_EndScene, {});
+    call_method(d.dev, DEV_SetTexture, {0, 0});
+    heap_free(vb);
+    heap_free(ib);
+    Image img = read(d.rt);
+    release_all(d, {tex});
+    return img;
+}
+
+// Lines and points as an engine's grid and markers draw them: line lists and
+// strips on pixel centres, and points.
+inline Image scene_lines_points() {
+    Device d = make_device(48, 32);
+    clear(d.dev, d7::CLEAR_TARGET | d7::CLEAR_ZBUFFER, 0xff000000u);
+    call_method(d.dev, DEV_BeginScene, {});
+    tss(d.dev, 0, d7::TSS_COLOROP, d7::TOP_SELECTARG2);
+    tss(d.dev, 0, d7::TSS_COLORARG2, d7::TA_DIFFUSE);
+    std::vector<Vertex> lines;
+    for (int i = 0; i < 6; ++i) {
+        lines.push_back({4, 4.0f + 4 * i, 0.5f, 0, 0, -1, 0xffffffffu, 0, 0});
+        lines.push_back({44, 4.0f + 4 * i, 0.5f, 0, 0, -1, 0xffffffffu, 0, 0});
+        lines.push_back({4.0f + 8 * i, 2, 0.5f, 0, 0, -1, 0xffff8000u, 0, 0});
+        lines.push_back({4.0f + 8 * i, 30, 0.5f, 0, 0, -1, 0xffff8000u, 0, 0});
+    }
+    draw(d.dev, d7::PT_LINELIST, lines);
+    std::vector<Vertex> points;
+    for (int i = 0; i < 10; ++i)
+        points.push_back({6.0f + 4 * i, 29, 0.5f, 0, 0, -1, 0xff00ffffu, 0, 0});
+    draw(d.dev, d7::PT_POINTLIST, points);
+    call_method(d.dev, DEV_EndScene, {});
+    Image img = read(d.rt);
+    release_all(d);
+    return img;
+}
+
+// A movie frame: a system-memory 5-6-5 surface written through Lock and
+// stretched onto a 32-bit render target, as a video player's frame buffer is.
+inline Image scene_movie_blit() {
+    Device d = make_device(64, 48);
+    const uint32_t frame = offscreen(d.dd, 32, 24, PF_R5G6B5, false, d7::DDSCAPS_SYSTEMMEMORY);
+    clear(d.dev, d7::CLEAR_TARGET, 0xff000000u);
+    for (int f = 0; f < 2; ++f) {
+        write(frame, [f](int x, int y) {
+            return uint32_t((x + f) & 31) << 11 | uint32_t(y * 2 + f) << 5 | uint32_t(31 - x);
+        });
+        const uint32_t r = rect(0, 0, 64, 48);
+        CHECK_EQ(call_method(d.rt, S_Blt, {r, frame, 0, d7::DDBLT_DONOTWAIT, 0}), 0);
+        heap_free(r);
+    }
+    Image img = read(d.rt);
+    release_all(d, {frame});
+    return img;
+}
+
 inline const std::vector<Scene> &scenes() {
     static const std::vector<Scene> list = {
         {"quad coverage", scene_quad_coverage, 0.0, 1},
@@ -547,6 +772,12 @@ inline const std::vector<Scene> &scenes() {
         {"colour-keyed texture", scene_colorkey_texture, 0.0, 1},
         {"render to texture", scene_render_to_texture, 0.0, 1},
         {"vertex buffer, 5-6-5", scene_vb_565, 0.0, 1},
+        {"specular and spot light", scene_specular_spot, 0.01, 3},
+        {"table fog", scene_table_fog, 0.02, 3},
+        {"addressing, tfactor", scene_addressing, 0.0, 2},
+        {"pre-transformed vertices", scene_pretransformed, 0.005, 3},
+        {"lines and points", scene_lines_points, 0.0, 1},
+        {"movie frame blit", scene_movie_blit, 0.0, 0},
     };
     return list;
 }

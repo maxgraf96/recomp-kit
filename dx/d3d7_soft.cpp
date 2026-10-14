@@ -745,13 +745,16 @@ void raster_triangle(const PixelContext &px, Target &t, const PV *v, const PV &p
     }
 }
 
+// Lines step along their major axis from the first endpoint, which is drawn,
+// to the last, which is not (the GPU's rule; Direct3D 7's LASTPIXEL, which
+// would add that last pixel, is not honoured).
 void raster_line(const PixelContext &px, Target &t, const PV *v, bool rhw) {
     const HostD7State &st = *px.st;
     const Screen a = to_screen(v[0], st, rhw), b = to_screen(v[1], st, rhw);
     const double dx = b.x - a.x, dy = b.y - a.y;
     const int steps = int(std::ceil(std::max(std::fabs(dx), std::fabs(dy))));
     for (int i = 0; i < steps; ++i) {
-        const double f = (i + 0.5) / steps;
+        const double f = double(i) / steps;
         const int x = int(std::floor(a.x + dx * f + 0.5)), y = int(std::floor(a.y + dy * f + 0.5));
         if (x < t.x0 || x >= t.x1 || y < t.y0 || y >= t.y1)
             continue;
