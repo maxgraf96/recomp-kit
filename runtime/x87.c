@@ -18,7 +18,6 @@
  * the fast path never computes only partly; C1 after arithmetic is not
  * modelled. Both are best effort: they do not change any result. */
 #include <fenv.h>
-#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -507,8 +506,14 @@ double x87_fst_f64_slow(X86 *c) {
     return d;
 }
 
+/* FST/FSTP m80 stores the register exactly. Of an empty register it stores
+ * the indefinite, as x87's masked stack underflow does (IE, SF). */
 void x87_fst_f80(X86 *c, uint32_t a) {
     X87Ext v = reg_get(c, top_slot(c, 0));
+    if (ftag_of(c, top_slot(c, 0)) == FTAG_EMPTY) {
+        c->fpu_sw = (uint16_t)((c->fpu_sw & ~SW_C1) | SW_IE | 0x0040u);
+        v = X80_INDEFINITE;
+    }
     wr64(a, v.signif);
     wr16(a + 8, v.signExp);
 }
@@ -895,38 +900,416 @@ void x87_frstor(X86 *c, uint32_t a) {
 
 /* --------------------------------------------------- transcendentals --- */
 
-/* FSIN ... FYL2XP1. No game this runtime serves computes with them on a
- * path where bits matter, and x87 hardware does not round them correctly
- * either: its results are only documented to within an ulp, and changed
- * between CPU generations. These evaluate the double libm function of the
- * operands rounded to double, so they are within a few double ulps of
- * hardware, not 80-bit exact. Operands that are NaN, unsupported or outside
- * the instruction's domain get x87's results; FSIN, FCOS, FSINCOS and FPTAN
- * leave an operand of 2^63 or more unchanged and set C2, as x87 does. */
-static int transc_special(X86 *c, unsigned p, int cls, X87Ext v) {
-    if (cls >= XC_QNAN) {
-        reg_put(c, p, nan_result(c, &v, &cls, 1));
+/* FSIN ... FYL2XP1. x87 hardware does not round these correctly: Intel and
+ * AMD document them only to within an ulp, and results have changed between
+ * CPU generations. What a recent Intel CPU produces is, within an ulp and
+ * mostly exactly, the correctly rounded value of the function, with one
+ * twist for FSIN, FCOS, FSINCOS and FPTAN: they reduce the argument with a
+ * 66-bit pi (P66), so they compute f(x * pi / P66). That is what these
+ * evaluate, in a 128-bit-significand format (XF below) whose error is far
+ * below the final rounding to 64 bits per RC; PC does not apply. They are
+ * therefore near the hardware, not equal to it - the conformance suite
+ * reports their distance. Operands that are NaN, unsupported or outside an
+ * instruction's domain get x87's results; FSIN, FCOS, FSINCOS and FPTAN leave
+ * an operand of 2^63 or more unchanged and set C2. */
+
+typedef unsigned __int128 u128;
+#define X87_U128(hi, lo) (((u128)(hi) << 64) | (u128)(lo))
+
+/* sign, exponent, and a significand with bit 127 set (or zero):
+ * (-1)^sign * m * 2^(exp - 127), so m's leading bit is worth 2^exp. */
+typedef struct {
+    int sign;
+    int32_t exp;
+    u128 m;
+} XF;
+
+static int clz128(u128 m) {
+    uint64_t hi = (uint64_t)(m >> 64);
+    return hi ? __builtin_clzll(hi) : 64 + __builtin_clzll((uint64_t)m);
+}
+
+static XF xf_make(int sign, int32_t exp, u128 m) {
+    XF r;
+    r.sign = sign;
+    if (!m) {
+        r.exp = 0;
+        r.m = 0;
+        return r;
+    }
+    int lz = clz128(m);
+    r.m = m << lz;
+    r.exp = exp - lz;
+    return r;
+}
+
+static XF xf_neg(XF a) {
+    a.sign ^= 1;
+    return a;
+}
+
+static XF xf_from_x80(X87Ext v) {
+    int32_t e = v.signExp & 0x7fff;
+    return xf_make(v.signExp >> 15, (e ? e : 1) - 16383, (u128)v.signif << 64);
+}
+
+static XF xf_from_int(int sign, uint64_t n) {
+    return xf_make(sign, 127, (u128)n);
+}
+
+/* a * b, truncated to 128 bits. */
+static XF xf_mul(XF a, XF b) {
+    if (!a.m || !b.m)
+        return xf_make(a.sign ^ b.sign, 0, 0);
+    uint64_t ah = (uint64_t)(a.m >> 64), al = (uint64_t)a.m;
+    uint64_t bh = (uint64_t)(b.m >> 64), bl = (uint64_t)b.m;
+    u128 hh = (u128)ah * bh, hl = (u128)ah * bl, lh = (u128)al * bh, ll = (u128)al * bl;
+    u128 mid = (u128)(uint64_t)hl + (uint64_t)lh + (uint64_t)(ll >> 64);
+    u128 hi = hh + (hl >> 64) + (lh >> 64) + (mid >> 64);
+    uint64_t lo_top = (uint64_t)mid; /* the next 64 bits below hi */
+    int32_t exp = a.exp + b.exp + 1;
+    if (!(hi >> 127)) {
+        hi = (hi << 1) | (lo_top >> 63);
+        exp--;
+    }
+    XF r = {a.sign ^ b.sign, exp, hi};
+    return r;
+}
+
+/* a + b. Operands far apart lose the smaller one's low bits, which the
+ * 128-bit significand affords. */
+static XF xf_add(XF a, XF b) {
+    if (!b.m)
+        return a;
+    if (!a.m)
+        return b;
+    if (a.exp < b.exp || (a.exp == b.exp && a.m < b.m)) {
+        XF t = a;
+        a = b;
+        b = t;
+    }
+    int32_t d = a.exp - b.exp;
+    u128 bm = d >= 128 ? 0 : b.m >> d;
+    if (a.sign == b.sign) {
+        u128 s = a.m + bm;
+        if (s < a.m) /* carry out of bit 127 */
+            return xf_make(a.sign, a.exp + 1, (s >> 1) | ((u128)1 << 127));
+        return xf_make(a.sign, a.exp, s);
+    }
+    return xf_make(a.sign, a.exp, a.m - bm);
+}
+
+static XF xf_sub(XF a, XF b) {
+    return xf_add(a, xf_neg(b));
+}
+
+/* A finite nonzero double, exactly; and an XF truncated to double for a
+ * starting guess. Both stay inside the double's normal range here. */
+static XF xf_from_double(double v) {
+    uint64_t b;
+    memcpy(&b, &v, 8);
+    return xf_make((int)(b >> 63), (int32_t)((b >> 52) & 0x7ffu) - 1023,
+                   (u128)((b & UINT64_C(0x000fffffffffffff)) | UINT64_C(0x0010000000000000)) << 75);
+}
+static double xf_to_double(XF a) {
+    uint64_t b = (uint64_t)a.sign << 63 | (uint64_t)(a.exp + 1023) << 52 |
+                 ((uint64_t)(a.m >> 75) & UINT64_C(0x000fffffffffffff));
+    double v;
+    memcpy(&v, &b, 8);
+    return v;
+}
+
+/* 1 / d by Newton's iteration from the double reciprocal: two steps take
+ * 53 correct bits past the 128 the format keeps. */
+static XF xf_recip(XF d) {
+    int32_t e = d.exp;
+    XF dn = xf_make(0, 0, d.m), x, two = xf_from_int(0, 2);
+    int i;
+    x = xf_from_double(1.0 / xf_to_double(dn));
+    for (i = 0; i < 2; i++)
+        x = xf_mul(x, xf_sub(two, xf_mul(dn, x)));
+    x.exp -= e;
+    x.sign = d.sign;
+    return x;
+}
+
+static XF xf_div(XF a, XF b) {
+    return xf_mul(a, xf_recip(b));
+}
+
+/* a / n for a small integer n. */
+static XF xf_div_small(XF a, uint64_t n) {
+    return xf_make(a.sign, a.exp, a.m / n);
+}
+
+/* sum_{k=0..n} c[step k] x^k by Horner's rule, the odd terms negated when
+ * `alternate`. */
+static XF xf_horner(XF x, const XF *c, int step, int n, int alternate) {
+    XF sum = c[step * n];
+    int k;
+    if (alternate && (n & 1))
+        sum = xf_neg(sum);
+    for (k = n - 1; k >= 0; k--) {
+        XF ck = c[step * k];
+        if (alternate && (k & 1))
+            ck = xf_neg(ck);
+        sum = xf_add(xf_mul(sum, x), ck);
+    }
+    return sum;
+}
+
+/* Terms for a series in x^2 whose terms shrink by at least x^2 each, to
+ * reach 2^-100 relative: |x| < 2^(exp + 1), so x^2 < 2^(2 exp + 2). */
+static int xf_terms(XF x, int most) {
+    int per = -2 * (x.exp + 1);
+    int n = per > 0 ? (100 + per - 1) / per : most;
+    return n < most ? n : most;
+}
+
+static const XF XF_PI = {0, 1, X87_U128(0xc90fdaa22168c234u, 0xc4c6628b80dc1cd1u)};
+static const XF XF_PI_2 = {0, 0, X87_U128(0xc90fdaa22168c234u, 0xc4c6628b80dc1cd1u)};
+static const XF XF_LN2 = {0, -1, X87_U128(0xb17217f7d1cf79abu, 0xc9e3b39803f2f6afu)};
+static const XF XF_LOG2E = {0, 0, X87_U128(0xb8aa3b295c17f0bbu, 0xbe87fed0691d3e88u)};
+static const XF XF_PI_OVER_P66 = {0, 0, X87_U128(0x8000000000000000u, 0x030a31c5b45d1254u)};
+/* 1/n!, n = 0..39 */
+static const XF XF_INV_FACT[40] = {
+    {0, 0, X87_U128(0x8000000000000000u, 0x0000000000000000u)},
+    {0, 0, X87_U128(0x8000000000000000u, 0x0000000000000000u)},
+    {0, -1, X87_U128(0x8000000000000000u, 0x0000000000000000u)},
+    {0, -3, X87_U128(0xaaaaaaaaaaaaaaaau, 0xaaaaaaaaaaaaaaaau)},
+    {0, -5, X87_U128(0xaaaaaaaaaaaaaaaau, 0xaaaaaaaaaaaaaaaau)},
+    {0, -7, X87_U128(0x8888888888888888u, 0x8888888888888888u)},
+    {0, -10, X87_U128(0xb60b60b60b60b60bu, 0x60b60b60b60b60b6u)},
+    {0, -13, X87_U128(0xd00d00d00d00d00du, 0x00d00d00d00d00d0u)},
+    {0, -16, X87_U128(0xd00d00d00d00d00du, 0x00d00d00d00d00d0u)},
+    {0, -19, X87_U128(0xb8ef1d2ab6399c7du, 0x560e4472800b8ef1u)},
+    {0, -22, X87_U128(0x93f27dbbc4fae397u, 0x780b69f5333c725bu)},
+    {0, -26, X87_U128(0xd7322b3faa271c7fu, 0x3a3f25c1bee38f10u)},
+    {0, -29, X87_U128(0x8f76c77fc6c4bdaau, 0x26d4c3d67f425f60u)},
+    {0, -33, X87_U128(0xb092309d43684be5u, 0x1c198e91d7b4269du)},
+    {0, -37, X87_U128(0xc9cba54603e4e905u, 0xd6f8a2efd1f27546u)},
+    {0, -41, X87_U128(0xd73f9f399dc0f88eu, 0xc32b58774657f48fu)},
+    {0, -45, X87_U128(0xd73f9f399dc0f88eu, 0xc32b58774657f48fu)},
+    {0, -49, X87_U128(0xca963b81856a5359u, 0x3028cbbb8d7ff53bu)},
+    {0, -53, X87_U128(0xb413c31dcbecbbddu, 0x8024435161554bc3u)},
+    {0, -57, X87_U128(0x97a4da340a0ab926u, 0x50f61dbdcb3a5abfu)},
+    {0, -62, X87_U128(0xf2a15d201011283du, 0x4e5695fc785d5dfeu)},
+    {0, -66, X87_U128(0xb8dc77b6e7ab8c5fu, 0x78a37e77372290c2u)},
+    {0, -70, X87_U128(0x8671cb6dbfc294a2u, 0x86485bf99c763abbu)},
+    {0, -75, X87_U128(0xbb0da098b1c0cecbu, 0xdc3826ebfb13cc26u)},
+    {0, -80, X87_U128(0xf96780cb97abbe65u, 0x25a033e54ec51033u)},
+    {0, -84, X87_U128(0x9f9e66e8b2fd46a7u, 0x22520cbbb7885c49u)},
+    {0, -89, X87_U128(0xc4742fe35272cd1cu, 0x790285d3580a4a33u)},
+    {0, -94, X87_U128(0xe8d58e16e6751905u, 0x4d0c78aea13b9a50u)},
+    {0, -98, X87_U128(0x850c5131a842e9b9u, 0xe2e28e1aa546a152u)},
+    {0, -103, X87_U128(0x92cfcc5a1ac56bd5u, 0xf1873bb378948eb3u)},
+    {0, -108, X87_U128(0x9c9962823eb07306u, 0x56f6a614c4e2ba58u)},
+    {0, -113, X87_U128(0xa1a6973c1fade217u, 0x0f7237d35fe1c89du)},
+    {0, -118, X87_U128(0xa1a6973c1fade217u, 0x0f7237d35fe1c89du)},
+    {0, -123, X87_U128(0x9cc092a6e86a8da9u, 0xc166ffd4ba113ea8u)},
+    {0, -128, X87_U128(0x9388118e07ebd09fu, 0xc515a57ceb5b8644u)},
+    {0, -133, X87_U128(0x86e2ce38b6c8f941u, 0x9e3fad3f0311d9d7u)},
+    {0, -139, X87_U128(0xefcc194861654958u, 0x35c6895393adf50eu)},
+    {0, -144, X87_U128(0xcf6468e4a742d7a6u, 0x3c58ae1ec4e979feu)},
+    {0, -149, X87_U128(0xaea565ce061d5748u, 0x9e9b85276273c50cu)},
+    {0, -154, X87_U128(0x8f4ca24d25d66f00u, 0x8223b575a61d5979u)},
+};
+/* 1/(2k+1), k = 0..31 */
+static const XF XF_INV_ODD[32] = {
+    {0, 0, X87_U128(0x8000000000000000u, 0x0000000000000000u)},
+    {0, -2, X87_U128(0xaaaaaaaaaaaaaaaau, 0xaaaaaaaaaaaaaaaau)},
+    {0, -3, X87_U128(0xccccccccccccccccu, 0xccccccccccccccccu)},
+    {0, -3, X87_U128(0x9249249249249249u, 0x2492492492492492u)},
+    {0, -4, X87_U128(0xe38e38e38e38e38eu, 0x38e38e38e38e38e3u)},
+    {0, -4, X87_U128(0xba2e8ba2e8ba2e8bu, 0xa2e8ba2e8ba2e8bau)},
+    {0, -4, X87_U128(0x9d89d89d89d89d89u, 0xd89d89d89d89d89du)},
+    {0, -4, X87_U128(0x8888888888888888u, 0x8888888888888888u)},
+    {0, -5, X87_U128(0xf0f0f0f0f0f0f0f0u, 0xf0f0f0f0f0f0f0f0u)},
+    {0, -5, X87_U128(0xd79435e50d79435eu, 0x50d79435e50d7943u)},
+    {0, -5, X87_U128(0xc30c30c30c30c30cu, 0x30c30c30c30c30c3u)},
+    {0, -5, X87_U128(0xb21642c8590b2164u, 0x2c8590b21642c859u)},
+    {0, -5, X87_U128(0xa3d70a3d70a3d70au, 0x3d70a3d70a3d70a3u)},
+    {0, -5, X87_U128(0x97b425ed097b425eu, 0xd097b425ed097b42u)},
+    {0, -5, X87_U128(0x8d3dcb08d3dcb08du, 0x3dcb08d3dcb08d3du)},
+    {0, -5, X87_U128(0x8421084210842108u, 0x4210842108421084u)},
+    {0, -6, X87_U128(0xf83e0f83e0f83e0fu, 0x83e0f83e0f83e0f8u)},
+    {0, -6, X87_U128(0xea0ea0ea0ea0ea0eu, 0xa0ea0ea0ea0ea0eau)},
+    {0, -6, X87_U128(0xdd67c8a60dd67c8au, 0x60dd67c8a60dd67cu)},
+    {0, -6, X87_U128(0xd20d20d20d20d20du, 0x20d20d20d20d20d2u)},
+    {0, -6, X87_U128(0xc7ce0c7ce0c7ce0cu, 0x7ce0c7ce0c7ce0c7u)},
+    {0, -6, X87_U128(0xbe82fa0be82fa0beu, 0x82fa0be82fa0be82u)},
+    {0, -6, X87_U128(0xb60b60b60b60b60bu, 0x60b60b60b60b60b6u)},
+    {0, -6, X87_U128(0xae4c415c9882b931u, 0x0572620ae4c415c9u)},
+    {0, -6, X87_U128(0xa72f05397829cbc1u, 0x4e5e0a72f0539782u)},
+    {0, -6, X87_U128(0xa0a0a0a0a0a0a0a0u, 0xa0a0a0a0a0a0a0a0u)},
+    {0, -6, X87_U128(0x9a90e7d95bc609a9u, 0x0e7d95bc609a90e7u)},
+    {0, -6, X87_U128(0x94f2094f2094f209u, 0x4f2094f2094f2094u)},
+    {0, -6, X87_U128(0x8fb823ee08fb823eu, 0xe08fb823ee08fb82u)},
+    {0, -6, X87_U128(0x8ad8f2fba9386822u, 0xb63cbeea4e1a08adu)},
+    {0, -6, X87_U128(0x864b8a7de6d1d608u, 0x64b8a7de6d1d6086u)},
+    {0, -6, X87_U128(0x8208208208208208u, 0x2082082082082082u)},
+};
+/* atan(k/8), k = 1..8 */
+static const XF XF_ATAN_K8[8] = {
+    {0, -4, X87_U128(0xfeadd4d5617b6e32u, 0xc897989f3e888ef7u)},
+    {0, -3, X87_U128(0xfadbafc96406eb15u, 0x6dc79ef5f7a217e5u)},
+    {0, -2, X87_U128(0xb7b0ca0f26f78473u, 0x8aa32122dcfe4483u)},
+    {0, -2, X87_U128(0xed63382b0dda7b45u, 0x6fe445ecbc3a8d03u)},
+    {0, -1, X87_U128(0x8f005d5ef7f59f9bu, 0x5c835e1665c43747u)},
+    {0, -1, X87_U128(0xa4bc7d1934f70924u, 0x19a87f2a457dac9eu)},
+    {0, -1, X87_U128(0xb8053e2bc2319e73u, 0xcb2da55210a4443du)},
+    {0, -1, X87_U128(0xc90fdaa22168c234u, 0xc4c6628b80dc1cd1u)},
+};
+
+/* 2 atanh(s) = ln((1 + s) / (1 - s)) = 2 (s + s^3/3 + s^5/5 + ...), |s| < 1/2. */
+static XF xf_atanh2(XF s) {
+    XF r = xf_mul(s, xf_horner(xf_mul(s, s), XF_INV_ODD, 1, xf_terms(s, 31), 0));
+    r.exp += 1;
+    return r;
+}
+
+/* sin t and cos t for |t| <= pi/4, by their Taylor series:
+ * t (1 - t^2/3! + ...) and 1 - t^2/2! + ...; 14 terms reach 2^-107. */
+static XF xf_sin(XF t) {
+    return xf_mul(t, xf_horner(xf_mul(t, t), XF_INV_FACT + 1, 2, 13, 1));
+}
+static XF xf_cos(XF t) {
+    return xf_horner(xf_mul(t, t), XF_INV_FACT, 2, 13, 1);
+}
+
+/* atan z for 0 <= z <= 1: atan(c) + atan((z - c) / (1 + zc)) with c the
+ * nearest eighth, then the odd series in |w| <= 1/16. */
+static XF xf_atan01(XF z) {
+    uint64_t k = 0;
+    if (z.m && z.exp >= -4) {
+        /* round(8z): 8z = m * 2^(exp + 3 - 127) */
+        int sh = 127 - (z.exp + 3);
+        u128 eights = sh >= 128 ? 0 : z.m >> sh;
+        u128 half = sh >= 1 && sh <= 128 ? (z.m >> (sh - 1)) & 1u : 0;
+        k = (uint64_t)eights + (uint64_t)half;
+        if (k > 8)
+            k = 8;
+    }
+    XF base = {0, 0, 0}, w = z;
+    if (k) {
+        XF c = xf_make(0, 127 - 3, (u128)k); /* k / 8 */
+        w = xf_div(xf_sub(z, c), xf_add(xf_from_int(0, 1), xf_mul(z, c)));
+        base = XF_ATAN_K8[k - 1];
+    }
+    XF sum = xf_mul(w, xf_horner(xf_mul(w, w), XF_INV_ODD, 1, xf_terms(w, 31), 1));
+    return xf_add(base, sum);
+}
+
+/* ln x for finite x > 0: e ln 2 + 2 atanh((m - 1) / (m + 1)), m in
+ * [sqrt(1/2), sqrt(2)). */
+static XF xf_log(XF x) {
+    int32_t e = x.exp;
+    XF m = xf_make(0, 0, x.m);
+    if (x.m >= X87_U128(0xb504f333f9de6484u, 0x597d89b3754abe9fu)) { /* m >= sqrt 2 */
+        m.exp = -1;
+        e++;
+    }
+    XF one = xf_from_int(0, 1);
+    XF r = xf_atanh2(xf_div(xf_sub(m, one), xf_add(m, one)));
+    if (e)
+        r = xf_add(r, xf_mul(xf_from_int(e < 0, (uint64_t)(e < 0 ? -(int64_t)e : e)), XF_LN2));
+    return r;
+}
+
+/* Round to the 80-bit format per RC (64 bits; PC does not apply). */
+static X87Ext xf_to_x80(X86 *c, XF a) {
+    if (!a.m)
+        return x80((uint16_t)(a.sign << 15), 0);
+    sf_begin(c, 0);
+    uint64_t hi = (uint64_t)(a.m >> 64), lo = (uint64_t)a.m;
+    extFloat80_t r = softfloat_roundPackToExtF80(a.sign != 0, a.exp + 16383, hi, lo, 80);
+    sf_end(c);
+    return from_sf(r);
+}
+
+static X87Ext x80_signed(int sign, uint16_t exp, uint64_t m) {
+    return x80((uint16_t)((sign ? 0x8000u : 0u) | exp), m);
+}
+
+/* x reduced the way FSIN/FCOS/FPTAN reduce it: x = j (P66 / 2) + r, j the
+ * nearest integer, exactly, then t = r pi / P66, so that f(x pi / P66) is
+ * f(j pi / 2 + t). Returns j mod 4; x is finite and below 2^63. */
+static unsigned trig_reduce(X87Ext x, XF *t) {
+    int32_t e = (x.signExp & 0x7fff) - 16383;
+    XF ax = xf_from_x80(x);
+    ax.sign = 0;
+    if (!ax.m || e < -1) { /* |x| < 1/2 < pi/4: no reduction */
+        *t = xf_mul(ax, XF_PI_OVER_P66);
+        return 0;
+    }
+    /* N = |x| 2^65, an integer below 2^128; P66 / 2 = Q66 2^-65 */
+    const u128 Q66 = X87_U128(0x3u, 0x243f6a8885a308d3u);
+    u128 N = (u128)x.signif << (e + 2);
+    u128 j = N / Q66, rem = N % Q66;
+    int neg = 0;
+    if (rem > Q66 - rem) {
+        j++;
+        rem = Q66 - rem;
+        neg = 1;
+    }
+    *t = xf_mul(xf_make(neg, 127 - 65, rem), XF_PI_OVER_P66);
+    return (unsigned)(j & 3u);
+}
+
+/* sin and cos of x pi / P66 for finite |x| < 2^63; s or co may be null. */
+static void trig_eval(X87Ext x, XF *s, XF *co) {
+    XF t, st = {0, 0, 0}, ct = {0, 0, 0}, dummy;
+    unsigned q = trig_reduce(x, &t);
+    int need_sin = (s && !(q & 1)) || (co && (q & 1));
+    int need_cos = (s && (q & 1)) || (co && !(q & 1));
+    if (need_sin)
+        st = xf_sin(t);
+    if (need_cos)
+        ct = xf_cos(t);
+    if (!s)
+        s = &dummy;
+    if (!co)
+        co = &dummy;
+    switch (q) {
+    case 0:
+        *s = st;
+        *co = ct;
+        break;
+    case 1:
+        *s = ct;
+        *co = xf_neg(st);
+        break;
+    case 2:
+        *s = xf_neg(st);
+        *co = xf_neg(ct);
+        break;
+    default:
+        *s = xf_neg(ct);
+        *co = st;
+        break;
+    }
+    if (x.signExp & 0x8000u)
+        *s = xf_neg(*s);
+}
+
+/* The operand checks FSIN, FCOS, FSINCOS and FPTAN share. Returns 1 when the
+ * instruction is finished: a NaN result written to ST(0) (pushed twice when
+ * `twice`), the indefinite for an infinity, or an out-of-range operand left
+ * alone with C2 set. */
+static int trig_special(X86 *c, unsigned p, X87Ext v, int twice) {
+    int cls = x80_class(v);
+    c->fpu_sw &= (uint16_t)~SW_C2;
+    if (cls >= XC_QNAN || cls == XC_INF) {
+        X87Ext n = cls == XC_INF ? X80_INDEFINITE : nan_result(c, &v, &cls, 1);
+        if (cls == XC_INF)
+            c->fpu_sw |= SW_IE;
+        reg_put(c, p, n);
+        if (twice)
+            push_ext(c, n);
         return 1;
     }
     if (cls == XC_DENORMAL)
         c->fpu_sw |= SW_DE;
-    return 0;
-}
-
-static void transc_result(X86 *c, unsigned p, double r) {
-    if (r != r) {
-        c->fpu_sw |= SW_IE;
-        reg_put(c, p, X80_INDEFINITE);
-        return;
-    }
-    c->fpu_sw |= SW_PE;
-    reg_put(c, p, x80_from_f64(r));
-}
-
-/* For FSIN, FCOS, FSINCOS and FPTAN: 1 when the operand is out of range and
- * the instruction leaves it alone with C2 set. */
-static int trig_out_of_range(X86 *c, X87Ext v, int cls) {
-    c->fpu_sw &= (uint16_t)~SW_C2;
     if (cls == XC_NORMAL && (v.signExp & 0x7fff) >= 16383 + 63) {
         c->fpu_sw |= SW_C2;
         return 1;
@@ -934,21 +1317,30 @@ static int trig_out_of_range(X86 *c, X87Ext v, int cls) {
     return 0;
 }
 
-static void trig_unary(X86 *c, double (*fn)(double)) {
+void x87_fsin(X86 *c) {
     unsigned p = top_slot(c, 0);
     x87_enter(c);
     X87Ext v = reg_get(c, p);
-    int cls = x80_class(v);
-    if (transc_special(c, p, cls, v) || trig_out_of_range(c, v, cls))
+    XF s;
+    if (trig_special(c, p, v, 0) || x80_class(v) == XC_ZERO)
         return;
-    transc_result(c, p, fn(c->st[p]));
+    trig_eval(v, &s, NULL);
+    reg_put(c, p, xf_to_x80(c, s));
 }
 
-void x87_fsin(X86 *c) {
-    trig_unary(c, sin);
-}
 void x87_fcos(X86 *c) {
-    trig_unary(c, cos);
+    unsigned p = top_slot(c, 0);
+    x87_enter(c);
+    X87Ext v = reg_get(c, p);
+    XF co;
+    if (trig_special(c, p, v, 0))
+        return;
+    if (x80_class(v) == XC_ZERO) {
+        reg_put(c, p, x80(0x3fffu, SIG_INT));
+        return;
+    }
+    trig_eval(v, NULL, &co);
+    reg_put(c, p, xf_to_x80(c, co));
 }
 
 /* FSINCOS: ST(0) becomes the sine and the cosine is pushed. */
@@ -956,19 +1348,16 @@ void x87_fsincos(X86 *c) {
     unsigned p = top_slot(c, 0);
     x87_enter(c);
     X87Ext v = reg_get(c, p);
-    int cls = x80_class(v);
-    if (cls >= XC_QNAN) {
-        X87Ext n = nan_result(c, &v, &cls, 1);
-        reg_put(c, p, n);
-        push_ext(c, n);
+    XF s, co;
+    if (trig_special(c, p, v, 1))
+        return;
+    if (x80_class(v) == XC_ZERO) {
+        push_ext(c, x80(0x3fffu, SIG_INT));
         return;
     }
-    if (transc_special(c, p, cls, v) || trig_out_of_range(c, v, cls))
-        return;
-    double x = c->st[p];
-    transc_result(c, p, sin(x));
-    double r = cos(x);
-    push_ext(c, r != r ? X80_INDEFINITE : x80_from_f64(r));
+    trig_eval(v, &s, &co);
+    reg_put(c, p, xf_to_x80(c, s));
+    push_ext(c, xf_to_x80(c, co));
 }
 
 /* FPTAN: ST(0) becomes the tangent and 1.0 is pushed. */
@@ -976,66 +1365,173 @@ void x87_fptan(X86 *c) {
     unsigned p = top_slot(c, 0);
     x87_enter(c);
     X87Ext v = reg_get(c, p);
-    int cls = x80_class(v);
-    if (cls >= XC_QNAN) {
-        X87Ext n = nan_result(c, &v, &cls, 1);
-        reg_put(c, p, n);
-        push_ext(c, n);
+    XF s, co;
+    if (trig_special(c, p, v, 1))
         return;
+    if (x80_class(v) != XC_ZERO) {
+        trig_eval(v, &s, &co);
+        reg_put(c, p, xf_to_x80(c, xf_div(s, co)));
     }
-    if (transc_special(c, p, cls, v) || trig_out_of_range(c, v, cls))
-        return;
-    transc_result(c, p, tan(c->st[p]));
-    fpush(c, 1.0);
+    push_ext(c, x80(0x3fffu, SIG_INT));
 }
 
-/* The binary ones: ST(1) = f(ST(1), ST(0)), then pop. */
-static void transc_binary(X86 *c, double (*fn)(double y, double x)) {
+/* FPATAN: ST(1) = atan2(ST(1), ST(0)), then pop. The signed zeros and
+ * infinities give C99's atan2 results, which are x87's. */
+void x87_fpatan(X86 *c) {
     unsigned p0 = top_slot(c, 0), p1 = top_slot(c, 1);
     x87_enter(c);
-    X87Ext v[2] = {reg_get(c, p0), reg_get(c, p1)};
+    X87Ext v[2] = {reg_get(c, p0), reg_get(c, p1)}; /* x, y */
     int cls[2] = {x80_class(v[0]), x80_class(v[1])};
-    if (cls[0] >= XC_QNAN || cls[1] >= XC_QNAN)
+    int sx = v[0].signExp >> 15, sy = v[1].signExp >> 15;
+    XF r;
+    if (cls[0] >= XC_QNAN || cls[1] >= XC_QNAN) {
         reg_put(c, p1, nan_result(c, v, cls, 2));
-    else
-        transc_result(c, p1, fn(c->st[p1], c->st[p0]));
+        fdrop(c);
+        return;
+    }
+    if (cls[0] == XC_DENORMAL || cls[1] == XC_DENORMAL)
+        c->fpu_sw |= SW_DE;
+    if (cls[1] == XC_ZERO) {
+        r = sx ? XF_PI : xf_make(0, 0, 0);
+    } else if (cls[0] == XC_ZERO) {
+        r = XF_PI_2;
+    } else if (cls[1] == XC_INF) {
+        if (cls[0] == XC_INF) {
+            r = XF_ATAN_K8[7]; /* pi/4 */
+            if (sx)
+                r = xf_sub(XF_PI, r);
+        } else {
+            r = XF_PI_2;
+        }
+    } else if (cls[0] == XC_INF) {
+        r = sx ? XF_PI : xf_make(0, 0, 0);
+    } else {
+        XF ax = xf_from_x80(v[0]), ay = xf_from_x80(v[1]);
+        ax.sign = ay.sign = 0;
+        if (ay.exp > ax.exp || (ay.exp == ax.exp && ay.m > ax.m))
+            r = xf_sub(XF_PI_2, xf_atan01(xf_div(ax, ay)));
+        else
+            r = xf_atan01(xf_div(ay, ax));
+        if (sx)
+            r = xf_sub(XF_PI, r);
+    }
+    r.sign = sy;
+    reg_put(c, p1, xf_to_x80(c, r));
     fdrop(c);
 }
 
-static double fn_atan2(double y, double x) {
-    return atan2(y, x);
-}
-static double fn_yl2x(double y, double x) {
-    if (x < 0.0 || (x == 0.0 && y == 0.0) || (x == 1.0 && isinf(y)))
-        return NAN;
-    return y * log2(x);
-}
-/* log2(x+1) loses every significant bit for small x; log1p keeps them. */
-static double fn_yl2xp1(double y, double x) {
-    if (x < -1.0)
-        return NAN;
-    return y * (log1p(x) / M_LN2);
-}
-
-void x87_fpatan(X86 *c) {
-    transc_binary(c, fn_atan2);
-}
-void x87_fyl2x(X86 *c) {
-    transc_binary(c, fn_yl2x);
-}
-void x87_fyl2xp1(X86 *c) {
-    transc_binary(c, fn_yl2xp1);
-}
-
-/* F2XM1: 2^x - 1, as expm1(x ln 2) to keep the small results' bits. */
+/* F2XM1: 2^x - 1, by expm1's series in x ln 2. The hardware defines it for
+ * -1 <= x <= 1; this computes it for any finite x below about 2^14. */
 void x87_f2xm1(X86 *c) {
     unsigned p = top_slot(c, 0);
     x87_enter(c);
     X87Ext v = reg_get(c, p);
     int cls = x80_class(v);
-    if (transc_special(c, p, cls, v))
+    if (cls >= XC_QNAN) {
+        reg_put(c, p, nan_result(c, &v, &cls, 1));
         return;
-    transc_result(c, p, expm1(c->st[p] * M_LN2));
+    }
+    if (cls == XC_ZERO)
+        return;
+    if (cls == XC_INF) {
+        if (v.signExp & 0x8000u)
+            reg_put(c, p, x80(0xbfffu, SIG_INT)); /* -1 */
+        return;
+    }
+    if (cls == XC_DENORMAL)
+        c->fpu_sw |= SW_DE;
+    XF y = xf_mul(xf_from_x80(v), XF_LN2), sum;
+    if (y.exp < 0) { /* |x| < 1/ln 2: y (1 + y/2! + y^2/3! + ...), 26 terms reach 2^-107 */
+        sum = xf_mul(y, xf_horner(y, XF_INV_FACT + 1, 1, 26, 0));
+    } else { /* outside the instruction's domain: the series term by term */
+        XF term = y;
+        uint64_t n;
+        sum = y;
+        for (n = 2; n < 4000; n++) {
+            term = xf_div_small(xf_mul(term, y), n);
+            if (!term.m || term.exp < sum.exp - 110)
+                break;
+            sum = xf_add(sum, term);
+        }
+    }
+    reg_put(c, p, xf_to_x80(c, sum));
+}
+
+/* FYL2X: ST(1) = ST(1) * log2(ST(0)), then pop. */
+void x87_fyl2x(X86 *c) {
+    unsigned p0 = top_slot(c, 0), p1 = top_slot(c, 1);
+    x87_enter(c);
+    X87Ext v[2] = {reg_get(c, p0), reg_get(c, p1)}; /* x, y */
+    int cls[2] = {x80_class(v[0]), x80_class(v[1])};
+    int sx = v[0].signExp >> 15, sy = v[1].signExp >> 15;
+    X87Ext r;
+    if (cls[0] >= XC_QNAN || cls[1] >= XC_QNAN) {
+        r = nan_result(c, v, cls, 2);
+    } else if (sx && cls[0] != XC_ZERO) { /* log of a negative */
+        c->fpu_sw |= SW_IE;
+        r = X80_INDEFINITE;
+    } else if (cls[0] == XC_ZERO) { /* log2(0) = -inf */
+        if (cls[1] == XC_ZERO) {
+            c->fpu_sw |= SW_IE;
+            r = X80_INDEFINITE;
+        } else {
+            c->fpu_sw |= SW_ZE;
+            r = x80_signed(!sy, 0x7fffu, SIG_INT);
+        }
+    } else if (cls[0] == XC_INF) { /* log2(inf) = inf */
+        if (cls[1] == XC_ZERO) {
+            c->fpu_sw |= SW_IE;
+            r = X80_INDEFINITE;
+        } else {
+            r = x80_signed(sy, 0x7fffu, SIG_INT);
+        }
+    } else {
+        XF lx = xf_mul(xf_log(xf_from_x80(v[0])), XF_LOG2E);
+        if (cls[1] == XC_INF) {
+            if (!lx.m) {
+                c->fpu_sw |= SW_IE;
+                r = X80_INDEFINITE;
+            } else {
+                r = x80_signed(sy ^ lx.sign, 0x7fffu, SIG_INT);
+            }
+        } else if (!lx.m || cls[1] == XC_ZERO) {
+            r = x80_signed(sy ^ lx.sign, 0, 0);
+        } else {
+            if (cls[0] == XC_DENORMAL || cls[1] == XC_DENORMAL)
+                c->fpu_sw |= SW_DE;
+            r = xf_to_x80(c, xf_mul(xf_from_x80(v[1]), lx));
+        }
+    }
+    reg_put(c, p1, r);
+    fdrop(c);
+}
+
+/* FYL2XP1: ST(1) = ST(1) * log2(ST(0) + 1), then pop; ln(1 + x) as
+ * 2 atanh(x / (2 + x)), which keeps a small x's bits. The hardware defines it
+ * for |x| < 1 - sqrt(2)/2. */
+void x87_fyl2xp1(X86 *c) {
+    unsigned p0 = top_slot(c, 0), p1 = top_slot(c, 1);
+    x87_enter(c);
+    X87Ext v[2] = {reg_get(c, p0), reg_get(c, p1)}; /* x, y */
+    int cls[2] = {x80_class(v[0]), x80_class(v[1])};
+    int sx = v[0].signExp >> 15, sy = v[1].signExp >> 15;
+    X87Ext r;
+    if (cls[0] >= XC_QNAN || cls[1] >= XC_QNAN) {
+        r = nan_result(c, v, cls, 2);
+    } else if (cls[0] == XC_INF || cls[1] == XC_INF) {
+        c->fpu_sw |= SW_IE; /* outside the instruction's domain */
+        r = X80_INDEFINITE;
+    } else if (cls[0] == XC_ZERO || cls[1] == XC_ZERO) {
+        r = x80_signed(sx ^ sy, 0, 0);
+    } else {
+        XF x = xf_from_x80(v[0]);
+        XF l = xf_atanh2(xf_div(x, xf_add(xf_from_int(0, 2), x)));
+        if (cls[0] == XC_DENORMAL || cls[1] == XC_DENORMAL)
+            c->fpu_sw |= SW_DE;
+        r = xf_to_x80(c, xf_mul(xf_from_x80(v[1]), xf_mul(l, XF_LOG2E)));
+    }
+    reg_put(c, p1, r);
+    fdrop(c);
 }
 
 /* ------------------------------------------------- msvcrt float control --- */

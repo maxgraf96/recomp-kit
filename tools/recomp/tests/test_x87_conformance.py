@@ -5,8 +5,9 @@
 Runs the committed vectors (data/x87/), or the corpus RECOMP_X87_VECTORS and
 RECOMP_X87_RESULTS name, through translated code built with the runtime's
 x87, and requires every non-transcendental result to equal the hardware's
-bit for bit. The transcendental distances are printed, not checked. clang
-must be on PATH (a skip otherwise)."""
+bit for bit and every transcendental one to be within an ulp of it (the
+hardware does not round those correctly). clang must be on PATH (a skip
+otherwise)."""
 
 import os
 import platform
@@ -35,6 +36,11 @@ def test_every_non_transcendental_vector_equals_hardware(report):
     t = report["totals"]
     assert t["n"] > 0
     assert t["diff"] == 0, "\n".join(str(e) for e in report["examples"][:10])
+
+
+def test_transcendentals_are_within_an_ulp(report):
+    assert report["totals"]["transc"] > 0
+    assert set(report["transc_dist"]) <= {"1"}, dict(report["transc_dist"])
 
 
 #: Operations x87_conformance.py can run that no hardware recording has

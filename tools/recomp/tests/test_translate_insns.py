@@ -469,7 +469,10 @@ CASES = [
          [(0x0, "FLD double ptr [ESP + 0x4]"), (0x4, "FPTAN"),
           (0x6, "FSTP double ptr [ESP + 0xc]"), (0xa, "FSTP double ptr [ESP + 0x14]"),
           (0xe, "RET")],
-         "DD 44 24 04  D9 F2  DD 5C 24 0C  DD 5C 24 14  C3", fptan_setup, check=check_fptan),
+         "DD 44 24 04  D9 F2  DD 5C 24 0C  DD 5C 24 14  C3", fptan_setup,
+         # Unicorn's tangent is the double libm one; the runtime's is accurate
+         # to 64 bits, so they can differ in the double's last bit there.
+         ignore=((ESP_INIT + 0x14, 8),), check=check_fptan),
     Case("FSAVE writes the 108-byte state and reinitialises; FRSTOR brings it back", 0x0D01C000,
          [(0x0, "FLD1"), (0x2, "FLD double ptr [ESP + 0x4]"), (0x6, "FSAVE [ECX + 0x8]"),
           (0xa, "FLD1"), (0xc, "FSTP double ptr [ESP + 0xc]"),

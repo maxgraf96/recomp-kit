@@ -12,8 +12,9 @@
   remainder, FXTRACT, FSCALE and FNSAVE/FRSTOR follow the hardware. Over
   1.15 million recorded hardware vectors under six control words, every
   non-transcendental result is identical
-  (`tools/recomp/tests/x87_conformance.py`); the transcendental instructions
-  are still the double libm functions. msvcrt's `_controlfp`, `_control87`,
+  (`tools/recomp/tests/x87_conformance.py`). The transcendental instructions,
+  which hardware does not round correctly, compute to 64 bits with the x87's
+  66-bit pi reduction and land within an ulp of it. msvcrt's `_controlfp`, `_control87`,
   `__control87_2`, `_statusfp`, `_clearfp` and `_fpreset` work on the thread's
   x87 state, and `sqrt`, `_CIsqrt` and `_ftol` are exact under any control
   word. Generated code builds with `-ffp-contract=off`, which
