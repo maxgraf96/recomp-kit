@@ -41,6 +41,13 @@ by S. Christian Collins is included unmodified under its own licence, which
 permits its use in software projects; see third_party/soundfonts/generaluser-gs/
 LICENSE and README.md for its source. Apps carry it as general-midi.sf2 to play
 MIDI for a game that ships no instrument bank of its own.
+
+Berkeley SoftFloat Release 3e (third_party/softfloat), Copyright 2011-2018
+The Regents of the University of California, is included in part and
+unmodified under its BSD 3-clause license; see third_party/softfloat/COPYING.txt
+and README.md for the files, their source and the local build configuration.
+The runtime's exact x87 arithmetic is built on it.
+
 miniz 3.0.2 (third_party/miniz) is Copyright 2013-2014 RAD Game Tools and
 Valve Software and Copyright 2010-2014 Rich Geldreich and Tenacious Software
 LLC, licensed under the MIT License; see third_party/miniz/LICENSE. The
