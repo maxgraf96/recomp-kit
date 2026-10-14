@@ -652,6 +652,18 @@ void present(Surface *s, const HostD7Rect &r) {
     // BGRA8 bytes are ARGB words on a little-endian host.
     host_display_present_window(argb.data(), w, h);
 }
+// A Blt onto the primary surface of a windowed program is its present. The
+// guest aims at its window's client area in desktop coordinates; the host's
+// window is that client area, so what is shown is the source rectangle,
+// scaled to the window by the presenter.
+void present_windowed(Surface *src, HostD7Rect r) {
+    r.x0 = std::max(r.x0, 0);
+    r.y0 = std::max(r.y0, 0);
+    r.x1 = std::min(r.x1, int32_t(src->width));
+    r.y1 = std::min(r.y1, int32_t(src->height));
+    if (r.x0 < r.x1 && r.y0 < r.y1)
+        present(src, r);
+}
 } // namespace
 
 // ===========================================================================
@@ -1284,6 +1296,9 @@ void S7_Blt(X86 *c) {
         com_ret(c, DDERR_INVALIDRECT);
         return;
     }
+    // What a windowed present shows: the whole source rectangle, wherever on
+    // the primary (the desktop) the window's client area is.
+    const HostD7Rect shown = sr;
     if (s->format.depth() || d->format.depth()) {
         log_once("ddraw7.zblt", "ddraw7: Blt between depth buffers is not supported");
         com_ret(c, DDERR_UNSUPPORTED);
@@ -1311,6 +1326,9 @@ void S7_Blt(X86 *c) {
         }
     }
     if (dr.x0 >= dr.x1 || dr.y0 >= dr.y1) {
+        // Nothing of the window is on the desktop; it is still the frame.
+        if (d->caps & DDSCAPS_PRIMARYSURFACE)
+            present_windowed(s, shown);
         com_ret(c, DD_OK);
         return;
     }
@@ -1359,7 +1377,7 @@ void S7_Blt(X86 *c) {
         cpu_blit(d, dr, s, sr, o);
     }
     if (d->caps & DDSCAPS_PRIMARYSURFACE)
-        present(d, dr);
+        present_windowed(s, shown);
     com_ret(c, DD_OK);
 }
 // BltFast(dwX, dwY, lpDDSrcSurface, lpSrcRect, dwTrans)
@@ -1407,7 +1425,7 @@ void S7_BltFast(X86 *c) {
         cpu_blit(d, dr, s, sr, o);
     }
     if (d->caps & DDSCAPS_PRIMARYSURFACE)
-        present(d, dr);
+        present_windowed(s, sr);
     com_ret(c, DD_OK);
 }
 

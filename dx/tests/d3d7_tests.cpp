@@ -286,6 +286,44 @@ static void flip_chain(bool soft) {
     (void)soft;
 }
 
+// The windowed present: a Blt from the back buffer onto the primary, aimed at
+// the window's client area in desktop coordinates, shows the whole source -
+// even where that rectangle runs off the desktop.
+static void windowed_present(bool) {
+    cpu_reset();
+    const uint32_t dd = create_dd();
+    CHECK_EQ(call_method(dd, DD_SetCooperativeLevel, {0x1000, 0x408}), 0);
+    SurfaceSpec ps;
+    ps.caps = d7::DDSCAPS_PRIMARYSURFACE;
+    const uint32_t primary = create_surface(dd, ps);
+    const uint32_t back = offscreen(dd, 32, 24, PF_X8R8G8B8);
+    CHECK_EQ(fill(back, 0x00405060u), 0);
+    CHECK_EQ(fill(back, 0x00ff0000u, 30, 20, 32, 24), 0);
+    const uint32_t d = gmem(d7::DDSD2_SIZE);
+    wr32(d, d7::DDSD2_SIZE);
+    CHECK_EQ(call_method(primary, S_GetSurfaceDesc, {d}), 0);
+    const int32_t dw = int32_t(rd32(d + d7::DDSD2_dwWidth)),
+                  dh = int32_t(rd32(d + d7::DDSD2_dwHeight));
+    for (const int32_t x : {16, dw - 8}) {
+        g_shown.clear();
+        const uint32_t to = rect(x, dh - 12, x + 32, dh + 12), from = rect(0, 0, 32, 24);
+        CHECK_EQ(call_method(primary, S_Blt, {to, back, from, 0, 0}), 0);
+        CHECK_EQ(g_shown.size(), 1);
+        if (!g_shown.empty()) {
+            CHECK_EQ(g_shown[0].w, 32);
+            CHECK_EQ(g_shown[0].h, 24);
+            CHECK_EQ(g_shown[0].argb[0] & 0xffffff, 0x405060);
+            CHECK_EQ(g_shown[0].argb[23 * 32 + 31] & 0xffffff, 0xff0000);
+        }
+        heap_free(to);
+        heap_free(from);
+    }
+    heap_free(d);
+    call_method(back, Release, {});
+    call_method(primary, Release, {});
+    call_method(dd, Release, {});
+}
+
 // A full mip chain: GetAttachedSurface(MIPMAP) walks level by level to 1x1.
 static void test_mip_chain() {
     cpu_reset();
@@ -828,6 +866,7 @@ int main() {
         {"display modes", test_display_modes},
         {"cooperative level and mode", test_cooperative_level_and_mode},
         {"flip chain", [] { both_paths(flip_chain); }},
+        {"windowed present", [] { both_paths(windowed_present); }},
         {"mip chain", test_mip_chain},
         {"depth buffers", test_depth_buffers},
         {"lock", test_lock},
