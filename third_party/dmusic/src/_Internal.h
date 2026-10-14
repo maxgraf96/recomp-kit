@@ -554,6 +554,7 @@ struct DmPerformance {
 	uint32_t time;
 	uint8_t groove;
 	uint8_t groove_range;
+	int8_t master_groove; // Added to every command's groove level (GUID_PerfMasterGrooveLevel)
 	double tempo;
 	DmMessage_Chord chord;
 	DmTimeSignature time_signature;

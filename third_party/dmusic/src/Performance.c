@@ -673,7 +673,9 @@ static void DmPerformance_handleCommandMessage(DmPerformance* slf, DmMessage_Com
 		Dm_report(DmLogLevel_WARN, "DmPerformance: Command message with command %d not implemented", msg->command);
 	}
 
-	DmPattern* pttn = DmStyle_getRandomPattern(slf->style, slf->groove, msg->command);
+	// The master groove level is added to the command's, as DirectMusic does it.
+	int32_t groove = clamp_s32((int32_t) slf->groove + slf->master_groove, 1, 100);
+	DmPattern* pttn = DmStyle_getRandomPattern(slf->style, (uint32_t) groove, msg->command);
 	if (pttn == NULL) {
 		Dm_report(DmLogLevel_INFO, "DmPerformance: No suitable pattern found. Silence ensues ...", msg->command);
 		return;
@@ -1002,4 +1004,17 @@ void DmPerformance_setVolume(DmPerformance* slf, float vol) {
 	}
 
 	DmSynth_setVolume(&slf->synth, vol);
+}
+
+void DmPerformance_setMasterGroove(DmPerformance* slf, int8_t level) {
+	if (slf == NULL) {
+		return;
+	}
+
+	if (mtx_lock(&slf->lock) != thrd_success) {
+		return;
+	}
+
+	slf->master_groove = level;
+	(void) mtx_unlock(&slf->lock);
 }

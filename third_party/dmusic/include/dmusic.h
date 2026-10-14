@@ -620,4 +620,15 @@ DMAPI DmResult DmPerformance_renderPcm(DmPerformance* slf, void* buf, size_t num
 /// \param vol The new volume to set (between 0 and 1).
 DMAPI void DmPerformance_setVolume(DmPerformance* slf, float vol);
 
+/// \brief Set the master groove level of a performance.
+///
+/// The master groove level is added to the groove level of every command the performance plays, as
+/// DirectMusic's `GUID_PerfMasterGrooveLevel` is, and the sum is kept within 1 to 100. It is how a game raises
+/// and lowers the intensity of style-based music without changing its segments. The new level applies from
+/// the next pattern chosen; follow it with #DmPerformance_playTransition to change patterns at a boundary.
+///
+/// \param slf[in] The performance to set the master groove level of.
+/// \param level The master groove level, which may be negative. The default is 0.
+DMAPI void DmPerformance_setMasterGroove(DmPerformance* slf, int8_t level);
+
 /// \}
