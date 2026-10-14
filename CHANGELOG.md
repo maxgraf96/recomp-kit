@@ -13,6 +13,26 @@
   drawn by a new renderer (`host/d3d7_render.cpp`, Metal) and checked scene by
   scene against a software reference renderer (`dx/d3d7_soft.cpp`,
   `RECOMP_D3D7_SOFTWARE=1`). `RECOMP_D3D7_DUMP_DIR` writes presented frames.
+- Give every guest thread its own message queue, with PostThreadMessage and a
+  cross-thread SendMessage that waits for the receiving thread, and send
+  activation the way Windows does: the host reports focus and minimised state
+  (`host_app_state`) and the runtime delivers WM_ACTIVATEAPP, WM_NCACTIVATE,
+  WM_ACTIVATE, WM_SETFOCUS/WM_KILLFOCUS and WM_SIZE in order with the input
+  around them; a window shown while the application has the focus is
+  activated from ShowWindow. DirectInput honours its cooperative levels: a
+  foreground device is unacquired when the application loses the foreground,
+  an exclusive mouse suppresses mouse messages, a buffer of N holds N - 1
+  events and reports overflow, and the mouse answers GetObjectInfo and
+  per-axis granularity (120 for the wheel). With `[runtime] relative_mouse`
+  the SDL host gives an exclusive mouse raw relative motion with the system
+  pointer hidden. WM_CHAR follows the user's keyboard layout and is no longer
+  doubled by the guest's TranslateMessage; Help is Insert; Alt+F4 closes.
+- Measure GDI text as GDI does (VDMX ascent and descent, hdmx advances, OS/2
+  metrics) and, with `[runtime] system_fonts`, draw Windows faces with the
+  platform's installed copies of them; add the ANSI text calls (CreateFontA,
+  GetTextMetricsA, GetTextExtentPoint32A, ExtTextOutA, ...), text alignment,
+  and `gdi_surface.h`, a DC over a DirectDraw surface's own memory.
+  `tools/gdi_metrics` compares the metrics with a Windows screen DC's.
 
 - Put guest memory at exact addresses for replay tools: `mem_open` opens a
   range anywhere in the 32-bit space, above `[game] guest_size` included,

@@ -22,13 +22,57 @@ owns. Compile the runtime with `-I<repo root>` so `guest.h` can find it.
 | `dispatch.cpp` | weak `recomp_call`/`recomp_jump` through the module registry when no image table is linked (freestanding bundles), and the `recomp_libm_*` functions `freestanding.h` maps to |
 | `freestanding.h` | the C library surface generated code uses, as builtins and runtime entry points, for `RECOMP_FREESTANDING` |
 | `kernel32.cpp` | heap, files, modules, TLS, sync objects, time, strings and locale |
-| `user32.cpp` | window classes and windows, the message queue, paint/DC/input stubs |
+| `user32.cpp` | window classes and windows, the per-thread message queues and sent messages, paint/DC/input |
+| `user32_activation.cpp` | activation and focus: what the host reports through `host_app_state` becomes WM_ACTIVATEAPP / WM_ACTIVATE / WM_SETFOCUS / WM_KILLFOCUS / WM_SIZE, as Windows sends them |
+| `user32_ansi.cpp` | the ANSI odds and ends: class queries, window text, LoadStringA/LoadBitmapA from any loaded module, MoveWindow, ChangeDisplaySettingsA, wsprintfA, SetWindowsHookExA |
+| `gdi32_text.cpp`, `gdi32_truetype.cpp`, `gdi32_fontdb.cpp` | GDI text: fonts realized and measured as GDI measures them (VDMX, hdmx, OS/2), the installed copies of Windows faces with `[runtime] system_fonts`, the A and W text calls |
+| `gdi_surface.h` | a DC over pixels the caller owns, for a DirectDraw surface's GetDC/ReleaseDC |
 | `misc.cpp` | GDI32, ADVAPI32 registry, SHELL32, ole32, IMM32, WSOCK32, WINMM (clock, mmio, MIDI out) |
 | `x87.c` | the exact x87's out-of-line half: SoftFloat-backed arithmetic, stores, FPREM, FXTRACT, FSCALE, FNSAVE/FRSTOR, transcendentals, and the msvcrt float-control mapping (the inline half is `x86.h`'s x87 section) |
 | `msvcrt*.cpp` | msvcrt.dll: start-up and exit, heap, locale and ctype, strings, printf/scanf/strtod, stdio, maths, float control (`msvcrt_float.cpp`), time, RTTI (`msvcrt_internal.h` says which file holds what) |
 | `msvcp60.cpp` | msvcp60.dll: `std::_Lockit`, `std::bad_cast`, the locale vectors and conversions |
 | `win32.h` | what the host app and the DirectX shims call into |
 | `tests/` | `runtime_tests.cpp` plus the test-only `recomp_call` |
+
+## Messages, activation and text
+
+**Every guest thread has its own message queue**, as on Windows: a window's
+messages go to the thread that created it, PeekMessage and GetMessage read only
+the caller's queue (a window filter of -1 reads thread messages only), and
+PostThreadMessage reaches any live guest thread. SendMessage to another
+thread's window queues the message ahead of that thread's posted ones and the
+sender waits, delivering messages sent to itself meanwhile; the receiver runs
+the window procedure inside its next PeekMessage, GetMessage, WaitMessage or
+MsgWaitForMultipleObjects and never sees the message come out of its queue.
+
+**Activation is the host's report, the runtime's messages.** The host calls
+`host_app_state(focused, minimized)` whenever the platform's focus or
+minimised state may have changed; the runtime sends what Windows sends, as
+sent messages on the window's thread in order with the input queued around
+them: WM_ACTIVATEAPP, WM_NCACTIVATE, WM_ACTIVATE (with fMinimized), then
+DefWindowProc's WM_ACTIVATE gives the focus (WM_SETFOCUS); the reverse with
+WM_KILLFOCUS; WM_SIZE(SIZE_MINIMIZED / SIZE_RESTORED) around a minimise. A
+window shown while the application has the focus is activated from inside
+ShowWindow. DirectInput's foreground devices are unacquired at the moment of
+deactivation and are acquired again only by the game, from its WM_ACTIVATE
+handling. A host that never reports the focus keeps the old behaviour: the
+application counts as always in the foreground.
+
+**Keyboard text.** `host_post_key_text` queues a key-down with the character
+the host's layout made of it (WM_CHAR, or WM_SYSCHAR after Alt, in the window's
+encoding: code page 1252 for an ANSI window) and marks the key translated, so
+the guest's TranslateMessage makes no second one. TranslateMessage on a key the
+guest posted itself uses the US layout and the keyboard state.
+
+**Text metrics are GDI's.** `truetype_realize` turns a LOGFONT into the
+whole-pixel em GDI hints at, the ascent and descent from the font's VDMX table
+(else its OS/2 Windows ascent and descent), and advances from its hdmx device
+widths (else the rounded linear advance); TEXTMETRIC, GetCharWidth and text
+extents come from there. `[runtime] system_fonts` lets GDI use the platform's
+installed copies of Windows faces (macOS has Arial, Tahoma, Times New Roman,
+Courier New, Verdana and more, with the same tables), chosen as GDI's mapper
+chooses; without it a Windows interface face is drawn with the bundled Open
+Sans. `tools/gdi_metrics` holds the comparison with a Windows screen DC.
 
 ## Address space
 

@@ -132,6 +132,29 @@ click in the game captures again. Command-Tab and Command-Q remain available.
 Normal windows retain their resize-edge release gesture. Native cursor and
 window changes run only on the main thread, including worker-queued releases.
 
+With `[runtime] relative_mouse`, a guest that acquires its DirectInput mouse
+exclusively owns the pointer, as on Windows: while the window has the focus
+the host switches SDL to relative mode, the system pointer disappears, and
+unclipped raw motion (one count per point) feeds the device. The window gets
+no mouse messages meanwhile, and the wheel arrives in whole notches of 120.
+Losing the focus, opening the settings page, or the game unacquiring hands
+the pointer back.
+
+Keys a Mac keyboard lacks, and what the Command key does:
+
+| Mac | Windows |
+| --- | --- |
+| Command-Q, the window's close button | WM_CLOSE to the game's main window (its own quit path) |
+| Command-Tab, Command-H, clicking another app | deactivation: WM_ACTIVATE(WA_INACTIVE), WM_ACTIVATEAPP(FALSE); foreground DirectInput devices are unacquired |
+| Command-M, the yellow button | WM_SIZE(SIZE_MINIMIZED) and the deactivation; restoring activates again |
+| other Command combinations | the application's, never the game's |
+| Help (Insert on a PC keyboard) | Insert |
+| F13, F14, F15 | Print Screen, Scroll Lock, Pause |
+| Clear (keypad) | Num Lock |
+| Fn-Return (keypad Enter) | keypad Enter |
+| Fn-Delete | Delete |
+| Control-click | a left click with Control held (a two-button mouse or a two-finger click right-clicks) |
+
 The guarded `NSWindow.mouseConfinementRect` selector has been available since
 macOS 10.13.2 and is used by SDL, but is not declared in Apple's public SDK.
 Fullscreen presentation options additionally request hidden Dock/menu bars;

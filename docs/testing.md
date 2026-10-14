@@ -22,6 +22,19 @@ layout model, geometry, routing, virtual pad, mapped binding, raster primitives
 and editor (including the old keypad geometry as a regression oracle), and
 `pad_tests` for the DirectInput joystick and the three XInput DLLs, which lives
 beside `dx_tests` because it defines the `host_pad_*` callbacks strongly.
+`win32_ui_tests` (`nogame`, beside `dx_tests`) drives the window system
+through guest calls and guest threads: activation and focus sequences, sent
+messages in order with queued input, per-thread queues, PostThreadMessage and
+cross-thread SendMessage, keyboard translation, timers and WM_SETCURSOR, and
+DirectInput's foreground and exclusive semantics, its 256-record buffer,
+granularity and object info. `gdi_tests` pins GDI's text-measuring rules on a
+generated font that carries VDMX and hdmx tables (`make_gdi_font.py`), and the
+installed Windows faces where the machine has them.
+`gdi_metrics_reference` compares the runtime's text metrics with a Windows
+96-dpi screen DC's once those are committed as
+`runtime/tests/data/gdi_metrics_windows.jsonl`: capture them with
+`tools/gdi_metrics/capture_win32.c` on Windows, and see
+`tools/gdi_metrics/compare.py` for the tolerances.
 Every `tools/test.py` mode takes `--game-dir /abs/path/to/<game>`; without it
 the kit's stub game is used and the `game`-labelled suites report a skip.
 
