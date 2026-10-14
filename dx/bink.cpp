@@ -672,7 +672,7 @@ void BinkCopyToBuffer(X86 *c) {
 void BinkDDSurfaceType(X86 *c) {
     ComObj *s = com_this_arg(c);
     uint32_t type = 0;
-    if (s && s->kind == K_SURFACE) {
+    if (s && (s->kind == K_SURFACE || s->kind == K_SURFACE7)) {
         if (s->bpp == 32 && s->rmask == 0xff0000)
             type = VIDEO_XRGB8888;
         else if (s->bpp == 16 && s->rmask == 0xf800)

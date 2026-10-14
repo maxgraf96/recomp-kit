@@ -1,3 +1,4 @@
+#include "d3d7_internal.h"
 #include "../runtime/gdi32_internal.h"
 #include "../runtime/display_seam.h"
 #include "passes.h"
@@ -4787,9 +4788,9 @@ void DirectDrawCreate(X86 *c) {
     com_ret(c, DD_OK);
 }
 
-// The version 7 factory is discoverable so callers can take their legacy
-// DirectDrawCreate/QueryInterface fallback. Do not return an older vtable for
-// IID_IDirectDraw7: its callers would invoke incompatible method signatures.
+// DirectDrawCreateEx(lpGUID, lplpDD, iid, pUnkOuter): only IID_IDirectDraw7,
+// which is served by ddraw7.cpp. An older vtable is never returned for it: its
+// callers would invoke incompatible method signatures.
 void DirectDrawCreateEx(X86 *c) {
     const uint32_t out = arg(c, 1), iid = arg(c, 2), outer = arg(c, 3);
     if (!out || !gm_valid(out, 4)) {
@@ -4805,7 +4806,10 @@ void DirectDrawCreateEx(X86 *c) {
         com_ret(c, CLASS_E_NOAGGREGATION);
         return;
     }
-    com_ret(c, DDERR_UNSUPPORTED);
+    // Version 7 is its own object model (ddraw7.cpp), offered when the game
+    // opts in. Otherwise the caller is told it is unsupported and takes its
+    // legacy DirectDrawCreate path.
+    com_ret(c, d7::ddraw7_enabled() ? d7::ddraw7_create(out) : DDERR_UNSUPPORTED);
 }
 
 void enumerate_devices(X86 *c, bool wide, bool extended) {

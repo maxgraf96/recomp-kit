@@ -1,5 +1,5 @@
 set(POP_DX_SOURCES
-  com.cpp dx.cpp host_api.cpp display_stubs.cpp ddraw.cpp d3d.cpp d3d11.cpp dxgi.cpp d3dcompiler.cpp
+  com.cpp dx.cpp host_api.cpp display_stubs.cpp ddraw.cpp d3d.cpp ddraw7.cpp d3d7.cpp d3d7_soft.cpp d3d11.cpp dxgi.cpp d3dcompiler.cpp
   d3dx10.cpp dsound.cpp dshow.cpp mp3_source.cpp dinput.cpp dinput_joystick.cpp xinput.cpp qmixer.cpp
   mss32.cpp redbook.cpp avi.cpp waveout.cpp fmod.cpp soundlib.cpp galaxy_stub.cpp riff.cpp bink.cpp video_frame.cpp mf_media.cpp
   mf.cpp weanetr.cpp d3d9.cpp d3d9_raster.cpp d3d9_shader.cpp d3d9_shadergen.cpp host_d9_default.cpp
@@ -42,6 +42,19 @@ pop_optimize(dx_tests 1)
 pop_test_binary(dx_tests)
 add_test(NAME dx_tests COMMAND dx_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(dx_tests PROPERTIES LABELS nogame)
+
+# DirectDraw 7 / Direct3D 7: the object model, surfaces, Blt and Flip on the
+# CPU and on the software reference renderer, and synthetic scenes checked
+# against hand-computed pixels. Headless; host/tests/d3d7_gpu_tests.cpp runs
+# the same scenes on the GPU.
+add_executable(d3d7_tests tests/d3d7_tests.cpp
+  ${POP_ROOT}/runtime/tests/stub_recomp_call.cpp)
+target_link_libraries(d3d7_tests PRIVATE recomp_platform recomp_dx recomp_runtime)
+target_compile_options(d3d7_tests PRIVATE ${POP_WARN_HOST})
+pop_optimize(d3d7_tests 1)
+pop_test_binary(d3d7_tests)
+add_test(NAME d3d7_tests COMMAND d3d7_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(d3d7_tests PROPERTIES LABELS nogame)
 
 # The virtual pad through the DirectInput joystick and XInput. Its own binary
 # because it defines the host_pad_* callbacks strongly, which dx_tests must not.

@@ -139,6 +139,14 @@ enum ComIface : uint16_t {
     // version 8 vtables.
     IF_DINPUT8,
     IF_DINPUTDEVICE8,
+    // DirectDraw 7 and Direct3D 7 (ddraw7.cpp, d3d7.cpp). A separate object
+    // model from the version 1-4 interfaces above: its surfaces live on the
+    // GPU first and in guest memory only when the guest asks for pixels.
+    IF_DIRECTDRAW7,
+    IF_DDSURFACE7,
+    IF_D3D7, // a view of the DirectDraw 7 object, as IDirect3D2 is of DirectDraw
+    IF_D3DDEVICE7,
+    IF_D3DVB7,
     IF_COUNT
 };
 
@@ -206,7 +214,13 @@ enum ComKind : uint16_t {
     K_D3D9IB,         // an index buffer
     K_D3D9DECL,       // a vertex declaration
     K_D3D9QUERY,      // an occlusion or event query
+    K_DDRAW7,         // IDirectDraw7, and IDirect3D7 as a view of it
+    K_SURFACE7,       // IDirectDrawSurface7
+    K_D3DDEVICE7,     // IDirect3DDevice7
+    K_D3DVB7,         // IDirect3DVertexBuffer7
+    K_KIND_COUNT      // the per-kind tables in com.cpp hold 64 entries
 };
+static_assert(K_KIND_COUNT <= 64, "com.cpp keeps one bit per ComKind in a uint64_t");
 
 // A DirectInput joystick axis's DIPROP_RANGE, DIPROP_DEADZONE and
 // DIPROP_SATURATION (dx/dinput_joystick.cpp). The zone and saturation are in
