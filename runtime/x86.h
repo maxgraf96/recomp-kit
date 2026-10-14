@@ -429,6 +429,15 @@ void recomp_unknown_jump(X86 *c, uint32_t target);
 void recomp_shim_call(X86 *c, uint32_t target);
 /* target is neither a translated function nor a shim.  Logs; may abort. */
 void recomp_unknown_call(X86 *c, uint32_t target);
+/* Strict mode (runtime/cpu.cpp). A call or jump to an address no translation,
+ * thunk or import covers, a call through an import whose stdcall argument
+ * count is unknown and a divide error stop the run with a diagnostic instead
+ * of being logged and answered with a made-up result, and the null page
+ * faults. RECOMP_STRICT=1 or 0 decides; otherwise game.toml [runtime] strict
+ * (default off). recomp_strict_stop reports `what` at `target` (reached from
+ * `from`), records the address for --discovered, and aborts. */
+int recomp_strict(void);
+void recomp_strict_stop(X86 *c, const char *what, uint32_t target, uint32_t from);
 /* A popped callback sentinel can bypass translated callers. The innermost
  * guest_call owns the live host return checkpoint and its guest stack range. */
 void recomp_callback_return(X86 *c);

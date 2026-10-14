@@ -458,6 +458,13 @@ bool imports_dispatch(X86 *c, uint32_t target) {
         }
     }
 
+    // Strict: a stdcall callee whose argument count nobody knows would leave
+    // the caller's stack displaced by its arguments from here on. Stop before
+    // the call rather than run on with a stack that is wrong by an unknown
+    // amount.
+    if (argc == ARGC_UNKNOWN && recomp_strict())
+        recomp_strict_stop(c, "call through an import with an unknown stdcall argument count",
+                           target, ret_addr);
     if (skip) {
         // The observer refused the call and has set the result itself.
     } else if (fn) {

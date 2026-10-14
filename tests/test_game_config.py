@@ -163,16 +163,29 @@ class LoadTests(unittest.TestCase):
     def test_auxiliary_modules_and_guest_size(self):
         """[modules.aux.<key>] names a DLL the guest loads at run time that the kit
         translates as a second image at its preferred base; [game] guest_size
-        grows the arena to hold it. Defaults: no modules, 0x10000000."""
-        base = game_config.load(ROOT / "games/stub")
-        self.assertEqual(base["aux_modules"], [])
-        self.assertEqual(base["game"]["guest_size"], 0x10000000)
-        self.assertIn("#define RECOMP_GUEST_SIZE 0x10000000u", gen_game_config.render_header(base))
-        self.assertIn("#define RECOMP_AUX_MODULE_COUNT 0", gen_game_config.render_header(base))
+        grows the arena to hold it. Defaults: no modules, 0x10000000. (The stub
+        game itself asks for 0x12000000, room for the game-free loader tests.)"""
+        stub = game_config.load(ROOT / "games/stub")
+        self.assertEqual(stub["aux_modules"], [])
+        self.assertEqual(stub["game"]["guest_size"], 0x12000000)
+        self.assertIn("#define RECOMP_GUEST_SIZE 0x12000000u", gen_game_config.render_header(stub))
         with tempfile.TemporaryDirectory() as tmp:
             game = Path(tmp) / "g"
             game.mkdir()
             text = (ROOT / "games/stub/game.toml").read_text()
+            text = "\n".join(l for l in text.splitlines() if not l.startswith("guest_size"))
+            (game / "game.toml").write_text(text)
+            (game / "globals.toml").write_text((ROOT / "games/stub/globals.toml").read_text())
+            base = game_config.load(game)
+            self.assertEqual(base["aux_modules"], [])
+            self.assertEqual(base["game"]["guest_size"], 0x10000000)
+            self.assertIn("#define RECOMP_GUEST_SIZE 0x10000000u", gen_game_config.render_header(base))
+            self.assertIn("#define RECOMP_AUX_MODULE_COUNT 0", gen_game_config.render_header(base))
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp) / "g"
+            game.mkdir()
+            text = (ROOT / "games/stub/game.toml").read_text()
+            text = "\n".join(l for l in text.splitlines() if not l.startswith("guest_size")) + "\n"
             text = text.replace('guest_root = ', 'guest_size = 0x10100000\nguest_root = ', 1)
             text += ('\n[modules.aux.blit]\nname = "Blit_p6.dll"\npath = "original/Blit_p6.dll"\n'
                      'sha256 = "%s"\nbase = 0x10000000\nsize = 0x28000\nlistings = "analysis/Blit_p6.dll"\nfunction_alignment = 1\n' % ("ab" * 32))

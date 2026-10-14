@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <set>
+#include <vector>
 #include <string>
 
 uint8_t *g_mem = nullptr;
@@ -289,6 +290,108 @@ uint32_t gm_put_wstr(uint32_t a, const std::string &s, uint32_t cap) {
 // ---------------------------------------------------------------------------
 namespace {
 
+// The whole 32-bit guest space plus a page of slack, so an unaligned access
+// at 0xffffffff still lands in the reservation. Only a guarded arena is this
+// large; the fallback is GUEST_SIZE.
+const uint64_t ARENA_RESERVE = 0x100000000ull + 0x10000u;
+size_t g_reserved = 0; // bytes mapped at g_mem; 0 when there is no arena
+bool g_guarded = false, g_null_guard = false;
+
+const char *arena_region(uint64_t guest) {
+    if (guest >= 0x100000000ull)
+        return "past the top of the 32-bit address space";
+    if (guest < GUEST_NULL_LIMIT)
+        return "in the null page (Windows maps nothing below 64 KB)";
+    return "outside the guest arena ([game] guest_size)";
+}
+
+// An access fault inside the reservation is the guest's - generated code or a
+// shim following a guest pointer - and is reported as such: the guest address,
+// what is (not) there and the guest registers, instead of a host SIGSEGV with
+// a host address. Faults anywhere else belong to somebody else and pass on.
+// Not strictly signal safe (formatting, the backtrace); the process ends here
+// either way, and that is worth a report a debugger is not needed to read.
+int arena_fault(const char *what, uintptr_t address) {
+    const uintptr_t base = (uintptr_t)g_mem;
+    if (!g_mem || !g_guarded || address < base || address - base >= g_reserved)
+        return 0;
+    const uint64_t guest = address - base;
+    char line[320];
+    int n = snprintf(line, sizeof line,
+                     "\n[recomp] guest memory fault (%s): access to guest %08llx, %s\n", what,
+                     (unsigned long long)guest, arena_region(guest));
+    os_write_stderr_raw(line, (size_t)n);
+    if (const X86 *c = guest_current_context()) {
+        n = snprintf(line, sizeof line,
+                     "[recomp]   guest thread %u: EIP=%08x ESP=%08x EBP=%08x EAX=%08x EBX=%08x "
+                     "ECX=%08x EDX=%08x ESI=%08x EDI=%08x (EIP is the last call or branch the "
+                     "translation recorded, not the faulting instruction)\n",
+                     guest_current_thread_id(), c->eip, c->r[R_ESP], c->r[R_EBP], c->r[R_EAX],
+                     c->r[R_EBX], c->r[R_ECX], c->r[R_EDX], c->r[R_ESI], c->r[R_EDI]);
+        os_write_stderr_raw(line, (size_t)n);
+    }
+    n = snprintf(line, sizeof line, "[recomp]   in translated routine %s\n", watch_writer());
+    os_write_stderr_raw(line, (size_t)n);
+    os_exit_immediately(5);
+    return 1;
+}
+
+inline uint32_t page_down(uint32_t a) {
+    return a & ~0xfffu;
+}
+
+} // namespace
+
+bool mem_guarded() {
+    return g_mem && g_guarded;
+}
+bool mem_null_guard() {
+    return g_mem && g_null_guard;
+}
+
+namespace {
+// Module images the heap must not grow over, in address order.
+std::vector<std::pair<uint32_t, uint32_t>> &reserved_ranges() {
+    static auto *v = new std::vector<std::pair<uint32_t, uint32_t>>();
+    return *v;
+}
+void add_span(std::vector<std::pair<uint32_t, uint32_t>> &v, uint32_t lo, uint32_t hi) {
+    v.push_back({lo, hi});
+    std::sort(v.begin(), v.end());
+    std::vector<std::pair<uint32_t, uint32_t>> merged;
+    for (const auto &r : v) {
+        if (!merged.empty() && r.first <= merged.back().second)
+            merged.back().second = std::max(merged.back().second, r.second);
+        else
+            merged.push_back(r);
+    }
+    v.swap(merged);
+}
+} // namespace
+
+// The whole arena below GUEST_SIZE is open (the host backs a page only once
+// it is touched, so a large guest_size costs nothing until used), which keeps
+// the invariant every shim relies on: gm_valid(a, n) means the bytes can be
+// read. The guards are the null page and everything from GUEST_SIZE to 4 GB.
+bool mem_commit(uint32_t addr, uint32_t size) {
+    return g_mem && size && addr < GUEST_SIZE && size <= GUEST_SIZE - addr;
+}
+
+bool mem_committed(uint32_t addr, uint32_t size) {
+    if (!g_mem || addr >= GUEST_SIZE || size > GUEST_SIZE - addr)
+        return false;
+    return !(g_null_guard && addr < GUEST_NULL_LIMIT);
+}
+
+void mem_reserve_range(uint32_t addr, uint32_t size) {
+    if (size)
+        add_span(reserved_ranges(), page_down(addr),
+                 (uint32_t)std::min<uint64_t>(((uint64_t)addr + size + 0xfffu) & ~0xfffull,
+                                              0xfffff000u));
+}
+
+namespace {
+
 struct Blk {
     uint32_t size; // rounded, multiple of 16
     uint32_t req;  // bytes the guest asked for
@@ -305,13 +408,24 @@ inline uint32_t align_up(uint32_t v, uint32_t a) {
     return (v + a - 1) & ~(a - 1);
 }
 
-// Largest request the arena could ever satisfy. Anything at or above this
-// would overflow the rounding in align_up (0xffffffff rounds to 0), so it is
-// rejected before any arithmetic on it.
+// Largest request the arena could ever satisfy: the base heap, or with a
+// guarded arena the space above the shims it can grow into, whichever is
+// larger. Anything above it would overflow the rounding in align_up
+// (0xffffffff rounds to 0), so it is rejected before any arithmetic on it.
 const uint32_t HEAP_ARENA_BYTES = HEAP_LIMIT - HEAP_BASE;
-inline bool size_is_sane(uint32_t size) {
-    return size <= HEAP_ARENA_BYTES;
+uint32_t heap_capacity() {
+    const uint32_t grow = GUEST_SIZE > GUEST_SHIM_END ? GUEST_SIZE - GUEST_SHIM_END : 0;
+    return std::max(HEAP_ARENA_BYTES, grow);
 }
+inline bool size_is_sane(uint32_t size) {
+    return size <= heap_capacity();
+}
+
+// The heap's address ranges: [HEAP_BASE, HEAP_LIMIT) and every segment it
+// grew into, merged where they touch, in address order. Blocks tile each.
+std::vector<std::pair<uint32_t, uint32_t>> *g_segments = nullptr;
+uint32_t g_grow_next = 0; // the next address growth may claim
+const uint32_t GROW_CHUNK = 0x01000000u;
 
 // Records a block, keeping the free index in step.
 void put_block(uint32_t addr, uint32_t size, uint32_t req, bool used) {
@@ -336,6 +450,60 @@ void heap_reset() {
     g_free->clear();
     put_block(HEAP_BASE, HEAP_LIMIT - HEAP_BASE, 0, false);
     g_total_allocs = g_total_frees = 0;
+    if (!g_segments)
+        g_segments = new std::vector<std::pair<uint32_t, uint32_t>>();
+    g_segments->assign(1, {HEAP_BASE, HEAP_LIMIT});
+    g_grow_next = GUEST_SHIM_END;
+}
+
+// Claims the next stretch of [GUEST_SHIM_END, GUEST_SIZE) that no reserved
+// module range covers, commits it and frees it into the heap - merged with a
+// free block that ends where it starts, so coalescing never has to know
+// about segments. Keeps going until one stretch can hold `need` bytes at
+// `align`; false when the space is used up. A stretch too small for this
+// request still joins the heap: smaller requests can use it.
+bool heap_grow(uint32_t need, uint32_t align) {
+    if (GUEST_SIZE <= GUEST_SHIM_END)
+        return false;
+    while (g_grow_next < GUEST_SIZE) {
+        uint32_t lo = (g_grow_next + 0xffffu) & ~0xffffu;
+        bool moved = false;
+        for (const auto &r : reserved_ranges())
+            if (r.first <= lo && lo < r.second) {
+                lo = (r.second + 0xffffu) & ~0xffffu;
+                moved = true;
+            }
+        if (moved || lo >= GUEST_SIZE) {
+            g_grow_next = lo;
+            continue;
+        }
+        uint64_t want = std::max<uint64_t>(GROW_CHUNK, (uint64_t)need + align + 0xffffu);
+        uint64_t hi = std::min<uint64_t>(((uint64_t)lo + want) & ~0xffffull, GUEST_SIZE);
+        for (const auto &r : reserved_ranges())
+            if (r.first > lo && r.first < hi)
+                hi = r.first;
+        g_grow_next = (uint32_t)std::min<uint64_t>(hi, 0xffffffffu);
+        if (hi <= lo)
+            continue;
+        uint32_t start = lo, len = (uint32_t)(hi - lo);
+        auto last = g_blocks->empty() ? g_blocks->end() : std::prev(g_blocks->end());
+        if (last != g_blocks->end() && !last->second.used &&
+            last->first + last->second.size == lo) {
+            start = last->first;
+            len += last->second.size;
+            drop_block(last);
+        }
+        put_block(start, len, 0, false);
+        if (!g_segments->empty() && g_segments->back().second == lo)
+            g_segments->back().second = (uint32_t)hi;
+        else
+            g_segments->push_back({lo, (uint32_t)hi});
+        LOGV("heap: grew by %08x bytes at %08x", (uint32_t)(hi - lo), lo);
+        const uint32_t user = (start + align - 1) & ~(align - 1);
+        if (user >= start && user - start <= len && need <= len - (user - start))
+            return true;
+    }
+    return false;
 }
 
 } // namespace
@@ -343,24 +511,59 @@ void heap_reset() {
 void mem_init() {
     recomp_seh_reset(nullptr);
     if (g_mem) {
-        os_vm_release(g_mem, GUEST_SIZE);
+        os_vm_release(g_mem, g_reserved);
         g_mem = nullptr;
+        g_reserved = 0;
     }
-    void *p = os_vm_reserve(GUEST_SIZE);
+    reserved_ranges().clear();
+    // The guarded arena: reserve all 4 GB, open [0, GUEST_SIZE). Without it,
+    // the plain mapping the kit always had.
+    g_guarded = false;
+    g_null_guard = false;
+    void *p = sizeof(void *) >= 8 ? os_vm_reserve_guarded((size_t)ARENA_RESERVE) : nullptr;
+    if (p && os_vm_commit(p, GUEST_SIZE) == 0) {
+        g_guarded = true;
+        g_reserved = (size_t)ARENA_RESERVE;
+    } else {
+        if (p)
+            os_vm_release(p, (size_t)ARENA_RESERVE);
+        static bool said = false;
+        if (!said) {
+            said = true;
+            LOGW("guest arena: no 4 GB reservation on this host; wild guest accesses are not "
+                 "trapped and the heap cannot grow past [game] heap_base..%08x",
+                 HEAP_LIMIT);
+        }
+        p = os_vm_reserve(GUEST_SIZE);
+        g_reserved = GUEST_SIZE;
+    }
     if (!p) {
         fprintf(stderr, "[recomp] fatal: cannot map %u bytes of guest memory\n", GUEST_SIZE);
         abort();
     }
     g_mem = (uint8_t *)p;
+    if (g_guarded) {
+        static bool hooked = false;
+        if (!hooked) {
+            hooked = true;
+            os_install_fault_address_hook(arena_fault);
+        }
+        const char *want = recomp_env("NULL_GUARD");
+        if (want ? atoi(want) != 0 : recomp_strict())
+            g_null_guard = os_vm_protect_none(g_mem, GUEST_NULL_LIMIT) == 0;
+    }
     heap_reset();
 }
 
 void mem_shutdown() {
     recomp_seh_reset(nullptr);
     if (g_mem) {
-        os_vm_release(g_mem, GUEST_SIZE);
+        os_vm_release(g_mem, g_reserved);
         g_mem = nullptr;
+        g_reserved = 0;
     }
+    g_guarded = g_null_guard = false;
+    reserved_ranges().clear();
     if (g_blocks) {
         delete g_blocks;
         g_blocks = nullptr;
@@ -371,12 +574,16 @@ void mem_shutdown() {
     }
 }
 
+namespace {
+uint32_t heap_fit(uint32_t size, uint32_t need, uint32_t align, bool zero);
+} // namespace
+
 uint32_t heap_alloc(uint32_t size, bool zero, uint32_t align) {
     if (!g_blocks)
         return 0;
     if (!size_is_sane(size)) {
         LOGW("heap_alloc: refusing a %u byte request, the arena is %u bytes", size,
-             HEAP_ARENA_BYTES);
+             heap_capacity());
         // Oversized requests often originate in a corrupted guest length.
         // Use this thread's register file, including worker-thread callers.
         if (const X86 *c = guest_current_context()) {
@@ -406,6 +613,21 @@ uint32_t heap_alloc(uint32_t size, bool zero, uint32_t align) {
         align = 16;
     uint32_t need = align_up(size ? size : 1, 16);
 
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        if (uint32_t user = heap_fit(size, need, align, zero))
+            return user;
+        // Full: claim more of the arena above the shims, then try once more.
+        if (attempt || !heap_grow(need, align))
+            break;
+    }
+    LOGW("heap_alloc: out of guest heap (%u bytes requested)", size);
+    return 0;
+}
+
+namespace {
+// First fit of `need` rounded bytes at `align` among the free blocks; 0 when
+// none can hold it.
+uint32_t heap_fit(uint32_t size, uint32_t need, uint32_t align, bool zero) {
     for (uint32_t start : *g_free) {
         auto it = g_blocks->find(start);
         if (it == g_blocks->end() || it->second.used)
@@ -430,9 +652,9 @@ uint32_t heap_alloc(uint32_t size, bool zero, uint32_t align) {
         ++g_total_allocs;
         return user;
     }
-    LOGW("heap_alloc: out of guest heap (%u bytes requested)", size);
     return 0;
 }
+} // namespace
 
 bool heap_owns(uint32_t addr) {
     if (!g_blocks)
@@ -501,7 +723,7 @@ uint32_t heap_realloc(uint32_t addr, uint32_t new_size, bool zero) {
         return 0;
     if (!size_is_sane(new_size)) {
         LOGW("heap_realloc: refusing a %u byte request, the arena is %u bytes", new_size,
-             HEAP_ARENA_BYTES);
+             heap_capacity());
         return 0;
     }
     auto it = g_blocks->find(addr);
@@ -559,6 +781,14 @@ uint32_t heap_realloc(uint32_t addr, uint32_t new_size, bool zero) {
     return fresh;
 }
 
+uint64_t heap_span() {
+    uint64_t n = 0;
+    if (g_segments)
+        for (const auto &r : *g_segments)
+            n += r.second - r.first;
+    return n;
+}
+
 HeapStats heap_stats() {
     HeapStats s{};
     s.total_allocs = g_total_allocs;
@@ -585,10 +815,16 @@ HeapStats heap_stats() {
 std::string heap_check() {
     if (!g_blocks)
         return "heap not initialised";
-    uint32_t cursor = HEAP_BASE;
+    // Blocks tile each heap segment exactly, in address order.
+    size_t segment = 0;
+    uint32_t cursor = (*g_segments)[0].first;
     bool prev_free = false;
     char buf[160];
     for (auto &kv : *g_blocks) {
+        if (cursor == (*g_segments)[segment].second && segment + 1 < g_segments->size()) {
+            cursor = (*g_segments)[++segment].first;
+            prev_free = false;
+        }
         if (kv.first != cursor) {
             snprintf(buf, sizeof buf, "gap or overlap at %08x (expected %08x)", kv.first, cursor);
             return buf;
@@ -604,8 +840,9 @@ std::string heap_check() {
         prev_free = !kv.second.used;
         cursor += kv.second.size;
     }
-    if (cursor != HEAP_LIMIT) {
-        snprintf(buf, sizeof buf, "heap ends at %08x, expected %08x", cursor, HEAP_LIMIT);
+    if (segment + 1 != g_segments->size() || cursor != g_segments->back().second) {
+        snprintf(buf, sizeof buf, "heap ends at %08x, expected %08x", cursor,
+                 g_segments->back().second);
         return buf;
     }
     for (uint32_t a : *g_free) {

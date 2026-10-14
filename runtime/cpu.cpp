@@ -13,6 +13,7 @@
 #include "thunks.h"
 #include "loader.h"
 #include "seh.h"
+#include "memory.h"
 #include "../platform/os.h"
 
 #include <setjmp.h>
@@ -20,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <map>
+#include <string>
 #include <vector>
 
 // ---------------------------------------------------------------------------
@@ -189,17 +191,94 @@ static void return_as_if_ret(X86 *c) {
 void recomp_shim_call(X86 *c, uint32_t target) {
     if (imports_dispatch(c, target))
         return;
+    if (recomp_strict())
+        recomp_strict_stop(c, "call", target, rd32(c->r[R_ESP]));
     LOGW("recomp_shim_call: %08x is not an allocated trampoline (ESP=%08x, return=%08x)", target,
          c->r[R_ESP], rd32(c->r[R_ESP]));
     return_as_if_ret(c);
 }
 
+#ifndef RECOMP_STRICT_DEFAULT
+#define RECOMP_STRICT_DEFAULT 0
+#endif
+
+int recomp_strict(void) {
+    // Read every time: it is consulted only on paths that are already slow
+    // (an undeliverable call, mem_init), and a test or a host can flip it.
+    const char *e = recomp_env("STRICT");
+    if (e && *e)
+        return atoi(e) != 0;
+    return RECOMP_STRICT_DEFAULT;
+}
+
+// Where a guest address points, for a diagnostic: a module and offset, an
+// import, the heap, or nothing at all. `target` says whether being a
+// translated entry matters (it does for a call target, not a return address).
+static std::string describe_guest_address(uint32_t a, bool target = false) {
+    char buf[160];
+    if (a < GUEST_NULL_LIMIT)
+        return "the null page";
+    if (const LoaderModule *m = loader_module_containing(a)) {
+        snprintf(buf, sizeof buf, "%s+%x%s", m->name.c_str(), a - m->base,
+                 !target || recomp_module_lookup(a) >= 0 || recomp_index_of(a) >= 0
+                     ? ""
+                     : ", not a translated entry");
+        return buf;
+    }
+    if (a >= GUEST_SHIM_BASE && a < GUEST_SHIM_END) {
+        const char *d = imports_describe(a);
+        return d ? std::string("import ") + d : "an unallocated import trampoline";
+    }
+    if (heap_owns(a) || (a >= HEAP_BASE && a < HEAP_LIMIT))
+        return "the heap";
+    return mem_committed(a, 1) ? "mapped memory outside every module" : "unmapped memory";
+}
+
+// The strict-mode stop: everything a regeneration or a person needs to find
+// the gap, then abort. The address goes to RECOMP_DISCOVERY first, so a run
+// that stops still tells the next translation what it lacked.
+void recomp_strict_stop(X86 *c, const char *what, uint32_t target, uint32_t from) {
+    if (!strcmp(what, "call") || !strcmp(what, "jump")) {
+        discovery_note(what, target, from);
+        discovery_write();
+    }
+    fprintf(stderr,
+            "[recomp] strict: %s %08x (%s) from %08x (%s); RECOMP_STRICT=0 logs and continues "
+            "instead\n",
+            what, target,
+            describe_guest_address(target, !strcmp(what, "call") || !strcmp(what, "jump")).c_str(),
+            from, describe_guest_address(from).c_str());
+    if (c) {
+        fprintf(stderr,
+                "[recomp]   EAX=%08x EBX=%08x ECX=%08x EDX=%08x ESI=%08x EDI=%08x ESP=%08x "
+                "EBP=%08x EIP=%08x\n",
+                c->r[R_EAX], c->r[R_EBX], c->r[R_ECX], c->r[R_EDX], c->r[R_ESI], c->r[R_EDI],
+                c->r[R_ESP], c->r[R_EBP], c->eip);
+        // The EBP chain, read only where the arena is mapped: a wild frame
+        // pointer must not turn this report into a second fault.
+        uint32_t ebp = c->r[R_EBP];
+        for (int i = 0; i < 16 && ebp && mem_committed(ebp, 8); ++i) {
+            const uint32_t ret = rd32(ebp + 4);
+            fprintf(stderr, "[recomp]   frame %d returns to %08x (%s)\n", i, ret,
+                    describe_guest_address(ret).c_str());
+            const uint32_t next = rd32(ebp);
+            if (next <= ebp)
+                break;
+            ebp = next;
+        }
+    }
+    fflush(stderr);
+    abort();
+}
+
 // An indirect call to an address that is neither a translated function nor a
 // shim. Almost always a translator bug or an uninitialised function pointer,
-// so it is logged with the target and the guest continues with EAX = 0.
+// so it is logged with the target and the guest continues with EAX = 0 -
+// unless strict mode stops the run there instead.
 void recomp_unknown_call(X86 *c, uint32_t target) {
     if (recomp_run_thunk(c, target))
         return;
+    const bool strict = recomp_strict();
     // Code no translation covers runs in the interpreter when every
     // instruction in it decodes: code the guest built or copied into its heap
     // at run time, and code inside the image that discovery missed. The
@@ -209,7 +288,9 @@ void recomp_unknown_call(X86 *c, uint32_t target) {
     // call through a null pointer faults at the call, and there are no
     // instructions at it to interpret. Reading them would be the very
     // dereference this page exists to refuse.
-    if (target >= GUEST_NULL_LIMIT && interp_call(c, target))
+    // Strict mode runs nothing the translation does not carry: a gap stops the
+    // run below instead of being interpreted.
+    if (!strict && target >= GUEST_NULL_LIMIT && interp_call(c, target))
         return;
     if (target == GUEST_RETURN_SENTINEL) {
         recomp_callback_return(c);
@@ -242,6 +323,8 @@ void recomp_unknown_call(X86 *c, uint32_t target) {
             recomp_seh_raise(c, 0xc0000005u, 0, 2, info);
         }
     }
+    if (strict)
+        recomp_strict_stop(c, "call", target, ret);
     char key[64];
     snprintf(key, sizeof key, "unknown-call:%08x", target);
     // Bounded for the same reason log_once is: a guest that generates code
@@ -268,6 +351,10 @@ void recomp_unknown_call(X86 *c, uint32_t target) {
 // this raises #DE; there is no SEH here, so it is reported and the registers
 // are left untouched.
 void recomp_div_error(X86 *c, uint32_t addr) {
+    // Strict: Windows raises #DE and an unhandled one ends the process, so a
+    // run that carried on would be computing with registers it never had.
+    if (recomp_strict())
+        recomp_strict_stop(c, "divide error", addr, addr);
     LOGW("divide error at %08x (EAX=%08x EDX=%08x)", addr, c->r[R_EAX], c->r[R_EDX]);
 }
 

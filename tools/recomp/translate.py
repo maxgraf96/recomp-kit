@@ -5987,6 +5987,7 @@ void recomp_unknown_jump(X86 *c, uint32_t target)
     /* The address is code the translation does not carry: record it for
      * --discovered, then let the interpreter carry the run past the gap so
      * one run can report every gap it reaches rather than the first. */
+    if (recomp_strict()) recomp_strict_stop(c, "jump", target, c->eip);
     discovery_note("jump", target, c->eip);
     if (interp_call(c, target)) return;
     discovery_write();

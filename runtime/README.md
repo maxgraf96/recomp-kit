@@ -222,6 +222,8 @@ paths resolve against the guest current directory, which starts at
 | `RECOMP_CREATETHREAD=skip` | record `CreateThread` without running the thread body |
 | `RECOMP_CREATETHREAD=sync` | run a thread body to completion inside `CreateThread` (pre-scheduler behaviour, for bisection) |
 | `RECOMP_IMPORT_STATS=1` | at exit, classify every import as called / not reached / logging-only |
+| `RECOMP_STRICT=1` / `0` | strict mode on or off (default: `[runtime] strict`): an undeliverable call or jump, a call through an import of unknown stdcall argument count, or a divide error stops the run with a diagnostic; the null page faults |
+| `RECOMP_NULL_GUARD=1` / `0` | arm or disarm the null-page guard independently of strict mode |
 
 ## Tests
 
