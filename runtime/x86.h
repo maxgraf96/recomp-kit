@@ -1407,13 +1407,34 @@ RECOMP_HOT_INLINE int x87_fast_ok(int op, double r, double a, double b) {
     return op == X87_DIV ? a == 0.0 : b == 0.0;
 }
 
+/* The PC=24 result from the double one: rounded again to 24 bits, ties to
+ * even. That is the x87 result - one rounding of the exact value - unless
+ * the double result sits exactly halfway between two 24-bit values, where
+ * the exact value's side of it decides, or the fast path's guard rejects
+ * it; both go out of line (runtime/x87.c), which also handles the zeros. */
+RECOMP_HOT_INLINE int x87_pc24_ok(int op, double *r, double a, double b) {
+    uint64_t bits;
+    memcpy(&bits, r, 8);
+    if (RECOMP_UNLIKELY((bits & UINT64_C(0x1fffffff)) == UINT64_C(0x10000000) ||
+                        (bits & UINT64_C(0x7fffffffffffffff)) < UINT64_C(0x0010000000000001) ||
+                        !x87_fast_ok(op, *r, a, b)))
+        return 0;
+    bits = (bits + UINT64_C(0x0fffffff) + ((bits >> 29) & 1u)) & ~UINT64_C(0x1fffffff);
+    if (RECOMP_UNLIKELY((bits & UINT64_C(0x7ff0000000000000)) == UINT64_C(0x7ff0000000000000)))
+        return 0; /* rounded past DBL_MAX: the x87 keeps it */
+    memcpy(r, &bits, 8);
+    return 1;
+}
+
 /* FADD/FSUB/FSUBR/FMUL/FDIV/FDIVR ST(d), ST(s): ST(d) = ST(d) op ST(s). */
 RECOMP_HOT_INLINE void x87_arith_st(X86 *c, int op, unsigned d, unsigned s) {
     unsigned pd = (c->fpu_top + d) & 7u, ps = (c->fpu_top + s) & 7u;
-    if (RECOMP_LIKELY(c->fp_mode == X87_MODE_FAST)) {
+    uint8_t mode = c->fp_mode;
+    if (RECOMP_LIKELY(mode == X87_MODE_FAST || mode == X87_MODE_PC24)) {
         double a = c->st[pd], b = c->st[ps];
         double r = x87_host_op(op, a, b);
-        if (RECOMP_LIKELY(x87_fast_ok(op, r, a, b))) {
+        if (RECOMP_LIKELY(mode == X87_MODE_FAST ? x87_fast_ok(op, r, a, b)
+                                                : x87_pc24_ok(op, &r, a, b))) {
             c->st[pd] = r;
             ftag_put(c, pd, ftag_classify(r));
             return;
@@ -1426,10 +1447,12 @@ RECOMP_HOT_INLINE void x87_arith_st(X86 *c, int op, unsigned d, unsigned s) {
  * to double, which is exact for every x87 memory operand that has these forms. */
 RECOMP_HOT_INLINE void x87_arith_m(X86 *c, int op, double m) {
     unsigned p = c->fpu_top & 7u;
-    if (RECOMP_LIKELY(c->fp_mode == X87_MODE_FAST)) {
+    uint8_t mode = c->fp_mode;
+    if (RECOMP_LIKELY(mode == X87_MODE_FAST || mode == X87_MODE_PC24)) {
         double a = c->st[p];
         double r = x87_host_op(op, a, m);
-        if (RECOMP_LIKELY(x87_fast_ok(op, r, a, m))) {
+        if (RECOMP_LIKELY(mode == X87_MODE_FAST ? x87_fast_ok(op, r, a, m)
+                                                : x87_pc24_ok(op, &r, a, m))) {
             c->st[p] = r;
             ftag_put(c, p, ftag_classify(r));
             return;
@@ -1441,10 +1464,12 @@ RECOMP_HOT_INLINE void x87_arith_m(X86 *c, int op, double m) {
 /* FSQRT. */
 RECOMP_HOT_INLINE void x87_fsqrt(X86 *c) {
     unsigned p = c->fpu_top & 7u;
-    if (RECOMP_LIKELY(c->fp_mode == X87_MODE_FAST)) {
+    uint8_t mode = c->fp_mode;
+    if (RECOMP_LIKELY(mode == X87_MODE_FAST || mode == X87_MODE_PC24)) {
         double a = c->st[p];
         double r = __builtin_sqrt(a);
-        if (RECOMP_LIKELY(x87_fast_ok(X87_SQRT, r, a, a))) {
+        if (RECOMP_LIKELY(mode == X87_MODE_FAST ? x87_fast_ok(X87_SQRT, r, a, a)
+                                                : x87_pc24_ok(X87_SQRT, &r, a, a))) {
             c->st[p] = r;
             ftag_put(c, p, ftag_classify(r));
             return;
