@@ -630,6 +630,16 @@ DMAPI DmResult DmPerformance_renderPcm(DmPerformance* slf, void* buf, size_t num
 /// \param vol The new volume to set (between 0 and 1).
 DMAPI void DmPerformance_setVolume(DmPerformance* slf, float vol);
 
+/// \brief Whether a segment is playing in a performance.
+///
+/// A segment plays from the moment the performance reaches the boundary it was scheduled for until it has played
+/// as many times as its repeat count says (see #DmSegment_setRepeats) or another segment, or a stop, replaces it.
+/// A transition counts as playing. The answer reflects what #DmPerformance_renderPcm has rendered so far.
+///
+/// \param slf[in] The performance to ask.
+/// \return Non-zero if a segment is playing, `0` if none is or \p slf is `NULL`.
+DMAPI int DmPerformance_isPlaying(DmPerformance* slf);
+
 /// \brief Set the master groove level of a performance.
 ///
 /// The master groove level is added to the groove level of every command the performance plays, as

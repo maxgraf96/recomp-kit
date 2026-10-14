@@ -769,6 +769,16 @@ static void DmPerformance_handleSegmentMessage(DmPerformance* slf, DmMessage_Seg
 		m.segment.loop = msg->loop + 1;
 
 		DmMessageQueue_add(&slf->control_queue, &m, slf->time + slf->segment->length, DmQueueConflict_KEEP);
+	} else if (sgt->length != 0) {
+		// The last repeat: the segment ends with it, as a DirectMusic segment state does, rather than its style
+		// going on choosing patterns for ever. A segment queued for the same moment takes precedence.
+		DmMessage m;
+		m.type = DmMessage_SEGMENT;
+		m.time = 0;
+		m.segment.segment = NULL;
+		m.segment.loop = 0;
+
+		DmMessageQueue_add(&slf->control_queue, &m, slf->time + slf->segment->length, DmQueueConflict_KEEP);
 	}
 }
 
@@ -1027,4 +1037,18 @@ void DmPerformance_setMasterGroove(DmPerformance* slf, int8_t level) {
 
 	slf->master_groove = level;
 	(void) mtx_unlock(&slf->lock);
+}
+
+int DmPerformance_isPlaying(DmPerformance* slf) {
+	if (slf == NULL) {
+		return 0;
+	}
+
+	if (mtx_lock(&slf->lock) != thrd_success) {
+		return 0;
+	}
+
+	int playing = slf->segment != NULL;
+	(void) mtx_unlock(&slf->lock);
+	return playing;
 }

@@ -58,6 +58,7 @@ git format-patch --relative=third_party/dmusic <commit>^!   # one upstream-ready
 | Master groove level (`DmPerformance_setMasterGroove`) | DirectMusic's `GUID_PerfMasterGrooveLevel`, added to every command's groove level: how a game sets the intensity of style-based music. Without it a segment whose command track says groove 1 only ever plays its groove-1 patterns. |
 | Segment repeats setter (`DmSegment_setRepeats`) | `IDirectMusicSegment::SetRepeats`: a game sets how often a segment loops, whatever its file says. |
 | Read the playing state under the lock | `playSegment` computed its boundary and `playTransition` composed from the playing style, band and chord without the performance lock, racing the render thread that changes them; a transition from a segment without a style dereferenced a null style. |
+| A segment ends after its last repeat; `DmPerformance_isPlaying` | A DirectMusic segment state ends after its length times (repeats + 1); upstream let the style choose patterns for ever. **Changes behaviour** for a player that relied on endless playback: it should set the repeats (DirectMusic's `DMUS_SEG_REPEAT_INFINITE` is `0xFFFFFFFF`). `isPlaying` tells an API layer when the segment has ended. |
 
 To move to a newer upstream commit, replace the files listed under *What is
 here*, re-apply the patches that upstream has not taken, and run
