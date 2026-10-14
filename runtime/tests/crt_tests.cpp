@@ -1182,14 +1182,14 @@ static void test_cxx() {
 }
 
 // Every msvcrt/msvcp60 entry point has a registered shim with a calling
-// convention, except the ones other layers own.
+// convention, including the ones other layers own.
 static void test_registration() {
     printf("registration\n");
     reset_world();
-    const char *elsewhere[] = {"_CxxThrowException", "__CxxFrameHandler", "__CxxLongjmpUnwind",
-                               "_except_handler3",   "_setjmp3",          "longjmp"};
-    for (const char *n : elsewhere)
-        check(imports_resolve("msvcrt.dll", n) == 0, "%s is left to its own layer", n);
+    // Exception handling: msvc_eh.cpp's, registered with msvcrt (eh_tests).
+    for (const char *n : {"_CxxThrowException", "__CxxFrameHandler", "__CxxLongjmpUnwind",
+                          "_except_handler3", "_setjmp3", "longjmp", "?terminate@@YAXXZ"})
+        check(imports_resolve("msvcrt.dll", n) != 0, "%s is registered", n);
     // The float-control entry points: the x87 layer's, registered with msvcrt.
     for (const char *n :
          {"_controlfp", "_control87", "__control87_2", "_statusfp", "_clearfp", "_fpreset"})

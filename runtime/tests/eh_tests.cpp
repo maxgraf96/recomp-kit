@@ -407,7 +407,13 @@ static void test_basic(X86 *c) {
     uint32_t esp = c->r[R_ESP], head = rd32(c->fs_base);
     c->r[R_EBX] = 0xb0b0b0b0;
     c->r[R_EBP] = 0xebebebeb;
+    // The x87 control word is the guest's: nothing on the way to the
+    // continuation saves or restores it (24-bit precision, round down).
+    uint16_t cw = c->fpu_cw;
+    x87_set_cw(c, 0x047f);
     guest_call(c, f1);
+    CHECK(c->fpu_cw == 0x047f);
+    x87_set_cw(c, cw);
     CHECK(events_are({"dtor:61", "catch1:77", "xdtor:77", "cont1"}));
     CHECK(c->r[R_ESP] == esp && rd32(c->fs_base) == head);
     CHECK(c->r[R_EBX] == 0xb0b0b0b0 && c->r[R_EBP] == 0xebebebeb);
