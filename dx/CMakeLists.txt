@@ -90,6 +90,23 @@ pop_test_binary(pad_tests)
 add_test(NAME pad_tests COMMAND pad_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(pad_tests PROPERTIES LABELS nogame)
 
+# DirectMusic over GothicKit/dmusic, on synthetic files: its own binary
+# because it captures host_synth_attach strongly and renders the synthesizer
+# offline. The fixtures are generated (tests/make_dmusic_fixtures.py) and the
+# header that holds them must be what the generator writes.
+add_executable(dmusic_tests tests/dmusic_tests.cpp
+  ${POP_ROOT}/runtime/tests/stub_recomp_call.cpp)
+target_link_libraries(dmusic_tests PRIVATE recomp_platform recomp_dx recomp_runtime)
+target_compile_options(dmusic_tests PRIVATE ${POP_WARN_HOST})
+pop_optimize(dmusic_tests 1)
+pop_test_binary(dmusic_tests)
+add_test(NAME dmusic_tests COMMAND dmusic_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(dmusic_tests PROPERTIES LABELS nogame TIMEOUT 120)
+add_test(NAME dmusic_fixtures_current
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/make_dmusic_fixtures.py
+          --check ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/dmusic_fixtures.h)
+set_tests_properties(dmusic_fixtures_current PROPERTIES LABELS nogame)
+
 # The window system a game sees: per-thread message queues, sent messages,
 # activation and focus, keyboard translation, and the DirectInput keyboard
 # and mouse that hang off activation. Its own binary because it defines
