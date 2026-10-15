@@ -285,12 +285,13 @@ bool gdi_draw_image(uint32_t dc, const GdiImage &image, int32_t x, int32_t y, in
     if (!dc_size(dc, &dw, &dh))
         return false;
     Rect clip = clip_box(dc);
+    gdi::Pixels px(dc);
     for (int64_t yy = std::max<int64_t>(0, int64_t(clip.t) - y);
          yy < std::min<int64_t>({h, image.height, int64_t(clip.b) - y}); ++yy)
         for (int64_t xx = std::max<int64_t>(0, int64_t(clip.l) - x);
              xx < std::min<int64_t>({w, image.width, int64_t(clip.r) - x}); ++xx)
-            write_pixel(dc, int64_t(x) + xx, int64_t(y) + yy,
-                        image.pixels[size_t(yy) * image.width + xx], true);
+            px.write(int64_t(x) + xx, int64_t(y) + yy, image.pixels[size_t(yy) * image.width + xx],
+                     true);
     return true;
 }
 bool gdi_focus_rect(uint32_t dc, int32_t l, int32_t t, int32_t r, int32_t b) {
@@ -298,12 +299,13 @@ bool gdi_focus_rect(uint32_t dc, int32_t l, int32_t t, int32_t r, int32_t b) {
     if (!dc_size(dc, &w, &h))
         return false;
     Rect clip = clip_box(dc);
+    gdi::Pixels px(dc);
     for (int64_t y = std::max(t, clip.t); y < std::min(b, clip.b); ++y)
         for (int64_t x = std::max(l, clip.l); x < std::min(r, clip.r); ++x) {
             uint32_t p;
             if ((x == l || x == int64_t(r) - 1 || y == t || y == int64_t(b) - 1) &&
-                !((x + y) & 1) && read_pixel(dc, x, y, &p))
-                write_pixel(dc, x, y, p ^ 0xffffff);
+                !((x + y) & 1) && px.read(x, y, &p))
+                px.write(x, y, p ^ 0xffffff);
         }
     return true;
 }
@@ -1094,8 +1096,199 @@ Rect clip_box(uint32_t hdc) {
     auto clamp = [](int64_t v) { return int32_t(std::clamp<int64_t>(v, INT_MIN, INT_MAX)); };
     return {clamp(r.l - x), clamp(r.t - y), clamp(r.r - x), clamp(r.b - y)};
 }
+bool &fast_paths() {
+    static bool on = recomp_env("GDI_GENERIC") == nullptr;
+    return on;
+}
+// pixel()'s tests in the order it makes them, with the DC already resolved.
+bool Canvas::visible(int64_t x, int64_t y, bool write) const {
+    if (dc->clipped &&
+        std::none_of(dc->clip.begin(), dc->clip.end(), [&](Rect r) { return contains(r, x, y); }))
+        return false;
+    if (!contains(bounds, x, y))
+        return false;
+    return !(write && kind == Window &&
+             std::any_of(dc->excluded.begin(), dc->excluded.end(),
+                         [&](Rect r) { return contains(r, x, y); }));
+}
+bool Canvas::writable() const {
+    return kind == Window || (kind == Rgb32 && !g_watch_len && !g_dirty_count);
+}
+// What pixel() looks up per pixel - the DC, its bitmap or window surface, its
+// origin, the window's client bounds - looked up once.
+bool resolve(uint32_t hdc, Canvas *out) {
+    *out = Canvas{};
+    auto *dc = dc_of(hdc);
+    if (!dc)
+        return false;
+    out->dc = dc;
+    if (!fast_paths())
+        return true;
+    int64_t x = 0, y = 0;
+    offset(*dc, &x, &y);
+    out->dx = x;
+    out->dy = y;
+    if (Dib *d = dib_in_dc(hdc)) {
+        const int64_t rows = std::abs(int64_t(d->height));
+        const bool rgb32 = d->bpp == 32 && d->compression == 0, mono = d->bpp == 1;
+        if (!(rgb32 || mono) || d->width <= 0 || rows <= 0)
+            return true;
+        // Every pixel's address is inside the arena, out of the null page and,
+        // for words, aligned; else each access keeps its own checks.
+        const uint64_t extent =
+            uint64_t(rows - 1) * d->stride + (uint64_t(d->width) * d->bpp + 7) / 8;
+        if (d->bits < GUEST_NULL_LIMIT || d->bits >= GUEST_SIZE || extent > GUEST_SIZE - d->bits ||
+            (rgb32 && (d->bits % 4 || d->stride % 4)))
+            return true;
+        const bool top_down = d->height < 0;
+        out->row0 = g_mem + d->bits + (top_down ? 0 : uint64_t(rows - 1) * d->stride);
+        out->pitch = top_down ? int64_t(d->stride) : -int64_t(d->stride);
+        out->bounds = {0, 0, d->width, int32_t(rows)};
+        out->lo = g_mem + d->bits;
+        out->hi = out->lo + extent;
+        for (uint32_t raw = 0; raw < 2; ++raw)
+            out->mono[raw] = (raw < d->colors.size() ? d->colors[raw]
+                              : raw                  ? 0xffffffu
+                                                     : 0u) |
+                             0xff000000u;
+        out->kind = rgb32 ? Canvas::Rgb32 : Canvas::Mono;
+        return true;
+    }
+    Surface *s = surface_of(*dc);
+    if (!s || s->argb.empty())
+        return true;
+    const Rect client = client_bounds(*dc, s->w, s->h);
+    out->kind = Canvas::Window;
+    out->surface = s;
+    out->row0 = reinterpret_cast<uint8_t *>(s->argb.data());
+    out->pitch = int64_t(s->w) * 4;
+    out->bounds = {std::max(0, client.l), std::max(0, client.t), std::min(s->w, client.r),
+                   std::min(s->h, client.b)};
+    out->lo = out->row0;
+    out->hi = out->lo + s->argb.size() * 4;
+    return true;
+}
+void spans(const Canvas &c, int64_t y, int64_t l, int64_t r, bool write, std::vector<Span> &out) {
+    out.clear();
+    if (y < c.bounds.t || y >= c.bounds.b)
+        return;
+    l = std::max<int64_t>(l, c.bounds.l);
+    r = std::min<int64_t>(r, c.bounds.r);
+    if (l >= r)
+        return;
+    if (!c.dc->clipped)
+        out.push_back({l, r});
+    else {
+        // A pixel is in the clip when any of its rectangles holds it.
+        for (const Rect &k : c.dc->clip)
+            if (y >= k.t && y < k.b && std::max<int64_t>(l, k.l) < std::min<int64_t>(r, k.r))
+                out.push_back({std::max<int64_t>(l, k.l), std::min<int64_t>(r, k.r)});
+        if (out.size() > 1) {
+            std::sort(out.begin(), out.end(), [](Span a, Span b) { return a.l < b.l; });
+            size_t n = 0;
+            for (size_t i = 1; i < out.size(); ++i)
+                if (out[i].l <= out[n].r)
+                    out[n].r = std::max(out[n].r, out[i].r);
+                else
+                    out[++n] = out[i];
+            out.resize(n + 1);
+        }
+    }
+    if (!write || c.kind != Canvas::Window)
+        return;
+    // A WS_CLIPCHILDREN window's DC writes nothing over its visible children.
+    thread_local std::vector<Span> kept;
+    for (const Rect &e : c.dc->excluded) {
+        if (y < e.t || y >= e.b || e.l >= e.r)
+            continue;
+        kept.clear();
+        for (Span s : out) {
+            if (e.r <= s.l || e.l >= s.r) {
+                kept.push_back(s);
+                continue;
+            }
+            if (s.l < e.l)
+                kept.push_back({s.l, e.l});
+            if (e.r < s.r)
+                kept.push_back({e.r, s.r});
+        }
+        out.swap(kept);
+    }
+}
+void blit_spans(const Canvas &S, const Canvas &D, int64_t kx, int64_t ky, int64_t yy, int64_t l,
+                int64_t r, std::vector<Span> &out) {
+    thread_local std::vector<Span> from, to;
+    out.clear();
+    spans(S, yy + ky, l + kx, r + kx, false, from);
+    if (from.empty())
+        return;
+    spans(D, yy + D.dy, l + D.dx, r + D.dx, true, to);
+    for (size_t i = 0, j = 0; i < from.size() && j < to.size();) {
+        const int64_t a = std::max(from[i].l - kx, to[j].l - D.dx),
+                      b = std::min(from[i].r - kx, to[j].r - D.dx);
+        if (a < b)
+            out.push_back({a, b});
+        if (from[i].r - kx < to[j].r - D.dx)
+            ++i;
+        else
+            ++j;
+    }
+}
+Pixels::Pixels(uint32_t hdc) : hdc_(hdc) {
+    // Writes are what a Canvas must model; a monochrome DC keeps the per-pixel path.
+    if (!resolve(hdc, &c_) || c_.kind == Canvas::Mono || !c_.writable())
+        c_.kind = Canvas::None;
+}
+bool Pixels::read(int64_t x, int64_t y, uint32_t *p) {
+    if (c_.kind == Canvas::None)
+        return read_pixel(hdc_, x, y, p);
+    x += c_.dx;
+    y += c_.dy;
+    if (!c_.visible(x, y, false))
+        return false;
+    *p = *c_.at(x, y) | 0xff000000u;
+    return true;
+}
+bool Pixels::write(int64_t x, int64_t y, uint32_t p, bool blend) {
+    if (c_.kind == Canvas::None)
+        return write_pixel(hdc_, x, y, p, blend);
+    x += c_.dx;
+    y += c_.dy;
+    if (!c_.visible(x, y, true))
+        return false;
+    uint32_t *at = c_.at(x, y), result = p;
+    if (blend) {
+        const uint32_t alpha = p >> 24, old = *at;
+        if (!alpha)
+            return true;
+        result = 0xff000000u;
+        for (int c = 0; c < 24; c += 8)
+            result |= ((((p >> c) & 255) * alpha + ((old >> c) & 255) * (255 - alpha) + 127) / 255)
+                      << c;
+    }
+    if (c_.kind == Canvas::Window) {
+        *at = result | 0xff000000u;
+        c_.surface->dirty = true;
+    } else
+        *at = result;
+    return true;
+}
 void fill(uint32_t dc, Rect r, uint32_t p) {
     Rect clip = clip_box(dc);
+    Canvas c;
+    if (resolve(dc, &c) && c.writable()) {
+        const uint32_t value = c.kind == Canvas::Window ? p | 0xff000000u : p;
+        thread_local std::vector<Span> row;
+        for (int64_t y = std::max(r.t, clip.t); y < std::min(r.b, clip.b); ++y) {
+            spans(c, y + c.dy, int64_t(std::max(r.l, clip.l)) + c.dx,
+                  int64_t(std::min(r.r, clip.r)) + c.dx, true, row);
+            for (Span s : row)
+                std::fill(c.at(s.l, y + c.dy), c.at(s.r, y + c.dy), value);
+            if (!row.empty() && c.surface)
+                c.surface->dirty = true;
+        }
+        return;
+    }
     for (int64_t y = std::max(r.t, clip.t); y < std::min(r.b, clip.b); ++y)
         for (int64_t x = std::max(r.l, clip.l); x < std::min(r.r, clip.r); ++x)
             write_pixel(dc, x, y, p);
@@ -1376,8 +1569,21 @@ bool compose_overlay(const std::vector<user32::Window *> &windows, std::vector<u
              ++y) {
             const uint32_t *src = s.argb.data() + size_t(y - dy) * s.w;
             uint32_t *dst = out.data() + size_t(y) * w;
-            for (int64_t x = std::max<int64_t>(clip_l, dx); x < std::min<int64_t>(clip_r, dx + s.w);
-                 ++x) {
+            const int64_t x0 = std::max<int64_t>(clip_l, dx),
+                          x1 = std::min<int64_t>(clip_r, dx + s.w);
+            if (alpha == 255 && !keyed && gdi::fast_paths()) {
+                // An opaque window: its drawn pixels replace what is below,
+                // written without a branch so the row vectorizes.
+                uint32_t drawn = 0;
+                for (int64_t x = x0; x < x1; ++x) {
+                    const uint32_t p = src[x - dx];
+                    drawn |= p;
+                    dst[x] = (p >> 24) ? p | 0xff000000u : dst[x];
+                }
+                any |= (drawn >> 24) != 0;
+                continue;
+            }
+            for (int64_t x = x0; x < x1; ++x) {
                 const uint32_t p = src[x - dx];
                 if (!(p >> 24) || (keyed && (p & 0xffffffu) == key))
                     continue;
@@ -1571,9 +1777,10 @@ void gdi_present_windows(bool refresh) {
     const bool visible = where.visible && (!presented.owner || presented_pixels(presented));
     std::vector<uint32_t> pixels(size_t(w) * h, 0xff000000);
     if (primary) {
+        gdi::Pixels base(primary);
         for (int py = 0; py < h; ++py)
             for (int px = 0; px < w; ++px)
-                gdi::read_pixel(primary, px, py, &pixels[size_t(py) * w + px]);
+                base.read(px, py, &pixels[size_t(py) * w + px]);
         ddraw_gdi_end_primary(primary);
     }
     gdi_composite_windows(pixels.data(), w, h);

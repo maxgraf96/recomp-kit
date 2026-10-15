@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- GDI draws a row at a time where it can. `BitBlt` (and a 1:1 `StretchBlt`)
+  between 32-bit `BI_RGB` DIBs, window surfaces and 1-bit sources, constant-
+  and per-pixel-alpha `AlphaBlend`, fills (`Rectangle`'s interior, opaque
+  text backgrounds) and the GDI overlay's composition no longer find the
+  device context, its bitmap or window, its origin and its clip again for
+  every pixel; lines, outlines, glyphs, `PatBlt` and `FillRect` resolve the DC
+  once per call. A custom-drawn 1024x768 window's repaint (a background
+  picture, 150 masked images by `SRCAND`/`SRCPAINT`, `AlphaBlend` panels,
+  text, then `WM_PAINT`'s whole-window `SRCCOPY`) went from 150 ms to under
+  3 ms; the whole-window `SRCCOPY` alone from 75 ms to 0.08 ms. Every pixel is
+  the one the per-pixel path draws: `gdi_blit_tests` runs 30,000 random
+  operations on both paths over every kind of storage, clip, origin and
+  colour and compares them, and `gdi_repaint_bench` times the repaint.
+  `RECOMP_GDI_GENERIC=1` keeps the per-pixel path.
+- `RECOMP_GDI_TIMING=1` logs how long each paint took, from `BeginPaint` to
+  the end of `EndPaint`, and the present `EndPaint` made
+  (`gdi: paint 00020024: 3.07 ms (present 1.25 ms)`).
 - DirectDraw 7's `Flip` exchanges the front and back buffers, as Windows
   does, instead of copying the back buffer into the front: after a Flip the
   back buffer holds the frame shown before, and its `Lock` pointer is the

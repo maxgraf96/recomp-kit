@@ -89,6 +89,72 @@ void gradient_fill(X86 *c) {
     }
     set_eax(c, 1);
 }
+// One AlphaBlend pixel: `pixel` over `old`, both as image_blt reads them.
+inline uint32_t blend_pixel(uint32_t pixel, uint32_t old, uint32_t constant, bool per_pixel) {
+    uint32_t opacity = per_pixel ? ((pixel >> 24) * constant + 127) / 255 : constant;
+    uint32_t result = (opacity + ((old >> 24) * (255 - opacity) + 127) / 255) << 24;
+    for (unsigned shift = 0; shift < 24; shift += 8) {
+        uint32_t channel =
+            (((pixel >> shift) & 255) * constant + ((old >> shift) & 255) * (255 - opacity) + 127) /
+            255;
+        result |= std::min(channel, 255u) << shift;
+    }
+    return result;
+}
+// An unstretched AlphaBlend between the storage a Canvas models, a row at a
+// time: the samples as read_pixel(..., preserve_alpha) gives them, blended
+// where both the sample and the destination pixel exist. A source sharing the
+// destination's storage is read whole first, as image_blt snapshots it. False,
+// having changed nothing, when the DCs need the per-pixel loop.
+bool fast_alpha_blend(uint32_t dst, uint32_t src, int64_t x, int64_t y, int64_t sx, int64_t sy,
+                      int64_t left, int64_t top, int64_t right, int64_t bottom, uint32_t constant,
+                      bool per_pixel) {
+    Canvas D, S;
+    if (!resolve(dst, &D) || !resolve(src, &S) || !D.writable() || S.kind == Canvas::None)
+        return false;
+    const int64_t kx = sx - x + S.dx, ky = sy - y + S.dy, width = right - left;
+    const bool alias = S.lo < D.hi && D.lo < S.hi;
+    // read_pixel keeps a 32-bit BI_RGB DIB's alpha byte and makes the rest opaque.
+    const uint32_t src_opaque = S.kind == Canvas::Rgb32 ? 0 : 0xff000000u;
+    const uint32_t dst_opaque = D.kind == Canvas::Rgb32 ? 0 : 0xff000000u;
+    thread_local std::vector<Span> row;
+    thread_local std::vector<uint32_t> run, snap;
+    auto sample = [&](int64_t yy, Span s, uint32_t *out) {
+        for (int64_t xx = s.l; xx < s.r; ++xx)
+            out[xx - s.l] = S.kind == Canvas::Mono ? S.mono[S.bit(xx + kx, yy + ky)]
+                                                   : *S.at(xx + kx, yy + ky) | src_opaque;
+    };
+    if (alias) {
+        snap.resize(size_t(width * (bottom - top)));
+        for (int64_t yy = top; yy < bottom; ++yy) {
+            blit_spans(S, D, kx, ky, yy, left, right, row);
+            for (Span s : row)
+                sample(yy, s, &snap[size_t((yy - top) * width + (s.l - left))]);
+        }
+    }
+    bool wrote = false;
+    for (int64_t yy = top; yy < bottom; ++yy) {
+        blit_spans(S, D, kx, ky, yy, left, right, row);
+        for (Span s : row) {
+            const size_t n = size_t(s.r - s.l);
+            const uint32_t *from;
+            if (alias)
+                from = &snap[size_t((yy - top) * width + (s.l - left))];
+            else {
+                run.resize(n);
+                sample(yy, s, run.data());
+                from = run.data();
+            }
+            uint32_t *to = D.at(s.l + D.dx, yy + D.dy);
+            for (size_t i = 0; i < n; ++i)
+                to[i] = blend_pixel(from[i], to[i] | dst_opaque, constant, per_pixel) | dst_opaque;
+            wrote = true;
+        }
+    }
+    if (wrote && D.surface)
+        D.surface->dirty = true;
+    return true;
+}
 // Both blits use nearest-neighbor sampling and snapshot the bounded source
 // samples before writing. The shared pixel path applies each DC's mapping and
 // clipping; work and storage are bounded by the destination surface.
@@ -119,6 +185,12 @@ void image_blt(X86 *c, bool alpha_blend) {
         fail(c);
         return;
     }
+    if (alpha_blend && fast_paths() && sw == w && sh == h &&
+        fast_alpha_blend(dst, src, x, y, sx, sy, left, top, right, bottom, (blend >> 16) & 255,
+                         per_pixel)) {
+        set_eax(c, 1);
+        return;
+    }
     struct Sample {
         uint32_t pixel = 0;
         bool valid = false;
@@ -145,15 +217,7 @@ void image_blt(X86 *c, bool alpha_blend) {
             uint32_t old;
             if (!read_pixel(dst, xx, yy, &old, true))
                 continue;
-            uint32_t opacity = per_pixel ? ((pixel >> 24) * constant + 127) / 255 : constant;
-            uint32_t result = (opacity + ((old >> 24) * (255 - opacity) + 127) / 255) << 24;
-            for (unsigned shift = 0; shift < 24; shift += 8) {
-                uint32_t channel = (((pixel >> shift) & 255) * constant +
-                                    ((old >> shift) & 255) * (255 - opacity) + 127) /
-                                   255;
-                result |= std::min(channel, 255u) << shift;
-            }
-            write_pixel(dst, xx, yy, result);
+            write_pixel(dst, xx, yy, blend_pixel(pixel, old, constant, per_pixel));
         }
     set_eax(c, 1);
 }

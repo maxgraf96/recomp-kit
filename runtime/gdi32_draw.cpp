@@ -43,16 +43,133 @@ uint32_t brush(uint32_t dc) {
         brush_color(d->brush, &p);
     return p;
 }
-void pen_pixel(uint32_t dc, int64_t x, int64_t y, uint32_t p) {
-    uint32_t old;
-    auto *d = dc_of(dc);
-    if (!d || !read_pixel(dc, x, y, &old))
-        return;
-    uint32_t code = uint32_t(d->rop2 - 1), out = 0;
+// ROP2's truth table: the pen colour p over the old pixel.
+uint32_t mix(int rop2, uint32_t p, uint32_t old) {
+    uint32_t code = uint32_t(rop2 - 1), out = 0;
     for (unsigned i = 0; i < 4; ++i)
         if (code & (1u << i))
             out |= (i & 2 ? p : ~p) & (i & 1 ? old : ~old);
-    write_pixel(dc, x, y, out | 0xff000000);
+    return out | 0xff000000;
+}
+// One pixel of a pen or a fill, combined with what is there by the DC's ROP2.
+void pen_pixel(Pixels &px, int rop2, int64_t x, int64_t y, uint32_t p) {
+    uint32_t old;
+    if (px.read(x, y, &old))
+        px.write(x, y, mix(rop2, p, old));
+}
+// A rectangle of pen_pixel()s, a row at a time where the DC allows it.
+void pen_fill(uint32_t hdc, int rop2, Rect r, uint32_t p) {
+    Canvas c;
+    if (resolve(hdc, &c) && c.writable()) {
+        thread_local std::vector<Span> row;
+        for (int64_t y = r.t; y < r.b; ++y) {
+            spans(c, y + c.dy, int64_t(r.l) + c.dx, int64_t(r.r) + c.dx, true, row);
+            for (Span s : row) {
+                uint32_t *at = c.at(s.l, y + c.dy), *end = c.at(s.r, y + c.dy);
+                if (rop2 == 13) // R2_COPYPEN
+                    std::fill(at, end, p | 0xff000000u);
+                else
+                    for (; at < end; ++at)
+                        *at = mix(rop2, p, *at | 0xff000000u);
+            }
+            if (!row.empty() && c.surface)
+                c.surface->dirty = true;
+        }
+        return;
+    }
+    Pixels px(hdc);
+    for (int64_t y = r.t; y < r.b; ++y)
+        for (int64_t x = r.l; x < r.r; ++x)
+            pen_pixel(px, rop2, x, y, p);
+}
+// ROP3 over a run, as raster() makes each pixel: `s` the source samples (made
+// opaque here, as read_pixel makes them), `d` the destination's pixels.
+void rop_run(unsigned index, uint32_t pattern, const uint32_t *__restrict s, uint32_t *__restrict d,
+             size_t n) {
+    switch (index) {
+    case 0xcc: // SRCCOPY
+        for (size_t i = 0; i < n; ++i)
+            d[i] = s[i] | 0xff000000u;
+        return;
+    case 0x88: // SRCAND
+        for (size_t i = 0; i < n; ++i)
+            d[i] = (s[i] & d[i]) | 0xff000000u;
+        return;
+    case 0xee: // SRCPAINT
+        for (size_t i = 0; i < n; ++i)
+            d[i] = s[i] | d[i] | 0xff000000u;
+        return;
+    case 0x66: // SRCINVERT
+        for (size_t i = 0; i < n; ++i)
+            d[i] = (s[i] ^ d[i]) | 0xff000000u;
+        return;
+    default:
+        for (size_t i = 0; i < n; ++i)
+            d[i] = raster(index, pattern, s[i] | 0xff000000u, d[i] | 0xff000000u);
+    }
+}
+// BitBlt, and StretchBlt at 1:1, between the storage a Canvas models: what the
+// per-pixel loop in blit() leaves, a row at a time - the source's samples (a
+// monochrome source in the destination's colours), the ROP3 over the
+// destination where both the sample and the destination pixel exist. A source
+// that shares storage with the destination is read whole first, as blit()
+// snapshots it. False, having changed nothing, when the DCs need that loop.
+bool fast_blit(uint32_t dst, int32_t x, int32_t y, uint32_t src, int32_t sx, int32_t sy,
+               uint32_t rop, int64_t left, int64_t top, int64_t right, int64_t bottom) {
+    Canvas D, S;
+    if (!resolve(dst, &D) || !resolve(src, &S) || !D.writable() || S.kind == Canvas::None)
+        return false;
+    uint32_t mono[2] = {0, 0};
+    if (S.kind == Canvas::Mono) {
+        const uint32_t bk = gdi::argb(D.dc->bk_color) & 0xffffffu;
+        const uint32_t text = gdi::argb(D.dc->text_color) & 0xffffffu;
+        for (int b = 0; b < 2; ++b)
+            mono[b] = 0xff000000u | ((S.mono[b] & 0xffffffu) ? bk : text);
+    }
+    const unsigned index = (rop >> 16) & 255;
+    const uint32_t pattern = brush(dst);
+    // Destination logical (xx, yy) samples source device (xx + kx, yy + ky).
+    const int64_t kx = int64_t(sx) - x + S.dx, ky = int64_t(sy) - y + S.dy;
+    const int64_t width = right - left;
+    const bool alias = S.lo < D.hi && D.lo < S.hi;
+    thread_local std::vector<Span> row;
+    thread_local std::vector<uint32_t> run, snap;
+    auto sample = [&](int64_t yy, Span s, uint32_t *out) {
+        if (S.kind == Canvas::Mono)
+            for (int64_t xx = s.l; xx < s.r; ++xx)
+                out[xx - s.l] = mono[S.bit(xx + kx, yy + ky)];
+        else
+            memcpy(out, S.at(s.l + kx, yy + ky), size_t(s.r - s.l) * 4);
+    };
+    if (alias) {
+        snap.resize(size_t(width * (bottom - top)));
+        for (int64_t yy = top; yy < bottom; ++yy) {
+            blit_spans(S, D, kx, ky, yy, left, right, row);
+            for (Span s : row)
+                sample(yy, s, &snap[size_t((yy - top) * width + (s.l - left))]);
+        }
+    }
+    bool wrote = false;
+    for (int64_t yy = top; yy < bottom; ++yy) {
+        blit_spans(S, D, kx, ky, yy, left, right, row);
+        for (Span s : row) {
+            const size_t n = size_t(s.r - s.l);
+            const uint32_t *from;
+            if (alias)
+                from = &snap[size_t((yy - top) * width + (s.l - left))];
+            else if (S.kind == Canvas::Mono) {
+                run.resize(n);
+                sample(yy, s, run.data());
+                from = run.data();
+            } else
+                from = S.at(s.l + kx, yy + ky);
+            rop_run(index, pattern, from, D.at(s.l + D.dx, yy + D.dy), n);
+            wrote = true;
+        }
+    }
+    if (wrote && D.surface)
+        D.surface->dirty = true;
+    return true;
 }
 // `mask` is MaskBlt's monochrome bitmap, sampled from (mx, my) one bit per
 // destination pixel: a set bit takes the foreground raster operation, byte 2
@@ -80,6 +197,9 @@ bool blit(uint32_t dst, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t src
         return true;
     if (uint64_t(right - left) * (bottom - top) > GUEST_SIZE / 4)
         return false;
+    if (fast_paths() && !mask && w > 0 && h > 0 && sw == w && sh == h &&
+        fast_blit(dst, x, y, src, sx, sy, rop, left, top, right, bottom))
+        return true;
     struct Sample {
         uint32_t p = 0;
         bool valid = false;
@@ -222,11 +342,12 @@ void patblt(X86 *c) {
     Rect clip = clip_box(dc);
     int64_t r = int64_t(si(c, 1)) + si(c, 3), b = int64_t(si(c, 2)) + si(c, 4);
     uint32_t p = brush(dc);
+    Pixels px(dc);
     for (int64_t y = std::max(si(c, 2), clip.t); y < std::min<int64_t>(b, clip.b); ++y)
         for (int64_t x = std::max(si(c, 1), clip.l); x < std::min<int64_t>(r, clip.r); ++x) {
             uint32_t old;
-            if (read_pixel(dc, x, y, &old))
-                write_pixel(dc, x, y, raster((arg(c, 5) >> 16) & 255, p, 0, old));
+            if (px.read(x, y, &old))
+                px.write(x, y, raster((arg(c, 5) >> 16) & 255, p, 0, old));
         }
     set_eax(c, 1);
 }
@@ -330,6 +451,7 @@ void draw_arc(uint32_t hdc, Rect r, ArcRange range, bool clockwise, ArcFigure fi
     const double mid_side = sx * (mid.second - start.second) - sy * (mid.first - start.first);
     const bool whole = range.sweep >= kTurn;
     const Rect clip = intersection(r, clip_box(hdc));
+    Pixels px(hdc);
     for (int64_t y = clip.t; y < clip.b; ++y)
         for (int64_t x = clip.l; x < clip.r; ++x) {
             if (!e.inside(x, y))
@@ -342,10 +464,10 @@ void draw_arc(uint32_t hdc, Rect r, ArcRange range, bool clockwise, ArcFigure fi
                     in_region = side == 0 || (side > 0) == (mid_side > 0);
                 }
                 if (in_region)
-                    write_pixel(hdc, x, y, fill);
+                    px.write(x, y, fill);
             }
             if (stroked && in_range && e.outline(x, y))
-                pen_pixel(hdc, x, y, argb(pen->second.color));
+                pen_pixel(px, dc->rop2, x, y, argb(pen->second.color));
         }
     if (whole)
         return;
@@ -380,10 +502,7 @@ void box(X86 *c, bool ellipse = false) {
             if (pen != objects().end() && pen->second.style != 5 && int64_t(r.r) - r.l > 1 &&
                 int64_t(r.b) - r.t > 1)
                 interior = {r.l + 1, r.t + 1, r.r - 1, r.b - 1};
-            Rect bounds = intersection(interior, clip);
-            for (int64_t y = bounds.t; y < bounds.b; ++y)
-                for (int64_t x = bounds.l; x < bounds.r; ++x)
-                    pen_pixel(hdc, x, y, p);
+            pen_fill(hdc, dc->rop2, intersection(interior, clip), p);
         }
         line(hdc, r.l, r.t, r.r - 1, r.t);
         line(hdc, r.r - 1, r.t, r.r - 1, r.b - 1);
@@ -392,13 +511,14 @@ void box(X86 *c, bool ellipse = false) {
     } else {
         const EllipseShape e(r);
         auto pen = objects().find(dc->pen);
+        Pixels px(hdc);
         for (int64_t y = clip.t; y < clip.b; ++y)
             for (int64_t x = clip.l; x < clip.r; ++x)
                 if (e.inside(x, y)) {
                     if (filled)
-                        write_pixel(hdc, x, y, p);
+                        px.write(x, y, p);
                     if (pen != objects().end() && pen->second.style != 5 && e.outline(x, y))
-                        pen_pixel(hdc, x, y, argb(pen->second.color));
+                        pen_pixel(px, dc->rop2, x, y, argb(pen->second.color));
                 }
     }
     set_eax(c, 1);
@@ -424,6 +544,7 @@ void points(X86 *c, bool polygon, bool to) {
     uint32_t color;
     if (polygon && p.size() > 2 && brush_color(d->brush, &color)) {
         Rect clip = clip_box(dc);
+        Pixels px(dc);
         for (int64_t y = clip.t; y < clip.b; ++y) {
             std::vector<double> edges;
             for (size_t i = 0, j = p.size() - 1; i < p.size(); j = i++) {
@@ -436,7 +557,7 @@ void points(X86 *c, bool polygon, bool to) {
             for (size_t i = 0; i + 1 < edges.size(); i += 2)
                 for (int64_t x = std::max<double>(clip.l, std::ceil(edges[i] - .5));
                      x < std::min<double>(clip.r, edges[i + 1] - .5); ++x)
-                    write_pixel(dc, x, y, color);
+                    px.write(x, y, color);
         }
     }
     for (size_t i = 1; i < p.size(); ++i)
@@ -768,12 +889,13 @@ void line(uint32_t dc, int32_t x, int32_t y, int32_t x1, int32_t y1) {
             stepy = ay < by ? 1 : -1, err = vx + vy;
     int width = int(std::clamp<int64_t>(std::abs(int64_t(pen->second.width)), 1, 4096));
     uint32_t color = argb(pen->second.color);
+    Pixels px(dc);
     for (;;) {
         if (ax == x1 && ay == y1)
             break; // Win32 excludes the terminal pixel.
         for (int oy = -(width / 2); oy < width - width / 2; ++oy)
             for (int ox = -(width / 2); ox < width - width / 2; ++ox)
-                pen_pixel(dc, ax + ox, ay + oy, color);
+                pen_pixel(px, d->rop2, ax + ox, ay + oy, color);
         if (ax == bx && ay == by)
             break;
         int64_t e = err * 2;

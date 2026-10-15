@@ -141,15 +141,16 @@ void glyph(uint32_t hdc, int64_t x, int64_t y, uint32_t ch, bool underline = fal
     int64_t scale = font_scale(hdc), width = 8 * scale, height = 16 * scale;
     Rect clip = clip_box(hdc);
     uint32_t fg = argb(dc->text_color), bg = argb(dc->bk_color);
+    Pixels px(hdc);
     for (int64_t yy = std::max<int64_t>(y, clip.t); yy < std::min<int64_t>(y + height, clip.b);
          ++yy)
         for (int64_t xx = std::max<int64_t>(x, clip.l); xx < std::min<int64_t>(x + width, clip.r);
              ++xx) {
             uint8_t row = recomp_font::font8x16[ch - 32][size_t((yy - y) / scale)];
             if ((row & (0x80 >> ((xx - x) / scale))) || (underline && yy - y >= 14 * scale))
-                write_pixel(hdc, xx, yy, fg);
+                px.write(xx, yy, fg);
             else if (dc->bk_mode == 2)
-                write_pixel(hdc, xx, yy, bg);
+                px.write(xx, yy, bg);
         }
 }
 
@@ -187,19 +188,20 @@ struct Pen {
                  argb(dc->bk_color));
         const TrueTypeGlyph &g = truetype_gdi_glyph(font, ch);
         const int64_t baseline = y + font.ascent;
+        Pixels px(hdc);
         for (int32_t j = 0; j < g.h; ++j)
             for (int32_t i = 0; i < g.w; ++i)
                 if (uint8_t cover = g.coverage[size_t(j) * size_t(g.w) + size_t(i)])
-                    write_pixel(hdc, x + g.x + i, baseline + g.y + j, (uint32_t(cover) << 24) | fg,
-                                true);
+                    px.write(x + g.x + i, baseline + g.y + j, (uint32_t(cover) << 24) | fg, true);
         if (underline)
             line_under(hdc, x, x + width, baseline + font.underline_pos, font.underline_size, fg);
     }
     void line_under(uint32_t hdc, int64_t x0, int64_t x1, int64_t top, int32_t size,
                     uint32_t fg) const {
+        Pixels px(hdc);
         for (int64_t yy = top; yy < top + std::max(1, size); ++yy)
             for (int64_t xx = x0; xx < x1; ++xx)
-                write_pixel(hdc, xx, yy, 0xff000000u | fg);
+                px.write(xx, yy, 0xff000000u | fg);
     }
     // The font's underline and strikeout across a run of text.
     void decorate(uint32_t hdc, int64_t x0, int64_t x1, int64_t y) const {

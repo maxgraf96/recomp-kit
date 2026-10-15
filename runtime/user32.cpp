@@ -1447,8 +1447,21 @@ void u_ReleaseDC(X86 *c) {
     set_eax(c, gdi_release_window_dc(arg(c, 0), arg(c, 1)));
 }
 
+// RECOMP_GDI_TIMING=1 logs how long each paint took, from BeginPaint to the
+// end of EndPaint (the program's drawing and GDI's), and the present EndPaint
+// made: `gdi: paint 0001000c: 2.41 ms (present 0.52 ms)`.
+static bool paint_timing() {
+    static const bool on = recomp_env("GDI_TIMING") != nullptr;
+    return on;
+}
+static std::map<uint32_t, uint64_t> &paint_started() {
+    static std::map<uint32_t, uint64_t> m;
+    return m;
+}
 void u_BeginPaint(X86 *c) {
     uint32_t hwnd = arg(c, 0), ps = arg(c, 1);
+    if (paint_timing())
+        paint_started()[hwnd] = os_monotonic_ns();
     uint32_t hdc = gdi_window_dc(hwnd);
     Window *w = find_window(hwnd);
     if (w)
@@ -1468,7 +1481,17 @@ void u_BeginPaint(X86 *c) {
 }
 void u_EndPaint(X86 *c) {
     uint32_t ps = arg(c, 1);
+    const uint64_t present = paint_timing() ? os_monotonic_ns() : 0;
     set_eax(c, ps && gm_valid(ps, 64) && gdi_release_window_dc(arg(c, 0), rd32(ps)));
+    if (!present)
+        return;
+    const auto started = paint_started().find(arg(c, 0));
+    if (started == paint_started().end())
+        return;
+    const uint64_t now = os_monotonic_ns();
+    LOGW("gdi: paint %08x: %.2f ms (present %.2f ms)", arg(c, 0),
+         double(now - started->second) / 1e6, double(now - present) / 1e6);
+    paint_started().erase(started);
 }
 
 // Use the desktop fallback until DirectDraw selects a mode, then report that

@@ -120,6 +120,18 @@ add_test(NAME gdi_model_tests COMMAND gdi_tests model WORKING_DIRECTORY ${POP_RO
 set_tests_properties(gdi_model_tests PROPERTIES LABELS nogame)
 add_test(NAME gdi_draw_tests COMMAND gdi_tests draw WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(gdi_draw_tests PROPERTIES LABELS nogame)
+# The raster fast paths against the generic per-pixel path, operation by
+# operation on random scenes, and a custom-drawn toolkit's whole-window repaint
+# timed against a generous limit.
+add_executable(gdi_blit_tests tests/gdi_blit_tests.cpp tests/stub_recomp_call.cpp)
+target_link_libraries(gdi_blit_tests PRIVATE recomp_platform recomp_runtime)
+target_compile_options(gdi_blit_tests PRIVATE ${POP_WARN_HOST})
+pop_optimize(gdi_blit_tests 1)
+pop_test_binary(gdi_blit_tests)
+add_test(NAME gdi_blit_tests COMMAND gdi_blit_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(gdi_blit_tests PROPERTIES LABELS nogame TIMEOUT 300)
+add_test(NAME gdi_repaint_bench COMMAND gdi_blit_tests bench WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(gdi_repaint_bench PROPERTIES LABELS nogame TIMEOUT 300)
 # Text metrics against the numbers a Windows 96-dpi screen DC reports for the
 # same requests (tools/gdi_metrics: capture_win32.c there, gdi_tests --capture
 # here, compare.py's tolerances). Only once those numbers are committed, and

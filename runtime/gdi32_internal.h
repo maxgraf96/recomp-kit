@@ -68,6 +68,68 @@ void line(uint32_t dc, int32_t x, int32_t y, int32_t x1, int32_t y1);
 void register_draw();
 void register_text();
 uint32_t draw_text(uint32_t dc, uint32_t text, uint32_t count, uint32_t rect, uint32_t flags);
+
+// ---------------------------------------------------------------------------
+// Fast paths. read_pixel and write_pixel define what a DC reads and writes:
+// they find the DC, its bitmap or window, its origin and its clipping again
+// for every pixel, which made a 1024x768 BitBlt tens of milliseconds. A Canvas
+// is that resolution done once for a whole call, for the storage the fast
+// paths model (32-bit BI_RGB DIBs, 1-bit DIBs as sources, window surfaces);
+// any other DC keeps the per-pixel path. Every fast path leaves exactly the
+// pixels the per-pixel path leaves: gdi_blit_tests compares the two, operation
+// by operation. RECOMP_GDI_GENERIC=1 turns the fast paths off.
+// ---------------------------------------------------------------------------
+bool &fast_paths();
+struct Span {
+    int64_t l, r; // [l, r)
+};
+struct Canvas {
+    enum Kind { None, Rgb32, Mono, Window } kind = None;
+    const DeviceContext *dc = nullptr;
+    uint8_t *row0 = nullptr;     // host address of device row 0
+    int64_t pitch = 0;           // bytes from a device row to the next; negative bottom-up
+    int64_t dx = 0, dy = 0;      // logical (x, y) is device (x + dx, y + dy)
+    Rect bounds;                 // the storage's pixels, within a window DC's client area
+    Surface *surface = nullptr;  // Window: marked dirty when written
+    uint32_t mono[2] = {0, 0};   // Mono: what its two bit values read as, opaque
+    const uint8_t *lo = nullptr; // the host bytes the pixels occupy, for aliasing
+    const uint8_t *hi = nullptr;
+    uint32_t *at(int64_t x, int64_t y) const { // device coordinates; Rgb32 and Window
+        return reinterpret_cast<uint32_t *>(row0 + y * pitch) + x;
+    }
+    bool bit(int64_t x, int64_t y) const { // device coordinates; Mono
+        return (row0[y * pitch + x / 8] >> (7 - x % 8)) & 1;
+    }
+    // Whether read_pixel (write_pixel when `write`) would touch device (x, y).
+    bool visible(int64_t x, int64_t y, bool write) const;
+    // Whether the fast paths may write it: a window surface, or a 32-bit DIB
+    // while no guest-memory watch or DirectDraw lock range needs each store.
+    bool writable() const;
+};
+// False, with kind None, when the DC does not exist; kind None too when its
+// storage is not one a Canvas models, or the fast paths are off.
+bool resolve(uint32_t hdc, Canvas *out);
+// The device pixels of row y in [l, r) that read_pixel (write_pixel when
+// `write`) would touch, as sorted disjoint spans.
+void spans(const Canvas &c, int64_t y, int64_t l, int64_t r, bool write, std::vector<Span> &out);
+// The pixels of a blit's destination row yy in [l, r), in D's logical
+// coordinates, that the per-pixel path draws: S has the sample, at device
+// (x + kx, yy + ky), and D writes the pixel.
+void blit_spans(const Canvas &S, const Canvas &D, int64_t kx, int64_t ky, int64_t yy, int64_t l,
+                int64_t r, std::vector<Span> &out);
+// read_pixel and write_pixel with the DC resolved once, for loops that visit
+// pixels one at a time (lines, outlines, glyphs): the same results, and the
+// per-pixel path itself for a DC a Canvas does not model.
+class Pixels {
+  public:
+    explicit Pixels(uint32_t hdc);
+    bool read(int64_t x, int64_t y, uint32_t *p);
+    bool write(int64_t x, int64_t y, uint32_t p, bool blend = false);
+
+  private:
+    uint32_t hdc_;
+    Canvas c_;
+};
 } // namespace gdi
 uint32_t gdi_window_dc(uint32_t window);
 bool gdi_release_window_dc(uint32_t window, uint32_t dc);

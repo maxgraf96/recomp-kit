@@ -48,6 +48,15 @@ installed Windows faces where the machine has them.
 says which parts and why), and `gdi_tests` checks arcs, chords and pies
 against a reference raster written from GDI's rules, and a toolkit's pen and
 brush churn against the object table.
+`gdi_blit_tests` (`nogame`) holds GDI's fast paths to the per-pixel path they
+replace: random drawing operations (blits with every ROP3, `AlphaBlend`,
+fills, shapes, text) over 32-bit, 1-bit and other DIBs and window DCs, with
+random clips, origins, colours and overlapping sources, each run on both paths
+from the same pixels and compared, plus a toolkit's whole repaint and the
+overlay's composition. `gdi_repaint_bench` times that repaint (a 1024x768
+back buffer, ~150 masked images, `AlphaBlend` panels, text, the `WM_PAINT`
+copy and the present) against a generous limit; `gdi_blit_tests bench N
+LIMIT_MS` prints the phases.
 `crt_tests` also replays a Windows 11 capture of the code page conversions
 (`runtime/tests/data/codepages_windows.tsv`, written by
 `tools/codepages/capture_win32.c` from `tools/codepages/vectors.txt`): every
