@@ -5231,9 +5231,30 @@ static void test_windowed_duration_pacing_selector() {
     else
         os_unsetenv("RECOMP_HOST_PRESENT_PACING");
 }
+// A drawable the display skipped (presentedTime 0: the window was still
+// being ordered in, or resizing for a mode change) is retired at the
+// deadline like a lost one, but it is not a fault: the display said so.
+static void test_windowed_skipped_drawable_is_not_a_fault() {
+    PresentFake fake;
+    host_present_test_begin(false, false);
+    host_present_test_seal(1, HOST_SCREEN_MENU, false);
+    CHECK(host_present_test_window_wake(0));
+    fake.commit();
+    fake.complete(); // presented, with a zero time: skipped
+    CHECK_EQ(host_present_unique_completed(), 0u);
+    host_present_test_seal(2, HOST_SCREEN_MENU, false);
+    CHECK(host_present_test_window_wake(3.0 / 60 - 0.00001, false, true));
+    CHECK_EQ(host_present_unique_completed(), 0u); // no premature acknowledgement
+    CHECK(host_present_test_window_wake(3.0 / 60, false, true));
+    CHECK_EQ(host_present_unique_completed(), 1u);
+    CHECK_EQ(host_present_faults(), 0u);
+    host_present_stop();
+}
 static void test_windowed_drawable_handler_and_completion_fallback() {
     for (bool missing : {false, true}) {
         PresentFake fake;
+        // A missing acknowledgement: the presented handler never runs.
+        fake.device.set_presented_on_complete(!missing);
         host_present_test_begin(false, false);
         host_present_test_seal(1, HOST_SCREEN_MENU, false);
         CHECK(host_present_test_window_wake(0));
@@ -6518,6 +6539,7 @@ static void test_presentation_service() {
     test_d3d11_sealed_presentation();
     test_windowed_first_blit_presents_without_prior_completion();
     test_windowed_drawable_handler_and_completion_fallback();
+    test_windowed_skipped_drawable_is_not_a_fault();
     test_windowed_duration_pacing_selector();
     test_presenter_menu_ui_and_movie_pixels();
     test_newest_sealed_wins_and_oldest_drops();

@@ -141,8 +141,12 @@ struct Service : std::enable_shared_from_this<Service> {
     // A queued drawable can take several refreshes to reach the display. The
     // old two-refresh deadline retired real frames before their positive
     // presented callbacks arrived, making the native FPS counter undercount.
+    // Counted in refreshes, but never shorter than a 60 Hz display's: on a
+    // 120 Hz display five refreshes are 42 ms, and a drawable shown 45 ms
+    // after submission (measured, while the window resizes for a mode
+    // change) is late, not lost.
     double acknowledgement_grace() const {
-        return (flight_limit + 2) * frame_period;
+        return (flight_limit + 2) * std::max(frame_period, 1.0 / 60);
     }
     AtomicShared<Message> message;
     std::atomic<int> drawable_w{640}, drawable_h{480};
@@ -348,8 +352,13 @@ struct Service : std::enable_shared_from_this<Service> {
         if (!f || f->released || f->dropped || f->shown || !f->gpu || !f->success ||
             ts < f->acknowledgement_deadline)
             return;
-        fault(4,
-              "drawable acknowledgement exceeded queue grace; using command completion fallback");
+        // A drawable the display skipped told us so (presentedTime 0): it was
+        // never going to be shown, which is not a lost acknowledgement. The
+        // window does it while it is ordered in, and on a mode or size
+        // change; only silence is a fault.
+        if (!f->skipped)
+            fault(4, "drawable acknowledgement exceeded queue grace; using command completion "
+                     "fallback");
         f->shown = true;
         f->completion_fallback = true;
         f->presented_ts = f->gpu_ts;
@@ -423,7 +432,9 @@ struct Service : std::enable_shared_from_this<Service> {
                                     if (ts > 0)
                                         service->ack_presented(f, ts);
                                     else {
+                                        // Not displayed: the drawable was skipped.
                                         std::lock_guard lock(service->mutex);
+                                        f->skipped = true;
                                         service->trace_ack(*f, "presented", ts);
                                     }
                                 }

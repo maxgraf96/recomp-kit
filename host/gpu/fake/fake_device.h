@@ -97,6 +97,12 @@ class FakeDevice final : public Device {
     }
     // Fire the presented callback of the most recent present with this time.
     void fire_presented(double presented_seconds);
+    // Whether a completed present reports itself (at the fake clock, 0 unless
+    // set: a drawable the display skipped). False models a presented handler
+    // that never runs at all - a lost acknowledgement.
+    void set_presented_on_complete(bool fire) {
+        presented_on_complete_ = fire;
+    }
     int live_textures() const;
 
   private:
@@ -134,6 +140,7 @@ class FakeDevice final : public Device {
     double clock_ = 0;
     int fail_allocations_ = 0;
     bool manual_completion_ = false;
+    bool presented_on_complete_ = true;
     CommandStatus completion_status_ = CommandStatus::Completed;
     double last_min_duration_ = -1;
     std::function<void(double)> last_presented_;

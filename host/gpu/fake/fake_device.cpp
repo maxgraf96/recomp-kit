@@ -350,11 +350,13 @@ void FakeDevice::present(CommandBuffer cb, Swapchain, Texture t, double min_dura
     auto self = this;
     commands_[cb.id].deferred_present = [self, presented, t] {
         double now;
+        bool fire;
         {
             std::lock_guard lock(self->mutex_);
             now = self->clock_;
+            fire = self->presented_on_complete_;
         }
-        if (presented)
+        if (presented && fire)
             presented(now);
         self->destroy(t);
     };
