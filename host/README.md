@@ -604,7 +604,7 @@ The windowed host reads `RECOMP_EXE` too, and adds:
 | `RECOMP_D3D11_SOFTWARE` | draw every Direct3D 11 call in the software rasterizer |
 | `RECOMP_INPUT_SCRIPT` | run this input script (`input_script.h`); the exit status is 7 when it did not finish |
 | `RECOMP_INPUT_SCRIPT_OUT` | where its `dump`s go (default: the script's path without its extension, plus `-frames`) |
-| `RECOMP_SCRIPT_BACKGROUND` | `1` with `RECOMP_INPUT_SCRIPT`: the script runs behind whatever is in front (`open -g`). The window is never raised, the game is told it has the focus whatever the window's, and the script keeps its own pointer position |
+| `RECOMP_SCRIPT_BACKGROUND` | `1` with `RECOMP_INPUT_SCRIPT`: the script runs behind whatever is in front (`open -g`). The window is never raised, the game is told it has the focus whatever the window's, the script keeps its own pointer (inside the window, moved by the game's `SetCursorPos`), and a game that holds its DirectInput mouse exclusively gets the script's motion as counts, as relative mode would give it |
 | `RECOMP_PRESENT_ACK_TRACE` | a CSV of every drawable's submission, GPU completion, presentation, skip and timeout |
 
 `RECOMP_LOG`, `RECOMP_IMPORT_STATS`, `RECOMP_CREATETHREAD` and the rest are the

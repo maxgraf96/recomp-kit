@@ -111,6 +111,7 @@ std::atomic<bool> g_relative{false}; // SDL relative mode is on (relative_mouse)
 // sampled under the baton in pump().
 std::atomic<bool> g_guest_pointer_hidden{false};
 bool relative_mouse_configured();
+bool script_in_background();
 bool g_focus_noted = false; // the focus has been reported to the runtime at least once
 bool g_focused = false;
 bool g_minimized = false; // minimised or hidden, as last reported
@@ -653,7 +654,10 @@ void apply_raw_motion(double dx, double dy) {
 }
 
 void handle_mouse_move(const SDL_MouseMotionEvent &motion) {
-    if (g_relative) {
+    // A script in the background moves a game that holds its mouse the way
+    // relative mode would, had the window the focus to take it: by counts.
+    if (g_relative ||
+        (script_in_background() && relative_mouse_configured() && g_guest_mouse_exclusive)) {
         PendingInput e;
         e.kind = PendingInput::RAW_MOTION;
         e.dx = motion.xrel;
@@ -1558,6 +1562,14 @@ class SdlScriptSink : public iscript::Sink {
         SDL_PushEvent(&e);
     }
 
+    // The guest moved the pointer (SetCursorPos): SDL reports a warp of the
+    // real pointer as a motion to the new place, so this one does too.
+    void warp(float x, float y) {
+        float cx = 0, cy = 0;
+        pointer(&cx, &cy);
+        push_motion(x, y, x - cx, y - cy);
+    }
+
   private:
     // Where the pointer is, in window points: SDL's, which follows the real
     // mouse. A script in the background keeps its own, starting in the middle
@@ -1580,6 +1592,22 @@ class SdlScriptSink : public iscript::Sink {
         *y = ty_;
     }
     void push_motion(float x, float y, float dx, float dy) {
+        if (script_in_background()) {
+            // Kept inside the window, as a real pointer stops at the screen's
+            // edge: motion past it moves the game's cursor no further, and
+            // the motion along the other axis still arrives.
+            float cx = 0, cy = 0;
+            pointer(&cx, &cy);
+            int bw = 0, bh = 0;
+            if (g_window)
+                SDL_GetWindowSize(g_window, &bw, &bh);
+            if (bw > 0 && bh > 0) {
+                x = std::clamp(x, 0.0f, float(bw - 1));
+                y = std::clamp(y, 0.0f, float(bh - 1));
+                dx = x - cx;
+                dy = y - cy;
+            }
+        }
         tx_ = x;
         ty_ = y;
         tracked_ = true;
@@ -1827,14 +1855,22 @@ void update_guest_cursor() {
         return;
     sdl_guest_cursor_update(host_guest_cursor_state());
     int32_t gx = 0, gy = 0;
-    if (g_relative || !host_take_cursor_warp(&gx, &gy) || !window_focused())
+    if (g_relative || !host_take_cursor_warp(&gx, &gy))
+        return;
+    // A script in the background moves its own pointer, as the warp would
+    // have moved the real one.
+    const bool background = script_in_background();
+    if (!window_focused() && !background)
         return;
     double dx = 0, dy = 0;
     int bw, bh, dw, dh;
     window_sizes(&bw, &bh, &dw, &dh);
     if (dw > 0 && dh > 0 && host_gate_guest_to_drawable(gx, gy, &dx, &dy)) {
         trace_state("SetCursorPos: warping the OS pointer");
-        SDL_WarpMouseInWindow(g_window, float(dx * bw / dw), float(dy * bh / dh));
+        if (background)
+            g_script_sink.warp(float(dx * bw / dw), float(dy * bh / dh));
+        else
+            SDL_WarpMouseInWindow(g_window, float(dx * bw / dw), float(dy * bh / dh));
     }
 }
 

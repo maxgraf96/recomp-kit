@@ -26,8 +26,10 @@
 - `RECOMP_SCRIPT_BACKGROUND=1` with `RECOMP_INPUT_SCRIPT` runs a windowed
   script behind whatever the person at the machine is using (`open -g`): the
   window is never raised, the game is told it has the focus whatever the
-  window's, and the script keeps its own pointer position (SDL tracks neither
-  an unfocused window nor pushed events). Before, a click elsewhere during a
+  window's, the script keeps its own pointer position (SDL tracks neither an
+  unfocused window nor pushed events: kept inside the window, moved by the
+  game's `SetCursorPos`), and a game holding its mouse exclusively gets the
+  motion as counts, as relative mode would give it. Before, a click elsewhere during a
   scripted run made the game unacquire its foreground DirectInput devices and
   the script's clicks stopped short.
 - `CreateFile` with `CREATE_NEW`, `CREATE_ALWAYS` or `TRUNCATE_EXISTING` creates
