@@ -14,6 +14,9 @@
   names' upper-case form), whatever order the host directory lists them in:
   a program that scans `*.dll` meets its plugins alphabetically, as on every
   Windows disk (APFS lists in hash order).
+- `RECOMP_GDI_DPI=N` makes `GetDeviceCaps(LOGPIXELSX/Y)` report N instead
+  of 96, to compare with Windows references taken by a DPI-aware process on
+  a high-DPI display.
 - Show a fullscreen DirectDraw 7 program's GDI windows over its last frame
   (`runtime/display_seam.h`), as a desktop compositor shows an owned popup -
   a game's lobby after `FlipToGDISurface` - instead of over black and

@@ -669,6 +669,20 @@ void g_GetDIBits(X86 *c) {
     set_eax(c, n);
 }
 
+// The screen's logical DPI: 96, what Windows tells a program that is not
+// DPI-aware whatever the display. RECOMP_GDI_DPI sets another, for comparing
+// with a Windows machine whose program was made DPI-aware on a high-DPI
+// display (a wrapper calling SetProcessDpiAwarenessContext there gets, say,
+// 144 at 150 %), where text sized from LOGPIXELSY comes out smaller.
+static uint32_t logical_dpi() {
+    static const uint32_t dpi = [] {
+        const char *v = recomp_env("GDI_DPI");
+        const long n = v ? strtol(v, nullptr, 10) : 0;
+        return n >= 48 && n <= 960 ? uint32_t(n) : 96u;
+    }();
+    return dpi;
+}
+
 // Report the display dimensions and 32-bit canvas capabilities. The indexed
 // DirectDraw palette size remains available to existing palette clients.
 void g_GetDeviceCaps(X86 *c) {
@@ -679,9 +693,9 @@ void g_GetDeviceCaps(X86 *c) {
     case 2:
         value = 1;
         break;
-    case 88:
-    case 90:
-        value = 96;
+    case 88: // LOGPIXELSX
+    case 90: // LOGPIXELSY
+        value = logical_dpi();
         break;
     case 8: // HORZRES
         value = w;
