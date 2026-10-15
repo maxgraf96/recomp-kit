@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Stage the toolchain an app needs to translate on the player's Mac
+  (`tools/toolchain/stage.py --out DIR`): CPython from python-build-standalone
+  with capstone and pefile, trimmed and precompiled; clang and lld built from
+  the LLVM source release as one AArch64-only binary with ThinLTO and a PGO
+  profile trained on the translator's synthetic vocabulary (76 MB, as fast as
+  Homebrew's and giving byte-identical bundles); every licence text the app
+  must carry (`THIRD_PARTY_NOTICES.txt`); a manifest. Every input is pinned by
+  SHA-256 (`tools/toolchain/pins.json`, README there). `bundle.py` passes
+  `--no-default-config` and keeps `SDKROOT`, `CPATH` and the like out of the
+  compiler's environment, so no SDK is looked up and a bundle is the same
+  whoever builds it.
 - Play DirectMusic for a game that opts in (`[runtime] dmusic` in game.toml):
   the DirectX 6.1/7 loader, performance, port, segment, segment state, style
   and composer interfaces (`dx/dmusic.cpp`) over GothicKit/dmusic, vendored
