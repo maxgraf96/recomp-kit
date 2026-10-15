@@ -1,7 +1,16 @@
-# pop_mac_bundle(<target>): make <target> a .app in build/, named by
+# pop_mac_bundle(<target> [PLAYER]): make <target> a .app in build/, named by
 # RECOMP_APP_NAME, with Info.plist copied verbatim and the resources,
 # core mods, texture pack and ad-hoc signature applied after the link.
+# PLAYER (the player host) puts it in build/player/ instead, with nothing from
+# the build root: no symbols.json, no texture pack.
 function(pop_mac_bundle target)
+  cmake_parse_arguments(ARG "PLAYER" "" "" ${ARGN})
+  set(bundle_dir ${POP_BUILD_DIR})
+  set(player_args)
+  if(ARG_PLAYER)
+    set(bundle_dir ${POP_BUILD_DIR}/player)
+    set(player_args --player)
+  endif()
   # Core plugins are compiled during bundle finishing. Relink/repackage when
   # their source or manifests change, even if the host itself is unchanged.
   file(GLOB_RECURSE core_inputs CONFIGURE_DEPENDS
@@ -14,7 +23,7 @@ function(pop_mac_bundle target)
   set_target_properties(${target} PROPERTIES
     MACOSX_BUNDLE ON
     OUTPUT_NAME ${RECOMP_APP_NAME}
-    RUNTIME_OUTPUT_DIRECTORY ${POP_BUILD_DIR}
+    RUNTIME_OUTPUT_DIRECTORY ${bundle_dir}
     MACOSX_BUNDLE_INFO_PLIST ${CMAKE_BINARY_DIR}/generated/Info.plist)
   set(video_args)
   if(RECOMP_VIDEO)
@@ -33,11 +42,11 @@ function(pop_mac_bundle target)
     ${POP_ROOT}/tools/recomp/finish_bundle.py)
   add_custom_command(TARGET ${target} POST_BUILD
     COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/tools/recomp/finish_bundle.py
-            --bundle ${POP_BUILD_DIR}/${RECOMP_APP_NAME}.app
+            --bundle ${bundle_dir}/${RECOMP_APP_NAME}.app
             --name ${RECOMP_APP_NAME} --cc ${CMAKE_C_COMPILER} --version ${POP_RECOMP_VERSION}
             --build-root ${POP_BUILD_ROOT} --game-dir ${RECOMP_GAME_DIR}
-            ${video_args}
+            ${video_args} ${player_args}
     WORKING_DIRECTORY ${POP_ROOT}
-    COMMENT "Finishing ${RECOMP_APP_NAME}.app"
+    COMMENT "Finishing ${bundle_dir}/${RECOMP_APP_NAME}.app"
     VERBATIM)
 endfunction()

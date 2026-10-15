@@ -1,6 +1,7 @@
 """tools/build.py argument handling and CMake invocation, without CMake or game files."""
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 import unittest
@@ -111,6 +112,20 @@ class BuildPyTests(unittest.TestCase):
             build_py.parse_args(["--target", "ios", "--team", "T"], system="Linux")
         with self.assertRaises(SystemExit):
             build_py.parse_args(["--target", "ios"], system="Darwin")  # no team
+
+    def test_player_target_uses_a_tree_without_a_translation(self):
+        args, _ = build_py.parse_args(["--target", "player"], system="Darwin")
+        self.assertEqual(build_py.preset_name(args.preset, args.config, target=args.target), "macos-player")
+        self.assertNotIn("player", build_py.NEEDS_GEN)
+        self.assertEqual(build_py.TARGETS["player"], ["recomp_player"])
+        presets = json.loads((Path(__file__).parents[1] / "CMakePresets.json").read_text())
+        player = next(p for p in presets["configurePresets"] if p["name"] == "macos-player")
+        self.assertEqual(player["cacheVariables"]["POP_TRANSLATE"], "OFF")
+        for argv in (["--target", "player", "--stub"], ["--target", "player", "--regenerate"]):
+            with self.assertRaises(SystemExit):
+                build_py.parse_args(argv, system="Darwin")
+        with self.assertRaises(SystemExit):
+            build_py.parse_args(["--target", "player"], system="Linux")
 
     def test_run_translator_translates_each_auxiliary_module_into_its_own_directory(self):
         import tempfile

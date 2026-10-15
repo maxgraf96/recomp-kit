@@ -27,6 +27,9 @@
 #include "../../runtime/display_seam.h"
 #include "../d3d_render.h"
 #include "../game_path.h"
+#ifdef RECOMP_PLAYER_HOST
+#include "../code_dir.h"
+#endif
 #include "../launcher/launcher_sdl.h"
 #include "../gpu/gpu_factory.h"
 #include "../input.h"
@@ -2165,10 +2168,18 @@ int main(int argc, char **argv) {
     options.deadline_seconds = 0.0;
     options.close_unwind_grace = 15.0;
     options.close_watchdog_grace = 30.0;
+#ifdef RECOMP_PLAYER_HOST
+    // No translation is linked in: the game's own first run built it
+    // (host/code_dir.h).
+    options.load_code = code_dir_load_env;
+#endif
 
     if (!boot_load(options)) {
         host_present_stop();
-        fprintf(stderr, RECOMP_APP_NAME ": %s\n", loader_error());
+        fprintf(stderr, RECOMP_APP_NAME ": %s\n", boot_error());
+#ifdef RECOMP_PLAYER_HOST
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, RECOMP_GAME_NAME, boot_error(), g_window);
+#endif
         return 2;
     }
     printf(RECOMP_APP_NAME ": %s, entry %08x\n", loader_exe_path().c_str(), loader_entry_point());

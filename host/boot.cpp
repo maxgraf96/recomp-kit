@@ -34,6 +34,7 @@ bool g_close_posted = false;
 double g_close_time = 0.0;
 bool g_forced_stop = false;
 const char *g_stop_reason = "guest returned from its entry point";
+std::string g_boot_error; // boot_load's own reason; empty means the loader's
 
 // The last-resort unwind out of guest code. The jmp_buf belongs to boot_run's
 // stack, so only the thread that called setjmp may use it: a guest thread that
@@ -461,9 +462,41 @@ void load_extra_code() {
     }
 }
 
+namespace {
+
+// BootOptions::load_code, then the check a host without an image table
+// needs: something translated the entry point it is about to run.
+bool load_host_code() {
+    if (!g_opt.load_code)
+        return true;
+    if (!g_opt.load_code(&g_boot_error)) {
+        if (g_boot_error.empty())
+            g_boot_error = "the translated code did not load";
+        return false;
+    }
+    const uint32_t entry = loader_entry_point();
+    if (recomp_module_lookup(entry) < 0 && recomp_index_of(entry) < 0) {
+        char buf[96];
+        snprintf(buf, sizeof buf, "%08x", entry);
+        g_boot_error = std::string("No translated code for ") + loader_exe_path() +
+                       " (its entry point " + buf +
+                       " is in no loaded module). This host links no translation: name the "
+                       "game's built code with RECOMP_CODE_DIR (or RECOMP_EXTRA_CODE).";
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+const char *boot_error() {
+    return g_boot_error.empty() ? loader_error() : g_boot_error.c_str();
+}
+
 bool boot_load(const BootOptions &opts) {
     g_opt = opts;
     g_window_next_ns = g_primary_present_ns = 0;
+    g_boot_error.clear();
 
     mem_init();
     const char *exe = g_opt.exe;
@@ -472,6 +505,8 @@ bool boot_load(const BootOptions &opts) {
     if (!loader_load(exe))
         return false;
     load_extra_code();
+    if (!load_host_code())
+        return false;
     dx_register_shims();
 
     // GetTickCount and timeGetTime keep telling the truth; installing the

@@ -82,6 +82,14 @@
       }
     },
     {
+      "name": "macos-player",
+      "inherits": "macos",
+      "cacheVariables": {
+        "POP_TRANSLATE": "OFF",
+        "RECOMP_NO_DEVELOPER_PATHS": "ON"
+      }
+    },
+    {
       "name": "linux-stub",
       "inherits": "linux",
       "cacheVariables": {
@@ -203,6 +211,10 @@
     {
       "name": "macos-stub",
       "configurePreset": "macos-stub"
+    },
+    {
+      "name": "macos-player",
+      "configurePreset": "macos-player"
     },
     {
       "name": "linux-stub",

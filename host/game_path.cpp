@@ -64,9 +64,12 @@ GamePath game_path_resolve(const char *flag, const char *data_root) {
         g.source = GamePathSource::Environment;
         return g;
     }
+#ifndef RECOMP_PLAYER_HOST
     // The build's own copy of the game: game.toml names it by an absolute
     // path (a game repository's original/), so it is found from wherever the
-    // app runs; a relative spelling is taken from the checkout root.
+    // app runs; a relative spelling is taken from the checkout root. A player
+    // host never looks there: it is built to be given away, and the
+    // developer's path means nothing on a player's Mac.
     const HostLayout &l = host_layout();
     std::string candidate = RECOMP_DEVELOPER_EXE;
     if (candidate.empty() || candidate[0] != '/')
@@ -77,6 +80,7 @@ GamePath game_path_resolve(const char *flag, const char *data_root) {
         g.source = GamePathSource::Checkout;
         return g;
     }
+#endif
     if (FILE *f = fopen(saved_file().c_str(), "rb")) {
         char line[4096] = {0};
         if (fgets(line, sizeof line, f)) {

@@ -35,6 +35,16 @@ class LoadTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "cd_tracks"):
                     game_config.load(game)
 
+    def test_a_build_to_give_away_has_no_developer_paths(self):
+        cfg = game_config.load(ROOT / "games/stub")
+        local = str(ROOT)
+        self.assertIn(local, gen_game_config.render_header(cfg))
+        header = gen_game_config.render_header(cfg, developer_paths=False)
+        self.assertNotIn(local, header)
+        for macro in ("RECOMP_DEVELOPER_EXE", "RECOMP_DEVELOPER_GAME_DIR", "RECOMP_GAME_DIR",
+                      "RECOMP_KIT_DIR"):
+            self.assertIn('#define %s ""' % macro, header)
+
     def test_offline_hosts_render_and_reject_non_names(self):
         with tempfile.TemporaryDirectory() as tmp:
             game = Path(tmp)

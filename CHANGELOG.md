@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Build the windowed app with no translation in it, for a game to give away
+  (`tools/build.py --target player` → `build/player/<app>.app`, CMake target
+  `recomp_player`, preset `macos-player`). It loads the bundles a first run
+  built on the player's machine from `RECOMP_CODE_DIR` (`build.json`'s
+  `load_order`, `host/code_dir.h`) and reads `symbols.json` from there or from
+  `RECOMP_SYMBOLS`; a missing, broken or empty bundle, or an entry point
+  nothing translated, stops the boot with a message instead of failing at the
+  first guest call (`BootOptions::load_code`, `boot_error()`). It never looks
+  for the developer's game copy, its tree compiles in none of the building
+  machine's paths (`RECOMP_NO_DEVELOPER_PATHS`, `gen_game_config.py
+  --no-developer-paths`), and `finish_bundle.py --player` gives it no
+  `symbols.json` or texture pack. `player_host_tests` checks the binary has no
+  translated symbol and only the runtime's weak image table; `code_dir_tests`
+  checks the loading and every refusal.
+
 - Stage the toolchain an app needs to translate on the player's Mac
   (`tools/toolchain/stage.py --out DIR`): CPython from python-build-standalone
   with capstone and pefile, trimmed and precompiled; clang and lld built from

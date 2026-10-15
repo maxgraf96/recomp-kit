@@ -20,6 +20,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include <string>
+
 struct BootOptions {
     // Image to load. Null means RECOMP_EXE, then the loader's default.
     const char *exe = nullptr;
@@ -82,12 +84,23 @@ struct BootOptions {
     // return, and by boot when the watchdog or a fault ends the run, so a run
     // always reports. `abnormal` is true on those two paths.
     void (*report)(FILE *out, bool abnormal) = nullptr;
+
+    // Loads translated code the host does not link, once the image is mapped
+    // (after RECOMP_EXTRA_CODE). A host that sets it carries no image table of
+    // its own - the player host's is code_dir_load_env (host/code_dir.h) - so
+    // boot_load then also refuses an image whose entry point no translation
+    // covers, instead of failing at the first guest call. False, with *error
+    // for a person, stops the boot; boot_error() says why.
+    bool (*load_code)(std::string *error) = nullptr;
 };
 
 // mem_init, loader_load, dx_register_shims, the time source, the message
-// waiter and loader_init_context. False means the image did not load;
-// loader_error() says why. Must be called before boot_run().
+// waiter and loader_init_context. False means the image did not load, or
+// (with BootOptions::load_code) its translation did not; boot_error() says why. Must be called before boot_run().
 bool boot_load(const BootOptions &opts);
+// Why boot_load returned false: its own reason (BootOptions::load_code), else
+// loader_error().
+const char *boot_error();
 
 // Installs the signal handlers, starts the watchdog, and runs the guest from
 // its PE entry point. Returns when the guest returns, when it calls

@@ -87,11 +87,19 @@ endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   ${RECOMP_GAME_DIR}/game.toml ${RECOMP_GAME_DIR}/globals.toml
   ${POP_ROOT}/tools/gen_game_config.py ${POP_ROOT}/tools/game_config.py)
+# A build to give away (the macos-player preset: the player host) carries no
+# path of the machine that built it.
+option(RECOMP_NO_DEVELOPER_PATHS "Leave this machine's paths out of game_config.h" OFF)
+set(RECOMP_GAME_CONFIG_ARGS)
+if(RECOMP_NO_DEVELOPER_PATHS)
+  set(RECOMP_GAME_CONFIG_ARGS --no-developer-paths)
+endif()
 execute_process(
   COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/tools/gen_game_config.py
           --game-dir ${RECOMP_GAME_DIR}
           --header ${CMAKE_BINARY_DIR}/generated/game_config.h
           --cmake ${CMAKE_BINARY_DIR}/generated/game_config.cmake
+          ${RECOMP_GAME_CONFIG_ARGS}
   RESULT_VARIABLE RECOMP_GAME_CONFIG_RESULT)
 if(NOT RECOMP_GAME_CONFIG_RESULT EQUAL 0)
   message(FATAL_ERROR "tools/gen_game_config.py failed for ${RECOMP_GAME_DIR}")

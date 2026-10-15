@@ -35,12 +35,15 @@ TARGETS = {
     "fixture": ["pop_fixture"],
     "gen": ["recomp_gen"],
     "bundles": ["recomp_bundles"],
+    # The windowed app with no translation, for a game's first-run app
+    # (host/README.md "The player host"); its own tree has none to link.
+    "player": ["recomp_player"],
     "plugins": ["plugins"],
     "ios": ["recomp_app"],
     "android": ["recomp_app"],
     "web": ["recomp_app"],
 }
-MACOS_ONLY = {"ios"}
+MACOS_ONLY = {"ios", "player"}
 NEEDS_GEN = {"app", "smoke", "headless", "fixture", "gen", "bundles", "ios", "android", "web"}
 # Targets with presets of their own, whatever the host system.
 OWN_PRESET = {"ios", "android", "web"}
@@ -55,6 +58,9 @@ def preset_name(preset, config, stub=False, target=None):
     """Debug, stub, mobile and web builds use separate presets and binary directories."""
     if target in OWN_PRESET:
         return target + "-stub" if stub else target
+    if target == "player":
+        # POP_TRANSLATE=OFF: a tree with no generated code at all.
+        return preset + "-player"
     if stub:
         return preset + "-stub"
     return preset if config == "Release" else preset + "-debug"
@@ -430,6 +436,8 @@ def parse_args(argv, system=None):
         parser.error("--target ios needs --team or RECOMP_IOS_TEAM")
     if args.stub and (args.config == "Debug" or args.regenerate):
         parser.error("--stub cannot be combined with --config Debug or --regenerate")
+    if args.target == "player" and (args.stub or args.regenerate):
+        parser.error("--target player links no translation: no --stub, no --regenerate")
     if not args.game_dir.is_absolute():
         parser.error("--game-dir must be absolute: %s" % args.game_dir)
     if not (args.game_dir / "game.toml").is_file():

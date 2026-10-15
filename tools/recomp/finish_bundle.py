@@ -51,6 +51,9 @@ def main():
     parser.add_argument("--pack", type=Path, default=None)
     parser.add_argument("--ffmpeg-library", type=Path, action="append", default=[],
                         help="FFmpeg shared library to copy into Contents/Frameworks (repeatable)")
+    parser.add_argument("--player", action="store_true",
+                        help="the player host: nothing from the build root (no symbols.json, no "
+                             "texture pack); its translation is built on the player's machine")
     args = parser.parse_args()
     if args.pack is None:
         args.pack = Path(os.environ.get("RECOMP_TEXTURE_PACK_DIR") or args.build_root / "texture-pack")
@@ -69,8 +72,13 @@ def main():
     # The game's shipped on-screen control layouts, when it has any (spec section 5).
     copy_layouts.copy_layouts(args.game_dir, resources / "controls")
     # The translation index the mod loader reads, when this build has one.
+    # A player host's is written beside the bundles on the player's machine
+    # (RECOMP_CODE_DIR), and the build root's never ships with it.
     fresh = args.build_root / "recomp/symbols.json"
-    if fresh.is_file():
+    if args.player:
+        (resources / "symbols.json").unlink(missing_ok=True)
+        print("finish_bundle: the player host carries no symbols.json")
+    elif fresh.is_file():
         shutil.copy(fresh, resources / "symbols.json")
     else:
         # A stub build has no translation and therefore no symbol table; the
@@ -80,7 +88,7 @@ def main():
     if core.is_dir():
         subprocess.run([sys.executable, str(ROOT / "tools/recomp/build_core.py"), "--source", str(core),
                         "--dest", str(resources / "mods/core"), "--cc", args.cc], check=True, cwd=ROOT)
-    if (args.pack / "manifest.json").is_file():
+    if not args.player and (args.pack / "manifest.json").is_file():
         subprocess.run([sys.executable, str(ROOT / "tools/recomp/package_texture_pack.py"),
                         str(args.pack), str(resources / "texture-pack")], check=True, cwd=ROOT)
     bundle_ffmpeg(contents, args.ffmpeg_library)

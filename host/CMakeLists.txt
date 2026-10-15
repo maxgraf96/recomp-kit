@@ -218,6 +218,16 @@ else()
   set(POP_PLATFORM_UI ${HOST}/sdl/platform_ui_desktop.cpp ${HOST}/launcher/launcher_platform_desktop.cpp)
 endif()
 
+# The windowed app's sources: recomp_app, and the player host below.
+set(POP_APP_SOURCES ${HOST}/sdl/main.cpp ${HOST}/sdl/keymap.cpp ${POP_PLATFORM_UI} ${POP_LAUNCHER_SOURCES}
+                    ${HOST}/controls/controls_host.cpp ${HOST}/controls/gamepad_sdl.cpp
+                    ${HOST}/controls/vpad_host_api.cpp
+                    ${HOST}/game_path.cpp ${HOST}/present.cpp
+                    ${HOST}/page_overlay.cpp
+                    ${POP_PRESENT_SOURCES}
+                    ${HOST}/input.cpp ${HOST}/input_gate.cpp ${HOST}/input_touch.cpp ${POP_AUDIO_SOURCES}
+                    ${HOST}/input_script.cpp ${HOST}/input_script_host.cpp)
+
 if(TARGET recomp_gen)
   if(NOT IOS AND NOT ANDROID)
   pop_host(pop_headless GEN
@@ -248,14 +258,7 @@ if(TARGET recomp_gen)
   endif()
 
   pop_host(recomp_app GEN UI_LAYER OPT 2
-    SOURCES ${HOST}/sdl/main.cpp ${HOST}/sdl/keymap.cpp ${POP_PLATFORM_UI} ${POP_LAUNCHER_SOURCES}
-            ${HOST}/controls/controls_host.cpp ${HOST}/controls/gamepad_sdl.cpp
-            ${HOST}/controls/vpad_host_api.cpp
-            ${HOST}/game_path.cpp ${HOST}/present.cpp
-            ${HOST}/page_overlay.cpp
-            ${POP_PRESENT_SOURCES}
-            ${HOST}/input.cpp ${HOST}/input_gate.cpp ${HOST}/input_touch.cpp ${POP_AUDIO_SOURCES}
-            ${HOST}/input_script.cpp ${HOST}/input_script_host.cpp
+    SOURCES ${POP_APP_SOURCES}
     LIBS ${POP_CORE_LIBS}
     FRAMEWORKS ${FW_METAL})
   pop_link_sdl(recomp_app)
@@ -319,6 +322,52 @@ if(TARGET recomp_gen)
     add_test(NAME present_events_tests COMMAND present_events_tests ${POP_BUILD_ROOT}/.. WORKING_DIRECTORY ${POP_ROOT})
     set_tests_properties(present_events_tests PROPERTIES LABELS mods ENVIRONMENT RECOMP_GAME_DIR=${RECOMP_GAME_DIR})
   endif()
+endif()
+
+# The player host (README "The player host"): the windowed app with no
+# translation linked in, built whether or not this tree has one. A game's
+# first run compiles the player's own copy into freestanding bundles, and
+# RECOMP_CODE_DIR names them (host/code_dir.h); the host never looks for a
+# developer's game copy. <build>/player/<app>.app carries no symbols.json and
+# no texture pack, for the game's packager to finish (tools/build.py
+# --target player). player_host_tests checks it links no translated code.
+if(APPLE AND NOT IOS AND NOT ANDROID AND NOT EMSCRIPTEN)
+  pop_host(recomp_player UI_LAYER OPT 2
+    SOURCES ${POP_APP_SOURCES} ${HOST}/code_dir.cpp
+    LIBS ${POP_CORE_LIBS}
+    FRAMEWORKS ${FW_METAL})
+  pop_link_sdl(recomp_player)
+  target_compile_definitions(recomp_player PRIVATE RECOMP_PLAYER_HOST=1)
+  pop_mac_bundle(recomp_player PLAYER)
+  pop_test_binary(recomp_player)
+  add_test(NAME player_host_tests
+    COMMAND ${Python3_EXECUTABLE} -m unittest ${POP_ROOT}/tools/recomp/tests/test_player_host.py
+    WORKING_DIRECTORY ${POP_ROOT})
+  set_tests_properties(player_host_tests PROPERTIES LABELS nogame
+    ENVIRONMENT "RECOMP_PLAYER_HOST_BINARY=$<TARGET_FILE:recomp_player>")
+
+  # The code directory on its own: build.json, the load order, the refusals,
+  # and symbols.json's lookup, with two stand-in bundles.
+  foreach(fixture code_dir_fixture code_dir_fixture_empty)
+    add_library(${fixture} MODULE ${HOST}/tests/code_dir_fixture.c)
+    target_include_directories(${fixture} PRIVATE ${POP_ROOT})
+    target_link_options(${fixture} PRIVATE -undefined dynamic_lookup)
+    set_target_properties(${fixture} PROPERTIES PREFIX "" SUFFIX ".bundle"
+      LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/code-dir-fixtures)
+  endforeach()
+  target_compile_definitions(code_dir_fixture_empty PRIVATE CODE_DIR_FIXTURE_EMPTY=1)
+  add_executable(code_dir_tests ${HOST}/tests/code_dir_tests.cpp ${HOST}/code_dir.cpp
+                                ${HOST}/controls/json.cpp)
+  target_include_directories(code_dir_tests PRIVATE ${POP_ROOT} ${HOST})
+  target_link_libraries(code_dir_tests PRIVATE recomp_platform recomp_runtime)
+  target_compile_options(code_dir_tests PRIVATE ${POP_WARN_HOST})
+  add_dependencies(code_dir_tests code_dir_fixture code_dir_fixture_empty)
+  pop_optimize(code_dir_tests 1)
+  pop_test_binary(code_dir_tests)
+  add_test(NAME code_dir_tests
+    COMMAND code_dir_tests $<TARGET_FILE:code_dir_fixture> $<TARGET_FILE:code_dir_fixture_empty>
+    WORKING_DIRECTORY ${POP_ROOT})
+  set_tests_properties(code_dir_tests PROPERTIES LABELS nogame)
 endif()
 
 # Host tests: offscreen GPU work and the mixer rendered offline, no window and

@@ -110,6 +110,17 @@ const HostLayout &host_layout() {
 
 std::string host_resource(const char *rel) {
     const HostLayout &l = host_layout();
+    // A translation built outside the app (the player host's first run,
+    // host/code_dir.h) keeps its index beside its bundles: RECOMP_SYMBOLS
+    // names the file, else RECOMP_CODE_DIR's symbols.json.
+    if (strcmp(rel, "symbols.json") == 0) {
+        const char *symbols = recomp_env("SYMBOLS");
+        if (symbols && *symbols)
+            return symbols;
+        const char *code = recomp_env("CODE_DIR");
+        if (code && *code)
+            return std::string(code) + "/symbols.json";
+    }
     if (l.resources_dir.empty())
         return "";
     // The regenerated translation's index, beside the shared gen/.

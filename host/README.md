@@ -19,6 +19,7 @@ startup and never runs `WinMain`.
 | file | contents |
 | --- | --- |
 | `boot.{h,cpp}` | the boot sequence all hosts share: the load, the heartbeat, the activation, the close, the unwind, the watchdog, the fault handler |
+| `code_dir.{h,cpp}` | the player host's translated code: `RECOMP_CODE_DIR`'s `build.json` load order, each bundle `dlopen`ed and checked to register |
 | `report_lock.cpp` | the one mutex a host's run bookkeeping is written under |
 | `headless_main.cpp` | the frame-writing host and its caps |
 | `sdl/main.cpp` | the window, the SDL event pump and the lifetime |
@@ -435,6 +436,45 @@ game that scales by the smallest count it has seen converges in two steps.
 Frame dumps are capped (64 a run by default): a dump directory that fills a
 disk is a dump directory nobody reads. `input_script_tests` runs the language
 against a simulated game.
+
+## The player host
+
+`recomp_player` (`tools/build.py --target player` →
+`build/player/<app>.app`) is the windowed app with **no translation linked
+in**: the host, the runtime, the shims and the mod foundation, and none of the
+game's code. It is what a game gives away. The player's own copy of the game is
+translated and compiled on their machine (`tools/recomp/bundle.py`: one
+freestanding bundle per module, no SDK), and the host loads the result:
+
+| variable | effect |
+| --- | --- |
+| `RECOMP_CODE_DIR` | a directory holding `build.json` and the bundles it names in `"load_order"` (the image's last); each is `dlopen`ed in that order and must register a module (`code_dir.h`) |
+| `RECOMP_SYMBOLS` | the translation index (`symbols.json`) for the mods' symbol table; default `$RECOMP_CODE_DIR/symbols.json` (`runtime/layout.cpp`). The app's `Resources/` never holds one |
+| `RECOMP_EXTRA_CODE` | as in every host: more libraries of translated code, colon-separated |
+
+- **It fails before the game starts, saying why.** A missing or malformed
+  `build.json`, a name that is not a plain file name, a missing bundle, one that
+  does not load, or one that registers nothing stops `boot_load`
+  (`BootOptions::load_code`, `boot_error()`), and so does an image whose entry
+  point no loaded module covers (no code directory at all, say). The host prints
+  the reason and shows it in a message box.
+- **No developer paths.** It never looks for the developer's game copy
+  (`RECOMP_PLAYER_HOST` in `game_path.cpp`), and its build tree
+  (`macos-player`: `POP_TRANSLATE=OFF`, `RECOMP_NO_DEVELOPER_PATHS=ON`)
+  compiles none of the building machine's paths into `game_config.h`. The game
+  is `RECOMP_EXE`, the `--exe` flag or the profile's `game-path.txt`.
+- **No translation can leak in:** its tree has no generated code at all, and
+  `player_host_tests` (`tools/recomp/tests/test_player_host.py`) checks the
+  binary: no `fn_<address>`/`body_<address>` symbol, the image table only the
+  runtime's weak empty one (`runtime/dispatch.cpp`), no `symbols.json` or
+  texture pack in the bundle (`finish_bundle.py --player`), and it starts
+  (`--version`, `--probe-layout`) with nothing to translate.
+- `code_dir_tests` runs the code directory against two stand-in bundles (one
+  registers a module, one registers nothing): every refusal and its message,
+  the load order, `code_dir_load_env`, and where `symbols.json` is found.
+- A game adds its own sources the way it does for `recomp_app`
+  (`target_sources(recomp_player ...)` from its `mods/CMakeLists.txt`), and
+  dresses the `.app`: its first-run launcher, the toolchain, the signature.
 
 ## Tests
 
