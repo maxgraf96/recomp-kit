@@ -17,10 +17,10 @@
   reported the focus is not made focused silently, so it gets the
   `WM_SETFOCUS` its activation owes it. `SetTimer(hwnd, 0, ...)` keeps id 0;
   `DefWindowProc(WM_CLOSE)` no longer posts `WM_QUIT` while a top-level
-  window remains; `CS_DBLCLKS` classes get `WM_xBUTTONDBLCLK`; `WM_MOUSEWHEEL`
-  goes to the focus window with screen coordinates; `GWL_HWNDPARENT` sets a
-  top-level window's owner. Closing the app sends `WM_CLOSE` to the window on
-  top that the main window owns (a lobby, a dialog) before the main window.
+  window is shown; `CS_DBLCLKS` classes get `WM_xBUTTONDBLCLK`; `WM_MOUSEWHEEL`
+  goes to the focus window with screen coordinates. Closing the app sends
+  `WM_CLOSE` to the window on top that the main window owns (a lobby, a
+  dialog) before the main window.
 - Scripted input: `pointer system` (absolute positions routed by
   `WindowFromPoint`, from that step on) and `type TEXT`; a script's frames
   include the GDI windows over a DirectDraw frame.

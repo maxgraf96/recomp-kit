@@ -889,14 +889,9 @@ void u_SetWindowLongA(X86 *c) {
         old = w->hinstance;
         w->hinstance = v;
         break;
-    case -8: // GWL_HWNDPARENT: a child's parent, a top-level window's owner
-        if (w->style & 0x40000000u) {
-            old = w->parent;
-            w->parent = v;
-        } else {
-            old = w->owner;
-            w->owner = v;
-        }
+    case -8:
+        old = w->parent;
+        w->parent = v;
         display_layers_changed();
         break;
     case -12:
@@ -1412,13 +1407,14 @@ void def_window_proc(X86 *c, bool wide) {
     case 0x0010: { // WM_CLOSE -> DestroyWindow
         // Windows posts no WM_QUIT here: a program quits from its own
         // WM_DESTROY. One that never does would sit on Windows with no window
-        // at all, so when the last top-level window of the program is gone
-        // the runtime ends its loop for it; while another remains (the owner
-        // of a closed dialog or lobby), the program carries on as on Windows.
+        // on screen, so when the last visible top-level window of the program
+        // is gone the runtime ends its loop for it; while another is shown
+        // (the owner of a closed dialog or lobby), the program carries on as
+        // on Windows.
         destroy_window(c, hwnd);
         bool any_top = false;
         for (const auto &kv : windows())
-            if (!kv.second.parent && kv.first != desktop_handle) {
+            if (!kv.second.parent && kv.second.visible && kv.first != desktop_handle) {
                 any_top = true;
                 break;
             }
