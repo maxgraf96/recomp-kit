@@ -565,8 +565,16 @@ static void test_event_select() {
     ws("WSAEnumNetworkEvents", {a3, ev_b, netev});
     ws("send", {c3, gstr("abc"), 3, 0});
     check(wait(ev_b, 2000) == 0, "the accepted socket signals the inherited event");
-    check(ws("WSAEnumNetworkEvents", {a3, ev_b, netev}) == 0 && rd32(netev) == FD_READ,
-          "with FD_READ (%#x)", rd32(netev));
+    // The listener shares the event, so the signal can come before the data
+    // has reached the accepted socket: look until its FD_READ is recorded.
+    uint32_t seen = 0;
+    for (int i = 0; i < 40 && !(seen & FD_READ); ++i) {
+        if (ws("WSAEnumNetworkEvents", {a3, ev_b, netev}) == 0)
+            seen |= rd32(netev);
+        if (!(seen & FD_READ))
+            wait(ev_b, 50);
+    }
+    check(seen == FD_READ, "with FD_READ (%#x)", seen);
     // FD_CONNECT, FD_WRITE, FD_READ and FD_CLOSE through WSAEnumNetworkEvents.
     uint32_t ec = make_event(true);
     uint32_t cl = tcp();
