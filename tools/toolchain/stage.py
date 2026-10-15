@@ -78,12 +78,13 @@ def build_llvm(cache, work, jobs, nice, use_pgo, profile, keep_build):
         if not keep_build:
             shutil.rmtree(instr)
             shutil.rmtree(work / "pgo" / "objects")
+            shutil.rmtree(work / "pgo" / "corpus")
     if not use_pgo:
         final = work / "build-thinlto"
         profile = None
     log("LLVM, %s build" % ("ThinLTO + PGO" if profile else "ThinLTO"))
     llvm.build(source, final, jobs, nice, profile=profile)
-    return final
+    return final, profile
 
 
 def manifest(out):
@@ -124,7 +125,7 @@ def stage(out, cache, work, jobs, nice, use_pgo=True, profile=None, keep_build=F
     work.mkdir(parents=True, exist_ok=True)
     log("Python")
     python_runtime.stage(cache, out / "python")
-    build_dir = build_llvm(cache, work, jobs, nice, use_pgo, profile, keep_build)
+    build_dir, profile = build_llvm(cache, work, jobs, nice, use_pgo, profile, keep_build)
     log("LLVM, staging")
     llvm.stage(build_dir, out / "llvm", work / "probe")
     if not keep_build:
@@ -139,6 +140,9 @@ def stage(out, cache, work, jobs, nice, use_pgo=True, profile=None, keep_build=F
     record = {"schema": "recomp-toolchain/1",
               "llvm": {"version": pins["llvm"]["version"], "source": pins["llvm"]["source"],
                        "pgo": bool(use_pgo), "targets": "AArch64",
+                       # Training is not bit-for-bit repeatable; the build from a profile is.
+                       # Keep this profile to rebuild the same binary (stage.py --profile).
+                       "profile_sha256": fetch.sha256_of(profile) if profile else None,
                        "deployment_target": llvm.DEPLOYMENT_TARGET},
               "python": {k: pins["python"][k] for k in ("version", "url", "sha256")},
               "wheels": [{k: w[k] for k in ("name", "version", "url", "sha256")} for w in pins["wheels"]],

@@ -22,6 +22,7 @@ lives under --work and may be deleted once --out is staged.
 """
 
 import argparse
+import json
 import os
 from pathlib import Path
 import shutil
@@ -65,6 +66,9 @@ def cmake_args(source, build, lto=True, profile=None, instrument=False):
     args = [
         "-G", "Ninja", "-S", str(source / "llvm"), "-B", str(build),
         "-DCMAKE_BUILD_TYPE=Release",
+        # The packager's Xcode or Command Line Tools clang; pgo.merge uses its
+        # llvm-profdata (xcrun), which must read what its runtime wrote.
+        "-DCMAKE_C_COMPILER=/usr/bin/cc", "-DCMAKE_CXX_COMPILER=/usr/bin/c++",
         "-DCMAKE_OSX_ARCHITECTURES=arm64",
         "-DCMAKE_OSX_DEPLOYMENT_TARGET=%s" % DEPLOYMENT_TARGET,
         "-DLLVM_ENABLE_PROJECTS=clang;lld",
@@ -124,9 +128,19 @@ def nice_prefix(level):
 
 
 def build(source, build_dir, jobs, nice=15, lto=True, profile=None, instrument=False):
-    """Configure and build the driver; return the path of the `llvm` binary."""
+    """Configure and build the driver; return the path of the `llvm` binary.
+
+    A build directory configured otherwise (other arguments, another profile's
+    contents) is started afresh; one configured the same resumes."""
+    args = cmake_args(source, build_dir, lto, profile, instrument)
+    config = json.dumps({"cmake": args, "profile": fetch.sha256_of(profile) if profile else None},
+                        sort_keys=True)
+    stamp = build_dir / "recomp-toolchain-config.json"
+    if build_dir.exists() and (not stamp.is_file() or stamp.read_text() != config):
+        shutil.rmtree(build_dir)
     if not (build_dir / "build.ninja").is_file():
-        subprocess.run(["cmake"] + cmake_args(source, build_dir, lto, profile, instrument), check=True)
+        subprocess.run(["cmake"] + args, check=True)
+        stamp.write_text(config)
     subprocess.run(nice_prefix(nice) + ["ninja", "-C", str(build_dir), "-j", str(jobs),
                                         "llvm-driver", "clang-resource-headers"], check=True)
     return build_dir / "bin" / "llvm"

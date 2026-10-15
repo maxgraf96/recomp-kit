@@ -9,12 +9,13 @@ Mac; the player only runs the result.
 
 ```sh
 .venv/bin/python tools/toolchain/stage.py --out build/toolchain \
-    [--cache DIR] [--work DIR] [--jobs N] [--nice N] [--profile FILE] [--no-pgo] [--keep-build]
+    [--cache DIR] [--work DIR] [--jobs N] [--nice N] [--profile FILE] [--no-pgo] [--keep-build] \
+    [--no-host-notices] [--notices-extra JSON]
 ```
 
 | Path in `--out` | What | Size [measured] |
 |---|---|---|
-| `python/bin/python3` | CPython 3.12.13 (python-build-standalone 20260303), trimmed, with capstone 5.0.9 and pefile 2024.8.26 | 44.1 MB, 1,137 files (10.1 MB as `.tar.xz`) |
+| `python/bin/python3` | CPython 3.12.13 (python-build-standalone 20260303), trimmed, with capstone 5.0.9 and pefile 2024.8.26 | 44.1 MB, 1,139 files (10.1 MB as `.tar.xz`) |
 | `llvm/bin/llvm` | clang and lld 23.1.3, AArch64 only, one multicall binary | 76.1 MB (21.1 MB as `.tar.xz`) |
 | `llvm/bin/clang`, `llvm/bin/ld64.lld` | relative symlinks to `llvm` | |
 | `llvm/lib/clang/23/include/` | the 10 compiler headers a freestanding compile reads | 41 KB |
@@ -36,7 +37,9 @@ T=<the toolchain directory, e.g. EmpireEarth.app/Contents/Resources/toolchain>
   the wheels ship precompiled as unchecked-hash `.pyc`, so nothing ever needs
   writing: an app must not write into itself (its signature seals it, and App
   Translocation runs it read-only). `PYTHONDONTWRITEBYTECODE` does not work
-  here, because `-I` ignores it.
+  here, because `-I` ignores it; a `site-packages/sitecustomize.py` sets
+  `sys.dont_write_bytecode` instead, so a tool that starts the interpreter
+  with `-I` alone writes nothing either.
 - **clang finds its headers by itself.** The driver dispatches on the name it
   is called by, and clang's resource directory is `bin/../lib/clang/23` from the
   binary's real path, so keep `bin/` and `lib/` together; the tree may be copied
@@ -102,7 +105,8 @@ libpython (OpenSSL, libffi, bzip2, liblzma, SQLite, mpdecimal, expat, libuuid;
 `PYTHON.json` of the same build lists them), capstone's `LICENSE_LLVM.TXT`
 from its source archive, and the kit's `third_party/` files and pinned SDL and
 glslang licences for the macOS host app. `--no-host-notices` leaves the host's
-components out.
+components out; `--notices-extra <json>` adds a game repository's own shipped
+components (`notices.load_extra`: title, licence, source, place, licence files).
 
 ## Building it: time, disk and prerequisites
 
@@ -139,6 +143,21 @@ are the same.
 The official `LLVM-23.1.3-macOS-ARM64.tar.zst` was the alternative: 871 MB to
 download, and its `clang` and `lld` are 172 + 131 MB even stripped, because each
 links all of LLVM for every target. The build here is 76 MB for both.
+
+## Reproducibility
+
+- **From a profile, the build is bit-for-bit repeatable** [measured]: two final
+  builds from the same profile into different directories gave the same
+  `llvm` (SHA-256 `0cf89873…` before stripping), and two stagings into
+  different directories the same `MANIFEST.json` (the `.pyc` carry relative file
+  names). `MANIFEST.json` records the profile's SHA-256 (`llvm.profile_sha256`).
+- **The training is not**: two trainings with the same instrumented compiler
+  gave profiles that agree on 99.98% of edge counts, not all (lld's threads,
+  hash-table orders). A fresh stage therefore gives an `llvm` with other bytes
+  and the same behaviour. What it compiles does not depend on it: the PGO and
+  non-PGO builds above give the same bundles.
+- So keep the merged profile (`<work>/pgo/llvm.profdata`, 53 MB, 6 MB as
+  `.xz`) with a release, and `--profile` it to rebuild that release's binary.
 
 ## Changing a pin
 

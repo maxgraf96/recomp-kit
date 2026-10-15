@@ -90,8 +90,34 @@ def test_the_llvm_configuration():
     assert "-DLLVM_BUILD_INSTRUMENTED=IR" in instrumented and "-DLLVM_ENABLE_LTO=Thin" not in instrumented
     profiled = llvm.cmake_args(Path("/src"), Path("/build"), profile="/p.profdata")
     assert "-DLLVM_PROFDATA_FILE=/p.profdata" in profiled and "-DLLVM_ENABLE_LTO=Thin" in profiled
+    assert "-DCMAKE_C_COMPILER=/usr/bin/cc" in args          # the compiler whose llvm-profdata merges
     assert set(llvm.TOOLS) == {"clang", "ld64.lld"}
     assert len(llvm.RESOURCE_HEADERS) == 10 and "stddef.h" in llvm.RESOURCE_HEADERS
+
+
+def test_a_build_directory_configured_otherwise_starts_afresh(tmp_path, monkeypatch):
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[0] == "cmake":                       # configuring creates the directory
+            (tmp_path / "b").mkdir(exist_ok=True)
+            (tmp_path / "b" / "build.ninja").write_text("")
+
+    monkeypatch.setattr(llvm.subprocess, "run", run)
+    profile = tmp_path / "p.profdata"
+    profile.write_bytes(b"one")
+    (tmp_path / "b").mkdir()
+    (tmp_path / "b" / "stale.o").write_text("")
+    llvm.build(tmp_path, tmp_path / "b", 2, nice=0, profile=profile)
+    assert not (tmp_path / "b" / "stale.o").exists() and calls[0][0] == "cmake"
+    calls.clear()
+    llvm.build(tmp_path, tmp_path / "b", 2, nice=0, profile=profile)          # the same: resume
+    assert [c[0] for c in calls] == ["ninja"]
+    profile.write_bytes(b"two")                                                # another profile
+    calls.clear()
+    llvm.build(tmp_path, tmp_path / "b", 2, nice=0, profile=profile)
+    assert [c[0] for c in calls] == ["cmake", "ninja"]
 
 
 def test_the_python_trim_removes_what_the_translator_never_runs(tmp_path):
