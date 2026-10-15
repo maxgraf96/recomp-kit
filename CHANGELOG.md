@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- A followed script line that fails (a click that cannot reach its target, a
+  wait that runs out) is reported and skipped instead of ending the run, as a
+  line that does not parse already was: whoever writes the file decides what
+  comes next, and a live game is no longer ended by one missed click. The
+  script's own steps still end the run when they fail.
 - The settings page's key is the game's choice: game.toml `[settings] key`
   names a function key (F10 by default) or `"none"` for a game that needs its
   function keys itself, as Empire Earth needs F10 for its own menu. On a Mac,

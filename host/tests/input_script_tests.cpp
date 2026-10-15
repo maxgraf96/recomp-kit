@@ -488,13 +488,19 @@ static void test_follow() {
     CHECK(sim.game.events == all); // F1 came after `end`: never read
     remove(path.c_str());
 
-    // A followed step that fails names its file and line.
-    append(path, "wait 1\nwait pixel 1 1 ff0000 within 100\n");
+    // A followed step that fails is reported with its file and line and
+    // skipped: the file's writer decides what comes next.
+    append(path, "wait 1\nwait pixel 1 1 ff0000 within 100\nkey ESCAPE\nend\n");
     Sim bad(("follow " + path + "\n").c_str());
     bad.run(3000);
-    CHECK(bad.r.failed());
-    CHECK(bad.r.failure().find(path + " line 2: wait pixel") == 0);
+    CHECK(!bad.r.failed() && bad.r.finished());
+    const std::vector<std::string> escape = {"key 01 down", "key 01 up"};
+    CHECK(bad.game.events == escape);
     remove(path.c_str());
+    // The script's own steps still end the run when they fail.
+    Sim own("wait pixel 1 1 ff0000 within 100\nkey ESCAPE\n");
+    own.run(3000);
+    CHECK(own.r.failed() && own.game.events.empty());
 
     // `within` on the follow: no new line in time fails it.
     Sim idle(("follow " + path + " within 300\n").c_str());

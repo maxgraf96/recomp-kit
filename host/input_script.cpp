@@ -675,6 +675,8 @@ struct Runner::Impl {
 
     // Progress, on the tick's thread.
     bool started = false, done = false, fail = false;
+    bool skip_now = false; // the step that just ran failed in a followed line
+    int skipped = 0;       // followed lines that failed and were skipped
     std::string why;
     uint32_t start_ms = 0;
     size_t pc = 0;
@@ -741,6 +743,16 @@ struct Runner::Impl {
                                                              : line;
     }
     void failed(const Step &st, const std::string &what) {
+        if (st.file > 0) {
+            // A followed line: whoever writes the file decides what comes
+            // next, so it is reported and the run goes on (a live game is
+            // not ended by one click that missed).
+            skip_now = true;
+            ++skipped;
+            say("FAILED %s: %s: %s (a followed line: skipped)", where(st).c_str(), op_name(st.op),
+                what.c_str());
+            return;
+        }
         fail = true;
         why = where(st) + ": " + op_name(st.op) + ": " + what;
         say("FAILED %s", why.c_str());
@@ -1321,6 +1333,12 @@ void Runner::tick(Sink &sink, uint32_t now, uint64_t frames) {
         const bool complete = d.run_step(sink, st, now);
         if (d.fail)
             return;
+        if (d.skip_now) {
+            d.skip_now = false;
+            ++d.pc;
+            d.step_begun = false;
+            continue;
+        }
         if (!complete)
             return;
         if (st.op == Op::Move || st.op == Op::Click) {

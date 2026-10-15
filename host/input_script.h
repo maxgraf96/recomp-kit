@@ -95,6 +95,9 @@
 // goes on after it. In a followed file:
 //   - a line that does not parse is reported and skipped, not fatal: the next
 //     line can say it right;
+//   - a step that fails (a click that cannot reach its target, a wait that
+//     runs out) is reported and skipped too: whoever writes the file decides
+//     what comes next, and a live game is not ended by one missed click;
 //   - `timeout`, `hold` and `pointer_tolerance` change the running script
 //     (`timeout` is still measured from the script's start, so a live session
 //     can extend it);
