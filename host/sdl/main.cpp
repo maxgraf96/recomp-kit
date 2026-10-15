@@ -46,6 +46,7 @@
 #include "../../runtime/display_seam.h"
 #include "../window_presentation.h"
 #include "keymap.h"
+#include "guest_cursor.h"
 #include "platform_ui.h"
 #include "version.h"
 #include "../../dx/dx.h"
@@ -1710,6 +1711,28 @@ bool on_host_thread() {
     return false;
 }
 
+// The guest's cursor on the platform's pointer (guest_cursor.h): its shape
+// whenever it has one, and its SetCursorPos moves while the pointer is the
+// guest's to move. In relative mode the game draws its own, so the latest
+// move waits for relative mode to end (a game that puts the system pointer
+// where its own was, then lets the mouse go, gets it there); a move made
+// while another application has the focus is dropped. Under the baton.
+void update_guest_cursor() {
+    if (!g_window)
+        return;
+    sdl_guest_cursor_update(host_guest_cursor_state());
+    int32_t gx = 0, gy = 0;
+    if (g_relative || !host_take_cursor_warp(&gx, &gy) || !window_focused())
+        return;
+    double dx = 0, dy = 0;
+    int bw, bh, dw, dh;
+    window_sizes(&bw, &bh, &dw, &dh);
+    if (dw > 0 && dh > 0 && host_gate_guest_to_drawable(gx, gy, &dx, &dy)) {
+        trace_state("SetCursorPos: warping the OS pointer");
+        SDL_WarpMouseInWindow(g_window, float(dx * bw / dw), float(dy * bh / dh));
+    }
+}
+
 // One turn of the host's event loop, called from inside guest code.
 //
 // The tick can arrive on any guest thread: the runtime's cooperative scheduler
@@ -1728,6 +1751,7 @@ void pump() {
     g_guest_mouse_exclusive = dinput_mouse_exclusive();
     g_guest_pointer_hidden = host_guest_pointer_hidden();
     update_relative_mouse();
+    update_guest_cursor();
     apply_window_mode();
     apply_mode_change();
     service(0.0);

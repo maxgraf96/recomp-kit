@@ -219,7 +219,7 @@ else()
 endif()
 
 # The windowed app's sources: recomp_app, and the player host below.
-set(POP_APP_SOURCES ${HOST}/sdl/main.cpp ${HOST}/sdl/keymap.cpp ${POP_PLATFORM_UI} ${POP_LAUNCHER_SOURCES}
+set(POP_APP_SOURCES ${HOST}/sdl/main.cpp ${HOST}/sdl/keymap.cpp ${HOST}/sdl/guest_cursor.cpp ${POP_PLATFORM_UI} ${POP_LAUNCHER_SOURCES}
                     ${HOST}/controls/controls_host.cpp ${HOST}/controls/gamepad_sdl.cpp
                     ${HOST}/controls/vpad_host_api.cpp
                     ${HOST}/game_path.cpp ${HOST}/present.cpp

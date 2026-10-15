@@ -261,6 +261,10 @@ bool host_pointer_can_capture(bool key, bool inside, bool click, bool escape, bo
 bool host_pointer_confinement_wanted(bool captured, int window_mode);
 bool host_pointer_at_resize_edge(double x, double y, double w, double h, double margin);
 void host_pointer_drawable_position(double *x, double *y);
+// The drawable pixel a guest (client) pixel is shown at, through the
+// published scene mapping: where SetCursorPos puts the platform's pointer.
+// False before the presenter has published a layout. Call under the baton.
+bool host_gate_guest_to_drawable(int32_t gx, int32_t gy, double *x, double *y);
 
 // Publish the acknowledged presenter mapping by value.
 void host_gate_publish_layout(const LayoutSnapshot &snapshot);

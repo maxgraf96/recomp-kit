@@ -29,6 +29,7 @@ owns. Compile the runtime with `-I<repo root>` so `guest.h` can find it.
 | `gdi_surface.h` | a DC over pixels the caller owns, for a DirectDraw surface's GetDC/ReleaseDC |
 | `misc.cpp` | GDI32, ADVAPI32 registry, SHELL32, ole32, WINMM (clock, mmio, MIDI out) |
 | `codepages.cpp`, `codepage_tables.h` | MultiByteToWideChar/WideCharToMultiByte as Windows converts: code pages 1252, 437, 850, 10000, 20127, 28591 (tables measured on Windows, `tools/codepages`), UTF-8, CP_SYMBOL |
+| `user32_cursor.cpp` | cursors: stock IDC_* cursors, CreateCursor's planes and CreateIconIndirect's bitmaps kept with their hot spots, SetCursor, ShowCursor, SetCursorPos, and what a host reads to show them |
 | `imm32.cpp` | IMM32, and text from the platform's input method (`host_post_text`) as WM_CHAR or an IME result |
 | `winsock.cpp`, `winsock.h` | WSOCK32 and WS2_32 on the host's sockets ("Networking" below) |
 | `iphlpapi.cpp` | the IP helper API (GetAdaptersInfo and friends) and NETAPI32's Netbios |

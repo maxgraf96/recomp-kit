@@ -1435,10 +1435,6 @@ void copy_image(X86 *c) {
     }
     set_eax(c, result);
 }
-void destroy_cursor(X86 *c) {
-    gdi_delete_icon(arg(c, 0));
-    set_eax(c, arg(c, 0) != 0);
-}
 void icon_info(X86 *c) {
     uint32_t p = arg(c, 1);
     GdiImage image;
@@ -1577,7 +1573,6 @@ const ImportShim shims[] = {
     U("CopyIcon", 1, copy_icon),
     U("CopyImage", 5, copy_image),
     U("CreateIcon", 7, create_icon),
-    U("DestroyCursor", 1, destroy_cursor),
     U("GetIconInfo", 2, icon_info),
 #undef U
 };

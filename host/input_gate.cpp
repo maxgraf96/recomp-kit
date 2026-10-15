@@ -1006,6 +1006,18 @@ extern "C" void host_input_pointer_correction(int32_t *dx, int32_t *dy) {
     *dy = cy;
 }
 
+bool host_gate_guest_to_drawable(int32_t gx, int32_t gy, double *x, double *y) {
+    take_layout();
+    if (g_layout.drawable_w <= 0 || g_layout.drawable_h <= 0 || !(g_layout.scene.scale_x > 0) ||
+        !(g_layout.scene.scale_y > 0))
+        return false;
+    *x = std::clamp(gx * double(g_layout.scene.scale_x) + g_layout.scene.offset_x, 0.0,
+                    double(g_layout.drawable_w - 1));
+    *y = std::clamp(gy * double(g_layout.scene.scale_y) + g_layout.scene.offset_y, 0.0,
+                    double(g_layout.drawable_h - 1));
+    return true;
+}
+
 bool host_gate_pointer_place(int32_t x, int32_t y) {
     if (!g_mem)
         return false;

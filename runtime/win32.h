@@ -503,6 +503,29 @@ bool host_cursor_visible();
 // WM_SETCURSOR with.
 bool host_guest_pointer_hidden();
 bool host_cursor_clip(int32_t out[4]);
+// The cursor the guest has chosen, for a host that shows the platform's
+// pointer (user32_cursor.cpp). Read under the baton.
+struct HostCursorState {
+    uint32_t handle = 0; // SetCursor's last argument (0: NULL)
+    uint32_t stock = 0;  // its IDC_* number for a stock cursor, else 0
+    bool chosen = false; // the guest has set one at all (else: the platform's arrow)
+    bool hidden = false; // host_guest_pointer_hidden()
+};
+HostCursorState host_guest_cursor_state();
+// A cursor handle's picture: a stock IDC_* number, or ARGB pixels (straight
+// alpha, rows top-down) with the hot spot. False for a handle with none.
+struct HostCursorShape {
+    uint32_t stock = 0;
+    int32_t width = 0, height = 0, hot_x = 0, hot_y = 0;
+    std::vector<uint32_t> pixels;
+};
+bool host_guest_cursor_shape(uint32_t handle, HostCursorShape *out);
+// The current cursor in words ("ibeam (IDC 32513, ...)", "hidden (SetCursor
+// NULL)"), as RECOMP_TRACE_CURSOR logs it.
+std::string host_guest_cursor_description();
+// A SetCursorPos the host has not applied yet, in the main window's client
+// pixels (the host's input space); each move is taken once.
+bool host_take_cursor_warp(int32_t *x, int32_t *y);
 
 // ---------------------------------------------------------------------------
 // Activation (user32_activation.cpp). The host reports what the platform

@@ -1,7 +1,7 @@
 // user32_ansi.cpp - the ANSI entry points that have no wide twin elsewhere
 // in the runtime yet, and the odd ones out: class queries, window text,
 // strings and bitmaps from any loaded module's resources, MoveWindow,
-// ChangeDisplaySettingsA, CreateCursor, wsprintfA and SetWindowsHookExA.
+// ChangeDisplaySettingsA, wsprintfA and SetWindowsHookExA.
 //
 // ANSI text is code page 1252, the code page the runtime reports (GetACP).
 #include "user32_internal.h"
@@ -170,18 +170,6 @@ void change_display_settings_a(X86 *c) {
     set_eax(c, offered ? 0 : uint32_t(-2)); // DISP_CHANGE_BADMODE
 }
 
-// A cursor made from AND and XOR planes: a distinct handle. The host draws
-// the pointer (or the game draws its own), so its planes are not kept.
-uint32_t g_next_cursor = 0x0002c000u;
-void create_cursor(X86 *c) {
-    if (!arg(c, 3) || !arg(c, 4) || !arg(c, 5) || !arg(c, 6)) {
-        set_last_error(87);
-        set_eax(c, 0);
-        return;
-    }
-    set_eax(c, g_next_cursor++);
-}
-
 // wsprintfA is cdecl with the arguments after the format on the stack.
 void wsprintf_a(X86 *c) {
     set_eax(c, format_wsprintf(arg(c, 0), arg(c, 1), c->r[R_ESP] + 12));
@@ -222,7 +210,6 @@ const ImportShim shims[] = {
     {"USER32.dll", "LoadBitmapA", 2, load_bitmap_a},
     {"USER32.dll", "MoveWindow", 6, move_window},
     {"USER32.dll", "ChangeDisplaySettingsA", 2, change_display_settings_a},
-    {"USER32.dll", "CreateCursor", 7, create_cursor},
     {"USER32.dll", "wsprintfA", ARGC_CDECL, wsprintf_a},
     {"USER32.dll", "SetWindowsHookExA", 4, set_windows_hook_a},
 };

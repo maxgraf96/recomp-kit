@@ -1367,8 +1367,7 @@ void def_window_proc(X86 *c, bool wide) {
         }
         if (w && arg(c, 2) == hwnd && (arg(c, 3) & 0xffff) == 1 /* HTCLIENT */) {
             auto ci = classes().find(w->cls);
-            g_cursor = ci != classes().end() ? ci->second.hcursor : 0;
-            g_cursor_chosen = true;
+            cursor_class_chosen(ci != classes().end() ? ci->second.hcursor : 0);
             set_eax(c, 1);
             return;
         }
@@ -1572,18 +1571,13 @@ void u_GetSystemMetrics(X86 *c) {
     }
     set_eax(c, v);
 }
-// One handle per stock cursor id; the host draws the pointer, so the handle
-// only has to be distinct and non-zero.
-void u_LoadCursorA(X86 *c) {
-    set_eax(c, 0x0002a000u + (arg(c, 1) & 0xfffu));
-}
 // The creation API determines the encoding delivered to the window procedure.
 void u_IsWindowUnicode(X86 *c) {
     Window *w = find_window(arg(c, 0));
     set_eax(c, w && w->unicode);
 }
-// An icon or cursor assembled from bitmaps: a distinct handle, never drawn by
-// the host, which paints its own pointer.
+// Handles with no picture behind them (user32_cursor.cpp keeps the cursors
+// the host shows).
 static uint32_t g_next_icon = 0x0002b000u;
 // A cursor loaded from a file is the same kind of handle: distinct, and never
 // drawn by the host. The file is not read - the host paints its own pointer -
@@ -1613,39 +1607,8 @@ void u_GetUpdateRect(X86 *c) {
 void u_LoadCursorFromFileW(X86 *c) {
     set_eax(c, arg(c, 0) && gm_valid(arg(c, 0), 2) ? g_next_icon++ : 0);
 }
-void u_CreateIconIndirect(X86 *c) {
-    uint32_t info = arg(c, 0);
-    GdiImage image, mask;
-    if (info && gm_valid(info, 20) && gdi_read_bitmap(rd32(info + 16), &image)) {
-        if (rd32(info + 12) && gdi_read_bitmap(rd32(info + 12), &mask) &&
-            mask.width >= image.width && mask.height >= image.height) {
-            for (int32_t y = 0; y < image.height; ++y)
-                for (int32_t x = 0; x < image.width; ++x)
-                    if (mask.pixels[size_t(y) * mask.width + x] & 0xffffff)
-                        image.pixels[size_t(y) * image.width + x] = 0;
-        }
-        set_eax(c, gdi_create_icon(image));
-        return;
-    }
-    set_eax(c, arg(c, 0) ? g_next_icon++ : 0);
-}
-void u_DestroyIcon(X86 *c) {
-    gdi_delete_icon(arg(c, 0));
-    set_eax(c, arg(c, 0) ? 1 : 0);
-}
 void u_LoadIconA(X86 *c) {
     set_eax(c, 0x00029001);
-}
-void u_SetCursor(X86 *c) {
-    uint32_t prev = g_cursor;
-    g_cursor = arg(c, 0);
-    g_cursor_chosen = true;
-    set_eax(c, prev);
-}
-void u_SetCursorPos(X86 *c) {
-    g_cursor_x = (int32_t)arg(c, 0);
-    g_cursor_y = (int32_t)arg(c, 1);
-    set_eax(c, 1);
 }
 void u_GetCursorPos(X86 *c) {
     uint32_t p = arg(c, 0);
@@ -1674,10 +1637,6 @@ void u_GetKeyState(X86 *c) {
         return;
     }
     set_eax(c, vk < 256 && g_key_state[vk] ? 0xff80 : 0);
-}
-void u_ShowCursor(X86 *c) {
-    g_cursor_show += arg(c, 0) ? 1 : -1;
-    set_eax(c, (uint32_t)g_cursor_show);
 }
 
 // The cursor is confined by bookkeeping only; the host layer reads the clip
@@ -2106,21 +2065,16 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "BeginPaint", 2, u_BeginPaint},
     {"USER32.dll", "EndPaint", 2, u_EndPaint},
     {"USER32.dll", "LoadIconA", 2, u_LoadIconA},
-    {"USER32.dll", "LoadCursorA", 2, u_LoadCursorA},
     {"USER32.dll", "ValidateRect", 2, u_ValidateRect},
     {"USER32.dll", "GetUpdateRect", 3, u_GetUpdateRect},
     {"USER32.dll", "GetScrollBarInfo", 3, nullptr},
     {"USER32.dll", "LoadCursorFromFileA", 1, u_LoadCursorFromFileW},
     {"USER32.dll", "LoadCursorFromFileW", 1, u_LoadCursorFromFileW},
-    {"USER32.dll", "CreateIconIndirect", 1, u_CreateIconIndirect},
     {"USER32.dll", "ScreenToClient", 2, u_ScreenToClient},
     {"USER32.dll", "OpenIcon", 1, u_OpenIcon},
     {"USER32.dll", "FindWindowA", 2, u_FindWindowA},
-    {"USER32.dll", "DestroyIcon", 1, u_DestroyIcon},
     {"USER32.dll", "GetSystemMetrics", 1, u_GetSystemMetrics},
     {"USER32.dll", "IsWindowUnicode", 1, u_IsWindowUnicode},
-    {"USER32.dll", "SetCursor", 1, u_SetCursor},
-    {"USER32.dll", "SetCursorPos", 2, u_SetCursorPos},
     {"USER32.dll", "GetDoubleClickTime", 0, u_GetDoubleClickTime},
     {"USER32.dll", "GetKeyboardType", 1, u_GetKeyboardType},
     {"USER32.dll", "GetKeyboardLayout", 1, u_GetKeyboardLayout},
@@ -2134,7 +2088,6 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "GetCursorPos", 1, u_GetCursorPos},
     {"USER32.dll", "GetAsyncKeyState", 1, u_GetAsyncKeyState},
     {"USER32.dll", "GetKeyState", 1, u_GetKeyState},
-    {"USER32.dll", "ShowCursor", 1, u_ShowCursor},
     {"USER32.dll", "ClipCursor", 1, u_ClipCursor},
     {"USER32.dll", "GetClipCursor", 1, u_GetClipCursor},
     {"USER32.dll", "RegisterClassExA", 1, u_RegisterClassExA},

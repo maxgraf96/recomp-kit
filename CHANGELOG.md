@@ -29,6 +29,17 @@
   compiler's environment, so no SDK is looked up and a bundle is the same
   whoever builds it.
 
+- Show the cursor a program chooses on the platform's pointer whenever the
+  pointer is not relative: stock cursors (`LoadCursor(NULL, IDC_*)`) as the
+  system's I-beam, hand, resize arrows and the rest; a program's own
+  (`CreateCursor`'s AND/XOR planes, `CreateIconIndirect`'s colour or
+  monochrome bitmaps) as colour cursors with their hot spots, made once per
+  handle; `SetCursor(NULL)` and a negative `ShowCursor` count hide it as
+  before. `SetCursorPos` moves the pointer (the latest move waits for
+  relative mode to end). The runtime keeps every shape
+  (`host_guest_cursor_state`, `host_guest_cursor_shape`) and
+  `RECOMP_TRACE_CURSOR=1` logs each change, which a headless run can assert.
+
 - Type any text into a game, as on Windows: the desktop app keeps SDL's text
   input on, so dead keys, Option characters, every keyboard layout and
   input methods reach the game (a held key repeats rather than opening the

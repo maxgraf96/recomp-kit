@@ -799,6 +799,143 @@ static void test_timer_and_cursor() {
 }
 
 // ---------------------------------------------------------------------------
+// Cursors: stock, CreateCursor, CreateIconIndirect, SetCursor, ShowCursor,
+// SetCursorPos, as the host reads them (host_guest_cursor_*)
+// ---------------------------------------------------------------------------
+static uint32_t gdi(X86 *c, const char *name, const std::vector<uint32_t> &args) {
+    return call(c, "GDI32.dll", name, args);
+}
+
+static void test_cursors() {
+    X86 *c = &g_main;
+    const uint32_t hwnd = make_window(c, true);
+    drain(c);
+
+    // A stock cursor: the host is told its IDC_* number.
+    const uint32_t ibeam = user(c, "LoadCursorA", {0, 32513});
+    const uint32_t arrow = user(c, "LoadCursorA", {0, 32512});
+    check(ibeam && arrow && ibeam != arrow, "stock cursors have distinct handles");
+    user(c, "SetCursor", {ibeam});
+    HostCursorState st = host_guest_cursor_state();
+    check(st.handle == ibeam && st.stock == 32513 && st.chosen && !st.hidden,
+          "SetCursor(IDC_IBEAM): the I-beam, shown");
+    HostCursorShape shape;
+    check(host_guest_cursor_shape(ibeam, &shape) && shape.stock == 32513 && shape.pixels.empty(),
+          "a stock cursor's shape is its number");
+    check(host_guest_cursor_description().rfind("ibeam", 0) == 0, "described as %s",
+          host_guest_cursor_description().c_str());
+    check(user(c, "SetCursor", {0}) == ibeam, "SetCursor returns the previous cursor");
+    st = host_guest_cursor_state();
+    check(st.handle == 0 && st.hidden, "SetCursor(NULL) hides the pointer");
+
+    // CreateCursor: 16x2, WORD-aligned rows. Row 0: AND 1 XOR 0 (clear) for
+    // x < 8, AND 0 XOR 1 (white) for x >= 8; row 1: AND 0 XOR 0 (black) for
+    // x < 8, AND 1 XOR 1 (inverted: black here) for x >= 8.
+    const uint32_t planes = scratch(0x1800);
+    const uint8_t and_bits[] = {0xff, 0x00, 0x00, 0xff};
+    const uint8_t xor_bits[] = {0x00, 0xff, 0x00, 0xff};
+    memcpy(g_mem + planes, and_bits, 4);
+    memcpy(g_mem + planes + 16, xor_bits, 4);
+    const uint32_t hand = user(c, "CreateCursor", {0x400000, 12, 1, 16, 2, planes, planes + 16});
+    check(hand != 0, "CreateCursor");
+    check(host_guest_cursor_shape(hand, &shape) && shape.stock == 0 && shape.width == 16 &&
+              shape.height == 2 && shape.hot_x == 12 && shape.hot_y == 1,
+          "CreateCursor keeps its size and hot spot (%dx%d hot %d,%d)", shape.width, shape.height,
+          shape.hot_x, shape.hot_y);
+    check(shape.pixels.size() == 32 && shape.pixels[0] == 0 && shape.pixels[8] == 0xffffffffu &&
+              shape.pixels[16] == 0xff000000u && shape.pixels[24] == 0xff000000u,
+          "AND/XOR planes: clear, white, black, inverted as black");
+    check(user(c, "CreateCursor", {0x400000, 0, 0, 16, 2, 0, planes}) == 0,
+          "CreateCursor without an AND plane fails");
+    user(c, "SetCursor", {hand});
+    st = host_guest_cursor_state();
+    check(st.handle == hand && st.stock == 0 && !st.hidden, "SetCursor(created cursor)");
+
+    // CreateIconIndirect, colour: a 4x2 32-bpp picture and its mask. The
+    // mask's set bits are transparent; the rest is opaque.
+    const uint32_t colour_bits = scratch(0x1900), mask_bits = scratch(0x1980);
+    for (uint32_t i = 0; i < 8; ++i)
+        wr32(colour_bits + 4 * i, 0x00102030u + i);
+    const uint8_t mask_rows[] = {0xa0, 0x00, 0x00, 0x00}; // row 0: x 0 and 2 clear
+    memcpy(g_mem + mask_bits, mask_rows, 4);
+    const uint32_t colour = gdi(c, "CreateBitmap", {4, 2, 1, 32, colour_bits});
+    const uint32_t mask = gdi(c, "CreateBitmap", {4, 2, 1, 1, mask_bits});
+    const uint32_t info = scratch(0x1a00);
+    wr32(info, 0); // a cursor, not an icon
+    wr32(info + 4, 3);
+    wr32(info + 8, 1);
+    wr32(info + 12, mask);
+    wr32(info + 16, colour);
+    const uint32_t skin = user(c, "CreateIconIndirect", {info});
+    check(skin != 0 && host_guest_cursor_shape(skin, &shape) && shape.width == 4 &&
+              shape.height == 2 && shape.hot_x == 3 && shape.hot_y == 1,
+          "CreateIconIndirect keeps the hot spot (%dx%d hot %d,%d)", shape.width, shape.height,
+          shape.hot_x, shape.hot_y);
+    check(shape.pixels.size() == 8 && shape.pixels[0] == 0 && shape.pixels[2] == 0 &&
+              shape.pixels[1] == 0xff102031u && shape.pixels[7] == 0xff102037u,
+          "the mask clears, the rest is opaque");
+    wr32(info, 1); // an icon: the hot spot is its centre
+    const uint32_t icon = user(c, "CreateIconIndirect", {info});
+    check(icon && host_guest_cursor_shape(icon, &shape) && shape.hot_x == 2 && shape.hot_y == 1,
+          "an icon's hot spot is its centre");
+
+    // CreateIconIndirect, monochrome: no colour bitmap, the mask twice as
+    // tall (AND above XOR).
+    const uint8_t mono_rows[] = {0xf0, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x00};
+    memcpy(g_mem + mask_bits, mono_rows, 8);
+    const uint32_t mono = gdi(c, "CreateBitmap", {8, 4, 1, 1, mask_bits});
+    wr32(info, 0);
+    wr32(info + 12, mono);
+    wr32(info + 16, 0);
+    const uint32_t mono_cursor = user(c, "CreateIconIndirect", {info});
+    check(mono_cursor && host_guest_cursor_shape(mono_cursor, &shape) && shape.width == 8 &&
+              shape.height == 2,
+          "a monochrome cursor is half its mask's height");
+    check(shape.pixels.size() == 16 && shape.pixels[0] == 0 && shape.pixels[4] == 0xff000000u &&
+              shape.pixels[8] == 0xffffffffu && shape.pixels[12] == 0xff000000u,
+          "monochrome: clear, black, white, black");
+
+    // ShowCursor counts; below zero the pointer is hidden whatever is chosen.
+    check(user(c, "ShowCursor", {0}) == 0xffffffffu, "ShowCursor(FALSE) counts to -1");
+    check(host_guest_cursor_state().hidden, "and hides");
+    check(host_guest_cursor_description().rfind("hidden", 0) == 0, "described as %s",
+          host_guest_cursor_description().c_str());
+    check(user(c, "ShowCursor", {1}) == 0, "ShowCursor(TRUE) counts back to 0");
+    check(!host_guest_cursor_state().hidden, "and shows the chosen cursor again");
+
+    // DestroyCursor forgets the picture; the host then shows the arrow.
+    check(user(c, "DestroyCursor", {hand}) == 1, "DestroyCursor");
+    check(!host_guest_cursor_shape(hand, &shape), "its picture is gone");
+    user(c, "DestroyIcon", {skin});
+    user(c, "DestroyIcon", {icon});
+    user(c, "DestroyCursor", {mono_cursor});
+
+    // SetCursorPos: GetCursorPos answers it at once, and the host takes the
+    // move once, in the main window's client pixels.
+    int32_t wx = 0, wy = 0;
+    while (host_take_cursor_warp(&wx, &wy)) {
+    }
+    check(user(c, "SetCursorPos", {513, 367}) == 1, "SetCursorPos");
+    const uint32_t pt = scratch(0x1b00);
+    user(c, "GetCursorPos", {pt});
+    check(rd32(pt) == 513 && rd32(pt + 4) == 367, "GetCursorPos reads it back");
+    int32_t ox = 0, oy = 0;
+    const uint32_t origin = scratch(0x1b10);
+    wr32(origin, 0);
+    wr32(origin + 4, 0);
+    user(c, "ClientToScreen", {host_main_window(), origin});
+    ox = int32_t(rd32(origin));
+    oy = int32_t(rd32(origin + 4));
+    check(host_take_cursor_warp(&wx, &wy) && wx == 513 - ox && wy == 367 - oy,
+          "the host is asked to move the pointer there (%d,%d)", wx, wy);
+    check(!host_take_cursor_warp(&wx, &wy), "once");
+
+    user(c, "SetCursor", {arrow});
+    user(c, "DestroyWindow", {hwnd});
+    drain(c);
+}
+
+// ---------------------------------------------------------------------------
 // The ANSI odds and ends a Windows game of the time imports
 // ---------------------------------------------------------------------------
 static void test_ansi_entry_points() {
@@ -1127,6 +1264,7 @@ int main() {
         {"per-thread queues and cross-thread SendMessage", test_threads},
         {"a thread's windows end with it", test_thread_windows_end_with_it},
         {"timers and WM_SETCURSOR", test_timer_and_cursor},
+        {"cursors", test_cursors},
         {"ANSI entry points", test_ansi_entry_points},
         {"DirectInput foreground and exclusive mouse", test_dinput_foreground},
         {"DirectInput buffers and objects", test_dinput_buffers},
