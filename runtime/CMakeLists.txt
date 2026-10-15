@@ -141,9 +141,20 @@ if(APPLE)
             ${POP_ROOT}/runtime/tests/data/gdi_metrics_windows11.jsonl
             --gdi-tests $<TARGET_FILE:gdi_tests>
             --cases ${POP_ROOT}/tools/gdi_metrics/cases_windows11.txt
-            --only face,height,ascent,descent,external,weight,italic,pitch_family,charset
+            --only face,height,ascent,descent,internal,external,weight,italic,pitch_family,charset
     WORKING_DIRECTORY ${POP_ROOT})
   set_tests_properties(gdi_metrics_windows11 PROPERTIES LABELS nogame)
+  # Tahoma, the face a Windows interface of the time draws with: every
+  # advance (U+007F apart) and string extent as well.
+  add_test(NAME gdi_metrics_windows11_tahoma
+    COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/tools/gdi_metrics/compare.py
+            ${POP_ROOT}/runtime/tests/data/gdi_metrics_windows11.jsonl
+            --gdi-tests $<TARGET_FILE:gdi_tests>
+            --cases ${POP_ROOT}/tools/gdi_metrics/cases_windows11.txt --faces Tahoma
+            --only face,height,ascent,descent,internal,external,ave,weight,italic,pitch_family,charset,widths,extents
+            --skip-chars 7f
+    WORKING_DIRECTORY ${POP_ROOT})
+  set_tests_properties(gdi_metrics_windows11_tahoma PROPERTIES LABELS nogame)
 endif()
 # Winsock (WSOCK32, WS2_32), the IP helper API and Netbios through the guest
 # ABI, on real sockets on the loopback interface and on fake interface lists.

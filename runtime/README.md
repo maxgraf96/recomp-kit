@@ -91,7 +91,9 @@ chooses; without it a Windows interface face is drawn with the bundled Open
 Sans. `tools/gdi_metrics` holds the comparison with a Windows screen DC.
 A VDMX table counts only through its group for the Windows ANSI subset
 (bCharSet 1), and a cell (positive) height is the TEXTMETRIC height, split
-by the Windows ascent: that is what a Windows 11 capture of Tahoma, Arial,
+by the Windows ascent, with the em one smaller while the em's own Windows
+ascent and descent would overflow the cell: that is what a Windows 11
+capture of Tahoma, Arial,
 Verdana, Times New Roman, Courier New and Microsoft Sans Serif says
 (`runtime/tests/data/gdi_metrics_windows11.jsonl`, 169 requests).
 

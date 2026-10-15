@@ -369,11 +369,17 @@ GdiFont truetype_realize(const TrueTypeFace *f, const GdiLogFont &lf, bool synth
     const int32_t height = lf.height ? lf.height : 16;
     int32_t ppem = 0, y_max = 0, y_min = 0;
     const bool vdmx = vdmx_lookup(f, height, &ppem, &y_max, &y_min);
-    // A cell height with no VDMX record: the em part of the cell, rounded.
-    // (Windows 11 agrees for 18 of 21 Tahoma cell heights; at 20, 26 and 32 it
-    // takes one pixel less, by a rule not yet known.)
-    if (!vdmx)
+    // A cell height with no VDMX record: the em part of the cell, rounded,
+    // and smaller while the em's own Windows ascent and descent would not fit
+    // the cell (Windows 11: Tahoma 20 is a 16-pixel em, not 17).
+    if (!vdmx) {
         ppem = height < 0 ? -height : mul_div(upem, height, win_ascent + win_descent);
+        while (height > 0 && ppem > 1 &&
+               to_pixels(win_ascent, y_scale_of(f, ppem)) +
+                       to_pixels(win_descent, y_scale_of(f, ppem)) >
+                   height)
+            --ppem;
+    }
     ppem = std::max<int32_t>(1, ppem);
     out.ppem = ppem;
     out.sy = double(ppem) / upem;

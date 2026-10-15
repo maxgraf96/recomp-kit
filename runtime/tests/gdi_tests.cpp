@@ -1252,9 +1252,10 @@ static void test_gdi_metrics() {
           m.ascent);
     with(font_a(&c, s, 40, 400, "WinMetricTest"));
     m = metrics_a(&c, dc, s + 0x100);
-    check(m.height == 40 && m.ascent == 32 && m.descent == 8 && m.internal == 4,
-          "+40: past VDMX, em = MulDiv(2048, 40, 2288) = 36, and the cell (40) split by the "
-          "Windows ascent, MulDiv(1854, 40, 2288) = 32, as Windows 11 measures Tahoma "
+    check(m.height == 40 && m.ascent == 32 && m.descent == 8 && m.internal == 5,
+          "+40: past VDMX, the cell (40) split by the Windows ascent, MulDiv(1854, 40, 2288) = "
+          "32, and the em MulDiv(2048, 40, 2288) = 36 less one, since 36's own Windows ascent "
+          "and descent (33 + 8) overflow the cell, as Windows 11 measures Tahoma "
           "(%d %d %d %d)",
           m.height, m.ascent, m.descent, m.internal);
 

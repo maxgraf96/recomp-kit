@@ -32,7 +32,8 @@ each font that is not and, with -v, every difference.
 names (height, ascent, ...), "face", "widths" and "extents". It is how a
 capture of faces whose installed copies are another version than Windows'
 (their bounding boxes, and so tmMaxCharWidth, differ) still guards the rest.
---skip-chars HEX,... leaves those characters' widths out.
+--skip-chars HEX,... leaves those characters' widths out. --faces NAME,...
+compares only the requests for those faces.
 """
 import argparse
 import json
@@ -118,6 +119,7 @@ def main():
     parser.add_argument("--cases", default=os.path.join(os.path.dirname(__file__), "cases.txt"))
     parser.add_argument("--only", help="compare just these parts (comma-separated)")
     parser.add_argument("--skip-chars", default="", help="hex character codes to leave out")
+    parser.add_argument("--faces", help="compare only these faces' requests (comma-separated)")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
     only = set(args.only.split(",")) if args.only else None
@@ -131,6 +133,9 @@ def main():
         subprocess.run([args.gdi_tests, "--capture", args.cases, runtime], check=True,
                        stdout=subprocess.DEVNULL)
     win, mac = load(args.windows), load(runtime)
+    if args.faces:
+        faces = {f.lower() for f in args.faces.split(",")}
+        win = {k: v for k, v in win.items() if k[0].lower() in faces}
     missing = sorted(set(win) - set(mac))
     failed = 0
     for key in sorted(win):

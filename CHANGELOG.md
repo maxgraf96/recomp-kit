@@ -50,7 +50,8 @@
   follow a Windows 11 capture: a VDMX table counts only through its Windows
   ANSI group (Tahoma's taller VDMX records no longer apply, so its line
   heights at 15 pixels and up match Windows), and a cell height is the
-  TEXTMETRIC height, split by the Windows ascent. An unknown face name falls
+  TEXTMETRIC height, split by the Windows ascent, its em one pixel smaller
+  where the rounded em's own ascent and descent would overflow the cell. An unknown face name falls
   back by pitch, family and character set to an installed Arial, Times New
   Roman, Courier New, Comic Sans MS or Symbol, as Windows' mapper does
   ("TimesRoman" is Arial there), and with none installed to Open Sans

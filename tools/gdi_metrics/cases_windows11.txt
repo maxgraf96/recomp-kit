@@ -1,12 +1,12 @@
 # The requests runtime/tests/data/gdi_metrics_windows11.jsonl answers: a
 # Windows 11 (build 26200) 96-dpi capture by capture_win32.c, against which
 # the gdi_metrics_windows11 test holds the runtime's line metrics and face
-# choice with the installed macOS copies of these faces (compare.py --only).
+# choice with the installed macOS copies of these faces (compare.py --only),
+# and gdi_metrics_windows11_tahoma Tahoma's advances and extents too.
 # Their widths are another matter: macOS ships older versions of some
-# (Tahoma 5.01 against Windows 11's 7.05), whose bounding boxes differ. The
-# internal leading is left out too: for a cell (positive) height Windows'
-# em is the rounded em part of the cell for 18 of 21 Tahoma sizes, one pixel
-# less at 20, 26 and 32, by a rule not yet known.
+# (Tahoma 5.01 against Windows 11's 7.05), whose bounding boxes and hinting
+# differ. Tahoma's widths and string extents agree all the same, U+007F's
+# apart (gdi_metrics_windows11_tahoma).
 font Tahoma;-8,-9,-10,-11,-12,-13,-14,-15,-16,-17,-18,-19,-20,-21,-22,-23,-24,-26,-28,-30,-32,-36,-40;400,700;0
 font Tahoma;8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,24,26,28,32,36,40;400,700;0
 font Tahoma;-13;400;1
