@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- A `bind` that fails with `WSAEADDRINUSE` says so once per port, whatever
+  the tracing (`winsock: UDP port 33334 is already in use ...`): a program
+  with fixed ports that a second copy of it, or another program, holds fails
+  as on Windows, and one that does not expect it stops somewhere that no
+  longer says why. Empire Earth stopped on an engine assertion moments later.
 - A zero-sized `BitBlt`, `StretchBlt` or `MaskBlt` (no width or no height at
   either end) returns TRUE and draws nothing, as on Windows (measured on
   Windows 11, a 32-bit process), instead of being refused and logged as

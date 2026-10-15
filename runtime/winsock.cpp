@@ -1181,6 +1181,18 @@ void ws_bind(X86 *c) {
     if (os_net_bind(s->fd, iface ? 0 : ip, port) != 0) {
         uint32_t e = wsa_error(errno);
         trace("bind(%#x, %s:%u) -> error %u", h, net_dotted(ip).c_str(), port, e);
+        // Said once per port whatever the tracing: a fixed port another
+        // process holds - a second copy of the program, say - fails here as it
+        // does on Windows, and a program that does not expect it goes on to
+        // fail somewhere that no longer says why.
+        if (e == WSAEADDRINUSE) {
+            char key[48];
+            snprintf(key, sizeof key, "winsock-bind:%u:%u", (unsigned)s->type, port);
+            log_once(key,
+                     "winsock: %s port %u is already in use (bind: WSAEADDRINUSE): another "
+                     "program on this machine holds it, or a second copy of this one",
+                     s->type == OS_NET_DGRAM ? "UDP" : "TCP", port);
+        }
         fail(c, e);
         return;
     }
