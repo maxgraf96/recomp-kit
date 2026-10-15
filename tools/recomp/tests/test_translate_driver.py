@@ -1456,6 +1456,9 @@ def test_auxiliary_module_emits_prefixed_tables_that_self_register(tmp_path, mon
     header = (out / "funcs.h").read_text()
     assert "const uint32_t recomp_blit_func_addrs[] = {" in text
     assert "recomp_blit_hooked[" in text and "recomp_blit_hook_ptrs[]" in text
+    # A definition, not a tentative one: a common symbol loses to the
+    # runtime's weak one-byte fallback at link time.
+    assert re.search(r"uint8_t recomp_blit_hooked\[\d+\] = \{0\};", text)
     assert "recomp_blit_call_returns[] = {" in text
     assert "recomp_module_register(&recomp_blit_module)" in text
     assert '"Blit_p6.dll", 0x10000000u, 0x10001000u' in text

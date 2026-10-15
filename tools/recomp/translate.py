@@ -6412,7 +6412,12 @@ def main():
         for _a in entry_names:
             fh.write("    %srun_base,\n" % P)
         fh.write("};\n")
-        fh.write("uint8_t %shooked[%d];\n\n" % (P, len(entry_names)))
+        # Initialised, so it is a definition and never a tentative (common)
+        # one: ld64 lets the runtime's weak one-byte fallback
+        # (runtime/dispatch.cpp, for a host with no translation linked) win
+        # over a common symbol, and every hook flag would then be a byte of
+        # whatever host data follows that fallback.
+        fh.write("uint8_t %shooked[%d] = {0};\n\n" % (P, len(entry_names)))
         if AUX_MODULE is not None:
             # A module's tables register with the runtime (x86.h RecompModule);
             # the main image's recomp_call/recomp_jump fall back to them.
