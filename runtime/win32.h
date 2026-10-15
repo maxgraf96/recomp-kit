@@ -369,6 +369,18 @@ void host_post_key_message(uint32_t msg, uint32_t wparam, uint32_t lparam);
 // and the guest's TranslateMessage then recognises the key as translated
 // rather than making a second character from a US layout.
 void host_post_key_text(uint32_t msg, uint32_t wparam, uint32_t lparam, uint32_t character);
+// Text the platform's input method committed (UTF-16), for the focus window:
+// WM_CHAR per unit for a Unicode window; for an ANSI window WM_CHAR with the
+// code page 1252 bytes, or, when 1252 cannot spell it all, an IME result
+// (WM_IME_STARTCOMPOSITION, WM_IME_COMPOSITION with GCS_RESULTSTR, which
+// ImmGetCompositionStringW reads, WM_IME_ENDCOMPOSITION). A host whose
+// input method delivers a key's text separately posts the key itself with
+// host_post_key_text and HOST_KEY_TEXT_FOLLOWS.
+void host_post_text(const uint16_t *units, size_t count);
+// host_post_key_text's character for a key-down whose text the platform's
+// input method delivers on its own (host_post_text), or never (a dead key):
+// the key is marked translated, so TranslateMessage adds nothing to it.
+constexpr uint32_t HOST_KEY_TEXT_FOLLOWS = 0xffffffffu;
 uint32_t host_main_window();              // first created top-level HWND, or 0
 uint32_t host_window_proc(uint32_t hwnd); // guest WNDPROC address, or 0
 bool host_window_rect(uint32_t hwnd, int32_t *x, int32_t *y, int32_t *w, int32_t *h);

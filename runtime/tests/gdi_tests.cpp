@@ -1445,7 +1445,7 @@ static void test_gdi_odds() {
     check(call_import(&c, "IMM32.dll", "ImmGetContext", {0}) == 0 &&
               call_import(&c, "IMM32.dll", "ImmGetCompositionStringW", {0, 8, 0, 0}) == 0 &&
               call_import(&c, "IMM32.dll", "ImmNotifyIME", {0, 0x15, 0, 0}) == 0,
-          "IMM32: no input method, no composition, nothing to notify");
+          "IMM32: no context for no window, nothing to read or notify");
 }
 
 // The installed-font database on a directory of its own: the family, the

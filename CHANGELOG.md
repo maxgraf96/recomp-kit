@@ -29,6 +29,19 @@
   compiler's environment, so no SDK is looked up and a bundle is the same
   whoever builds it.
 
+- Type any text into a game, as on Windows: the desktop app keeps SDL's text
+  input on, so dead keys, Option characters, every keyboard layout and
+  input methods reach the game (a held key repeats rather than opening the
+  accent picker). A key that types is posted already translated and its
+  WM_CHAR is the text that follows; a Unicode window gets UTF-16 (surrogate
+  pairs as two WM_CHARs), an ANSI window code page 1252, and text 1252
+  cannot spell arrives as an input method's result: WM_IME_STARTCOMPOSITION,
+  WM_IME_COMPOSITION with GCS_RESULTSTR, WM_IME_ENDCOMPOSITION, with a real
+  input context for `ImmGetContext` and the text in
+  `ImmGetCompositionStringW`/`A`; DefWindowProc turns it into WM_IME_CHAR
+  and WM_CHAR. `host_text_input` (host/input_gate.h) is the entry point for
+  any host's text.
+
 - Convert text between code pages as Windows does (`runtime/codepages.cpp`).
   `MultiByteToWideChar` and `WideCharToMultiByte` honour the code page
   instead of zero-extending bytes: code page 1252 (`CP_ACP`) maps

@@ -27,7 +27,9 @@ owns. Compile the runtime with `-I<repo root>` so `guest.h` can find it.
 | `user32_ansi.cpp` | the ANSI odds and ends: class queries, window text, LoadStringA/LoadBitmapA from any loaded module, MoveWindow, ChangeDisplaySettingsA, wsprintfA, SetWindowsHookExA |
 | `gdi32_text.cpp`, `gdi32_truetype.cpp`, `gdi32_fontdb.cpp` | GDI text: fonts realized and measured as GDI measures them (VDMX, hdmx, OS/2), the installed copies of Windows faces with `[runtime] system_fonts`, the A and W text calls |
 | `gdi_surface.h` | a DC over pixels the caller owns, for a DirectDraw surface's GetDC/ReleaseDC |
-| `misc.cpp` | GDI32, ADVAPI32 registry, SHELL32, ole32, IMM32, WINMM (clock, mmio, MIDI out) |
+| `misc.cpp` | GDI32, ADVAPI32 registry, SHELL32, ole32, WINMM (clock, mmio, MIDI out) |
+| `codepages.cpp`, `codepage_tables.h` | MultiByteToWideChar/WideCharToMultiByte as Windows converts: code pages 1252, 437, 850, 10000, 20127, 28591 (tables measured on Windows, `tools/codepages`), UTF-8, CP_SYMBOL |
+| `imm32.cpp` | IMM32, and text from the platform's input method (`host_post_text`) as WM_CHAR or an IME result |
 | `winsock.cpp`, `winsock.h` | WSOCK32 and WS2_32 on the host's sockets ("Networking" below) |
 | `iphlpapi.cpp` | the IP helper API (GetAdaptersInfo and friends) and NETAPI32's Netbios |
 | `net_adapters.h/.cpp` | the network adapters a guest is shown, one list for Winsock and the IP helper API |
@@ -65,7 +67,16 @@ application counts as always in the foreground.
 the host's layout made of it (WM_CHAR, or WM_SYSCHAR after Alt, in the window's
 encoding: code page 1252 for an ANSI window) and marks the key translated, so
 the guest's TranslateMessage makes no second one. TranslateMessage on a key the
-guest posted itself uses the US layout and the keyboard state.
+guest posted itself uses the US layout and the keyboard state. A desktop host
+keeps the platform's input method on and sends its text on its own
+(`host_post_text`, after a key posted with `HOST_KEY_TEXT_FOLLOWS`), so dead
+keys, Option characters, every layout and an input method's committed text
+arrive as Windows delivers them: WM_CHAR per UTF-16 unit for a Unicode window;
+for an ANSI window the 1252 bytes, or, when 1252 cannot spell the text, an IME
+result (WM_IME_STARTCOMPOSITION, WM_IME_COMPOSITION with GCS_RESULTSTR,
+WM_IME_ENDCOMPOSITION) whose text ImmGetCompositionStringW reads from the
+non-NULL context ImmGetContext gives; DefWindowProc makes WM_IME_CHAR and then
+WM_CHAR ('?' for what 1252 lacks) of it for a window that does not.
 
 **Text metrics are GDI's.** `truetype_realize` turns a LOGFONT into the
 whole-pixel em GDI hints at, the ascent and descent from the font's VDMX table

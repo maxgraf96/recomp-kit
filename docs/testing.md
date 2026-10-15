@@ -35,7 +35,8 @@ pointer, the waits and the capped PNG dumps.
 `win32_ui_tests` (`nogame`, beside `dx_tests`) drives the window system
 through guest calls and guest threads: activation and focus sequences, sent
 messages in order with queued input, per-thread queues, PostThreadMessage and
-cross-thread SendMessage, keyboard translation, timers and WM_SETCURSOR, and
+cross-thread SendMessage, keyboard translation, text from the input method
+(WM_CHAR, the IME result path and IMM32), timers and WM_SETCURSOR, and
 DirectInput's foreground and exclusive semantics, its 256-record buffer,
 granularity and object info. `gdi_tests` pins GDI's text-measuring rules on a
 generated font that carries VDMX and hdmx tables (`make_gdi_font.py`), and the

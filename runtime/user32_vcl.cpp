@@ -1,5 +1,6 @@
 // The cooperative USER32 model used by windowed compiler frameworks. Handles
 // name runtime-owned state; callbacks always re-enter through guest_call.
+#include "codepages.h"
 #include "user32_internal.h"
 #include "memory.h"
 #include "win32.h"
@@ -1603,8 +1604,7 @@ void user32::forget_window_services(uint32_t hwnd) {
 // is the invisible application window, which does nothing with a keystroke.
 // Falls back to the active window and then to the main one, so a guest that
 // never called SetFocus is no worse off than before.
-namespace {
-uint32_t key_window() {
+uint32_t user32::keyboard_window() {
     uint32_t hwnd = user32::focus;
     if (!hwnd || !user32::find_window(hwnd))
         hwnd = user32::active;
@@ -1612,9 +1612,8 @@ uint32_t key_window() {
         hwnd = host_main_window();
     return hwnd;
 }
-} // namespace
 void host_post_key_message(uint32_t msg, uint32_t wparam, uint32_t lparam) {
-    if (uint32_t hwnd = key_window())
+    if (uint32_t hwnd = user32::keyboard_window())
         host_post_message(hwnd, msg, wparam, lparam);
 }
 
@@ -1622,29 +1621,43 @@ void host_post_key_message(uint32_t msg, uint32_t wparam, uint32_t lparam) {
 // message is marked as translated, so the guest's TranslateMessage finds the
 // character already queued behind it rather than inventing a second one from
 // a US layout. The character is delivered in the window's encoding: UTF-16
-// for a Unicode window, the ANSI code page (1252) byte for an ANSI one, and
-// nothing at all for a character code page 1252 cannot spell.
+// for a Unicode window (a surrogate pair as two WM_CHARs), the ANSI code page
+// (1252) byte for an ANSI one, and for a character 1252 cannot spell the IME
+// result an input method would deliver (imm32.cpp). HOST_KEY_TEXT_FOLLOWS
+// marks a key whose text the host sends on its own with host_post_text.
 void host_post_key_text(uint32_t msg, uint32_t wparam, uint32_t lparam, uint32_t character) {
-    const uint32_t hwnd = key_window();
+    const uint32_t hwnd = user32::keyboard_window();
     if (!hwnd)
         return;
     using namespace user32;
     Msg m{hwnd, msg, wparam, lparam, host_millis(), (uint32_t)g_cursor_x, (uint32_t)g_cursor_y};
     const bool down = msg == 0x0100 || msg == 0x0104;
-    uint32_t ch = character;
-    if (down && ch) {
-        Window *w = find_window(hwnd);
-        if (w && !w->unicode) {
-            const int b = ch < 0x10000 ? crt::unicode_to_cp1252(ch) : -1;
-            ch = b < 0 ? 0 : uint32_t(b);
-        } else if (ch > 0xffff)
-            ch = 0; // a surrogate pair would need two messages; nothing here needs one
-    }
-    if (down && ch)
+    const uint32_t ch = down && character <= 0x10ffff ? character : 0;
+    if (down && character)
         m.flags |= MSGF_TRANSLATED;
     queue_for_thread(window_thread(hwnd)).push_back(m);
-    if (down && ch) {
-        Msg text{hwnd, msg == 0x0100 ? 0x0102u : 0x0106u, ch, lparam, m.time, m.ptx, m.pty};
+    if (!ch)
+        return;
+    std::u16string units;
+    if (ch > 0xffff) {
+        units.push_back(char16_t(0xd800 + ((ch - 0x10000) >> 10)));
+        units.push_back(char16_t(0xdc00 + ((ch - 0x10000) & 0x3ff)));
+    } else {
+        units.push_back(char16_t(ch));
+    }
+    Window *w = find_window(hwnd);
+    if (msg == 0x0100 && w && !w->unicode && codepages::unicode_to_ansi(ch) < 0) {
+        post_text_to_window(hwnd, units);
+        return;
+    }
+    const uint32_t char_msg = msg == 0x0100 ? 0x0102u : 0x0106u;
+    for (char16_t unit : units) {
+        uint32_t value = unit;
+        if (w && !w->unicode) {
+            const int b = codepages::unicode_to_ansi(unit);
+            value = b < 0 ? uint32_t('?') : uint32_t(b);
+        }
+        Msg text{hwnd, char_msg, value, lparam, m.time, m.ptx, m.pty};
         queue_for_thread(window_thread(hwnd)).push_back(text);
     }
 }

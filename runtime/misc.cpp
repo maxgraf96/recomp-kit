@@ -1,5 +1,5 @@
 // misc.cpp - the smaller import sets: GDI32, ADVAPI32 (registry), SHELL32,
-// ole32, IMM32 and the non-audio half of WINMM (the millisecond
+// ole32 and the non-audio half of WINMM (the millisecond
 // clock, multimedia timers and mmio file access). MIDI and aux output are
 // logging-only here; real audio belongs to the audio task.
 #include "imports.h"
@@ -1021,39 +1021,6 @@ void o_PropVariantCopy(X86 *c) {
 }
 
 // -------------------------------------------------------------------------
-// IMM32: no input method is attached.
-// -------------------------------------------------------------------------
-void i_ImmGetContext(X86 *c) {
-    set_eax(c, 0);
-}
-void i_ImmReleaseContext(X86 *c) {
-    set_eax(c, 1);
-}
-void i_ImmGetOpenStatus(X86 *c) {
-    set_eax(c, 0);
-}
-void i_ImmSetOpenStatus(X86 *c) {
-    set_eax(c, 1);
-}
-void i_ImmGetCompositionStringA(X86 *c) {
-    set_eax(c, 0);
-}
-void i_ImmGetCandidateListA(X86 *c) {
-    set_eax(c, 0);
-}
-void i_ImmSetCompositionWindow(X86 *c) {
-    set_eax(c, 1);
-}
-// No composition ever exists: 0 bytes, for either encoding.
-void i_ImmGetCompositionStringW(X86 *c) {
-    set_eax(c, 0);
-}
-// Nothing to notify: with no input method, every request fails.
-void i_ImmNotifyIME(X86 *c) {
-    set_eax(c, 0);
-}
-
-// -------------------------------------------------------------------------
 // WINMM: clock, multimedia timers and mmio.
 // -------------------------------------------------------------------------
 struct MmTimer {
@@ -2027,16 +1994,6 @@ const ImportShim g_misc_shims[] = {
     {"ole32.dll", "CoUninitialize", 0, o_CoUninitialize},
     {"ole32.dll", "PropVariantClear", 1, o_PropVariantClear},
     {"ole32.dll", "PropVariantCopy", 2, o_PropVariantCopy},
-    // IMM32
-    {"IMM32.dll", "ImmGetContext", 1, i_ImmGetContext},
-    {"IMM32.dll", "ImmReleaseContext", 2, i_ImmReleaseContext},
-    {"IMM32.dll", "ImmGetOpenStatus", 1, i_ImmGetOpenStatus},
-    {"IMM32.dll", "ImmSetOpenStatus", 2, i_ImmSetOpenStatus},
-    {"IMM32.dll", "ImmGetCompositionStringA", 4, i_ImmGetCompositionStringA},
-    {"IMM32.dll", "ImmGetCandidateListA", 4, i_ImmGetCandidateListA},
-    {"IMM32.dll", "ImmSetCompositionWindow", 2, i_ImmSetCompositionWindow},
-    {"IMM32.dll", "ImmGetCompositionStringW", 4, i_ImmGetCompositionStringW},
-    {"IMM32.dll", "ImmNotifyIME", 4, i_ImmNotifyIME},
     // WINMM: implemented
     {"WINMM.dll", "timeGetTime", 0, m_timeGetTime},
     {"WINMM.dll", "timeGetDevCaps", 2, m_timeGetDevCaps},

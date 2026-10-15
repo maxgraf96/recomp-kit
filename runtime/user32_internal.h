@@ -69,6 +69,9 @@ struct Msg {
 // A key message the host posted together with the character it produced, so
 // TranslateMessage has nothing left to post for it (host_post_key_text).
 constexpr uint32_t MSGF_TRANSLATED = 1;
+// A WM_IME_COMPOSITION the host posted with a result string; the bits from 8
+// up are the string's serial (imm32.cpp).
+constexpr uint32_t MSGF_IME_RESULT = 2;
 
 std::map<std::string, WndClass> &classes();
 std::map<uint32_t, Window> &windows();
@@ -115,6 +118,17 @@ uint32_t put_text(uint32_t out, uint32_t cap, const std::string &text, bool wide
 void register_class_named(X86 *c, bool wide, uint32_t shift);
 void create_window_named(X86 *c, bool wide);
 void def_window_proc(X86 *c, bool wide);
+// The window keyboard input goes to: the focus window, else the active one,
+// else the main one (user32_vcl.cpp).
+uint32_t keyboard_window();
+// Text for `hwnd` in its encoding: WM_CHAR, or for an ANSI window and a
+// character code page 1252 lacks, an IME result (imm32.cpp).
+void post_text_to_window(uint32_t hwnd, const std::u16string &text);
+// Message retrieval saw `m`: a WM_IME_COMPOSITION carrying a result makes it
+// the thread's current result string (imm32.cpp).
+void ime_message_retrieved(const Msg &m, bool removed);
+// DefWindowProc for the WM_IME_* messages; false for any other (imm32.cpp).
+bool ime_def_window_proc(X86 *c, bool wide);
 void send_message(X86 *c, bool wide);
 void peek_message(X86 *c);
 void dispatch_message(X86 *c);

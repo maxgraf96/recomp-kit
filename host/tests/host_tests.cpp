@@ -7245,6 +7245,55 @@ static void test_input_gate() {
     gate_reset_all(&ctx);
 }
 
+// Text from the platform's input method: a key that types is posted
+// already translated and its WM_CHAR is the text that follows, in code page
+// 1252 for an ANSI window or as an IME result for what 1252 lacks.
+static void test_input_method_text() {
+    // Which key-downs leave their character to the input method.
+    const uint32_t follows = HOST_KEY_TEXT_FOLLOWS;
+    CHECK(host_key_character_with_input_method('g', false, false) == follows);
+    CHECK(host_key_character_with_input_method(' ', false, false) == follows);
+    CHECK(host_key_character_with_input_method(0xe9, false, false) == follows);
+    CHECK(host_key_character_with_input_method(0, true, false) == follows); // keypad digit
+    CHECK(host_key_character_with_input_method(0x0d, false, false) == 0x0d);
+    CHECK(host_key_character_with_input_method(0x09, false, false) == 0x09);
+    CHECK(host_key_character_with_input_method(0x08, false, false) == 0x08);
+    CHECK(host_key_character_with_input_method(0x1b, false, false) == 0x1b);
+    CHECK(host_key_character_with_input_method(0, false, false) == 0);    // an arrow
+    CHECK(host_key_character_with_input_method('c', false, true) == 'c'); // Ctrl+C
+
+    imports_init();
+    dinput_register();
+    X86 ctx{};
+    loader_init_context(&ctx);
+    CHECK(gate_make_window(&ctx) != 0);
+    gate_reset_all(&ctx);
+    g_consume_next = false;
+    const uint16_t kMacE = 0x0e;
+    uint32_t wp = 0;
+
+    CHECK(!host_key_event(kMacE, true, follows));
+    host_text_input("\xc3\xa9"); // e-acute, UTF-8
+    CHECK(gate_next_message(&ctx, &wp) == 0x0100);
+    loader_init_context(&ctx);
+    const uint32_t msg = gate_scratch(0x200);
+    CHECK(gate_call_import(&ctx, "USER32.dll", "TranslateMessage", {msg}) == 1);
+    CHECK(gate_next_message(&ctx, &wp) == 0x0102);
+    CHECK(wp == 0xe9);
+    CHECK(gate_next_message(&ctx, nullptr) == 0); // TranslateMessage added nothing
+    CHECK(!host_key_event(kMacE, false, 0));
+    CHECK(gate_next_message(&ctx, nullptr) == 0x0101);
+
+    host_text_input("\xe4\xb8\xad"); // a CJK character: an IME result
+    CHECK(gate_next_message(&ctx, nullptr) == 0x010d);
+    CHECK(gate_next_message(&ctx, nullptr) == 0x010f);
+    CHECK(gate_next_message(&ctx, nullptr) == 0x010e);
+    host_text_input("");
+    host_text_input(nullptr);
+    CHECK(gate_next_message(&ctx, nullptr) == 0);
+    gate_reset_all(&ctx);
+}
+
 // A consumed MODIFIER is the case the flags-bitmask path nearly gets wrong.
 // macOS reports modifiers as a bitmask rather than as key events, so the host
 // diffs them, and the diff has to be against the PHYSICAL keyboard: comparing
@@ -9989,6 +10038,7 @@ int main(int argc, char **argv) {
         {"input state", test_input_state},
         {"input gate", test_input_gate},
         {"input gate modifiers", test_input_gate_modifiers},
+        {"input method text", test_input_method_text},
         {"guest click injection", test_guest_click_injection},
         {"landmark hidden evidence", test_landmark_hidden_evidence},
         {"probe and dumpat", test_probe_and_dumpat_decisions},

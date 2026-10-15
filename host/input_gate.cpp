@@ -3,6 +3,7 @@
 #include "game_config.h"
 #include "../runtime/mods_seam.h"
 #include "../runtime/win32.h"
+#include "../runtime/codepages.h"
 #include "../runtime/guest.h"
 #include "../runtime/display_seam.h"
 #include "../runtime/native_seam.h"
@@ -633,6 +634,24 @@ bool host_gate_inject_guest_click(int32_t gx, int32_t gy, int button, bool down)
     post(kMouseMove, wparam, lparam);
     post(msgs[button][down ? 1 : 0], wparam, lparam);
     return false;
+}
+
+uint32_t host_key_character_with_input_method(uint32_t character, bool keypad_text,
+                                              bool command_held) {
+    if (command_held)
+        return character;
+    if (character == 0x0d || character == 0x09 || character == 0x08 || character == 0x1b)
+        return character;
+    if ((character >= 0x20 && character != 0x7f && character < 0x110000) || keypad_text)
+        return HOST_KEY_TEXT_FOLLOWS;
+    return character;
+}
+
+void host_text_input(const char *utf8) {
+    if (!utf8 || !*utf8)
+        return;
+    const std::u16string units = codepages::utf8_to_utf16(utf8);
+    host_post_text(reinterpret_cast<const uint16_t *>(units.data()), units.size());
 }
 
 bool host_key_event(uint16_t mac, bool down, uint32_t character) {

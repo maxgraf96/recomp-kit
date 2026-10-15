@@ -405,16 +405,22 @@ static void test_translate() {
     check(user(c, "PeekMessageA", {msg, 0, 0, 0, 1}) == 0, "nothing else");
 
     // An ANSI window gets code page 1252: e-acute is 0xe9, the euro 0x80, and
-    // a character 1252 cannot spell makes none at all.
+    // a character 1252 cannot spell arrives as an input method's result
+    // (test_text_input has the rest of that path).
     host_post_key_text(0x0100, 0xde, 0x00280001u, 0xe9);
     host_post_key_text(0x0100, 'E', 0x00120001u, 0x20ac);
     host_post_key_text(0x0100, 'Z', 0x002c0001u, 0x4e2d);
-    std::vector<uint32_t> chars;
-    for (int i = 0; i < 100 && user(c, "PeekMessageA", {msg, 0, 0, 0, 1}); ++i)
+    std::vector<uint32_t> chars, ime;
+    for (int i = 0; i < 100 && user(c, "PeekMessageA", {msg, 0, 0, 0, 1}); ++i) {
         if (rd32(msg + 4) == 0x0102)
             chars.push_back(rd32(msg + 8));
+        if (rd32(msg + 4) >= 0x010d && rd32(msg + 4) <= 0x010f)
+            ime.push_back(rd32(msg + 4));
+    }
     check(chars == std::vector<uint32_t>{0xe9, 0x80}, "WM_CHAR in code page 1252 (%zu)",
           chars.size());
+    check(ime == std::vector<uint32_t>{0x010d, 0x010f, 0x010e},
+          "the CJK character comes as WM_IME_STARTCOMPOSITION, _COMPOSITION, _ENDCOMPOSITION");
 
     // A key the guest posts itself is translated from the US layout, with the
     // keyboard state, and its character comes before the key-up queued after it.
@@ -473,6 +479,148 @@ static void test_translate() {
     check(order.size() >= 3 && order[0] == 0x0104 && order[1] == 0x0112 && order[2] == 0x0010,
           "Alt+F4 -> WM_SYSCOMMAND -> WM_CLOSE");
     check(user(c, "IsWindow", {hwnd}) == 0, "and DefWindowProc's WM_CLOSE destroyed it");
+    drain(c);
+}
+
+// ---------------------------------------------------------------------------
+// Text from the platform's input method (host_post_text) and IMM32
+// ---------------------------------------------------------------------------
+static uint32_t g_unicode_atom = 0;
+static uint32_t make_unicode_window(X86 *c) {
+    if (!g_unicode_atom) {
+        const uint32_t wc = scratch(0x1a0);
+        memset(g_mem + wc, 0, 40);
+        wr32(wc + 4, imports_alloc_trampoline("test", "recording_proc_w", recording_proc, 4));
+        const char16_t name[] = u"WinUiTestW";
+        memcpy(g_mem + wc + 0x40, name, sizeof name);
+        wr32(wc + 36, wc + 0x40);
+        g_unicode_atom = user(c, "RegisterClassW", {wc});
+        check(g_unicode_atom != 0, "RegisterClassW");
+    }
+    return user(c, "CreateWindowExW",
+                {0, g_unicode_atom, 0, 0x10000000u, 0, 0, 640, 480, 0, 0, 0, 0});
+}
+
+static void post_text(const std::u16string &text) {
+    host_post_text(reinterpret_cast<const uint16_t *>(text.data()), text.size());
+}
+
+// What the window procedure saw of the text messages, in order: "msg:wparam".
+static std::string text_seen(uint32_t hwnd) {
+    std::string out;
+    char buf[32];
+    for (const Seen &s : g_seen) {
+        if (s.hwnd != hwnd ||
+            !(s.msg == 0x0102 || (s.msg >= 0x010d && s.msg <= 0x010f) || s.msg == 0x0286))
+            continue;
+        snprintf(buf, sizeof buf, "%s%x:%x", out.empty() ? "" : " ", s.msg, s.wp);
+        out += buf;
+    }
+    return out;
+}
+
+// Inside WM_IME_COMPOSITION, what IMM32 tells the window procedure.
+struct ImeRead {
+    uint32_t himc = 0, bytes = 0, copied = 0, ansi_bytes = 0;
+    std::u16string text;
+    std::string ansi;
+};
+static std::vector<ImeRead> g_ime_reads;
+static void read_ime(X86 *c, const Seen &s) {
+    if (s.msg != 0x010f || !(s.lp & 0x0800))
+        return;
+    ImeRead r;
+    r.himc = call(c, "IMM32.dll", "ImmGetContext", {s.hwnd});
+    const uint32_t buf = scratch(0x1000);
+    r.bytes = call(c, "IMM32.dll", "ImmGetCompositionStringW", {r.himc, 0x0800, 0, 0});
+    r.copied = call(c, "IMM32.dll", "ImmGetCompositionStringW", {r.himc, 0x0800, buf, r.bytes});
+    r.text.assign(reinterpret_cast<const char16_t *>(g_mem + buf), r.copied / 2);
+    r.ansi_bytes = call(c, "IMM32.dll", "ImmGetCompositionStringA", {r.himc, 0x0800, buf, 64});
+    r.ansi.assign(reinterpret_cast<const char *>(g_mem + buf), r.ansi_bytes);
+    call(c, "IMM32.dll", "ImmReleaseContext", {s.hwnd, r.himc});
+    g_ime_reads.push_back(r);
+}
+
+static void test_text_input() {
+    X86 *c = &g_main;
+    const uint32_t hwnd = make_window(c, true);
+    user(c, "SetFocus", {hwnd});
+    drain(c);
+    check(call(c, "IMM32.dll", "ImmGetContext", {hwnd}) != 0,
+          "ImmGetContext gives a window an input context");
+    check(call(c, "IMM32.dll", "ImmGetContext", {0}) == 0, "and nothing for no window");
+
+    // Text 1252 spells is WM_CHAR with its bytes, in order.
+    g_seen.clear();
+    post_text(u"aé€™");
+    drain(c);
+    check(text_seen(hwnd) == "102:61 102:e9 102:80 102:99", "ANSI window, 1252 text: %s",
+          text_seen(hwnd).c_str());
+
+    // Text with a character 1252 lacks is an input method's result. The
+    // procedure leaves it to DefWindowProcA, which sends WM_IME_CHAR per
+    // character ('?' for the one 1252 lacks), and that posts WM_CHAR.
+    g_seen.clear();
+    g_ime_reads.clear();
+    g_on_message = read_ime;
+    post_text(u"中a");
+    drain(c);
+    check(text_seen(hwnd) == "10d:0 10f:61 286:3f 286:61 10e:0 102:3f 102:61",
+          "ANSI window, CJK text: %s", text_seen(hwnd).c_str());
+    bool composition_lparam = false;
+    for (const Seen &s : g_seen)
+        if (s.msg == 0x010f)
+            composition_lparam = (s.lp & 0x0800) != 0;
+    check(composition_lparam, "WM_IME_COMPOSITION carries GCS_RESULTSTR");
+    check(g_ime_reads.size() == 1 && g_ime_reads[0].himc != 0 && g_ime_reads[0].bytes == 4 &&
+              g_ime_reads[0].copied == 4 && g_ime_reads[0].text == u"中a",
+          "ImmGetCompositionStringW(GCS_RESULTSTR) reads the UTF-16 text");
+    check(g_ime_reads.size() == 1 && g_ime_reads[0].ansi == "?a",
+          "ImmGetCompositionStringA reads it in code page 1252");
+
+    // Two results queued before the window reads either: each
+    // WM_IME_COMPOSITION reads its own.
+    g_ime_reads.clear();
+    post_text(u"日");
+    post_text(u"本語");
+    drain(c);
+    check(g_ime_reads.size() == 2 && g_ime_reads[0].text == u"日" && g_ime_reads[1].text == u"本語",
+          "queued results keep their own text");
+    g_on_message = nullptr;
+
+    // A key whose text the input method sends separately: the key-down is
+    // already translated, so TranslateMessage adds nothing, and the text that
+    // follows is the character. A dead key's down has no text after it.
+    const uint32_t msg = scratch(0x280);
+    host_post_key_text(0x0100, 0xde, 0x00280001u, HOST_KEY_TEXT_FOLLOWS); // dead acute
+    host_post_key_message(0x0101, 0xde, 0xc0280001u);
+    host_post_key_text(0x0100, 'E', 0x00120001u, HOST_KEY_TEXT_FOLLOWS);
+    post_text(u"é");
+    host_post_key_message(0x0101, 'E', 0xc0120001u);
+    std::vector<uint32_t> order;
+    for (int i = 0; i < 20 && user(c, "PeekMessageA", {msg, 0, 0, 0, 1}); ++i) {
+        order.push_back(rd32(msg + 4) == 0x0102 ? 0x10000 | rd32(msg + 8) : rd32(msg + 4));
+        if (rd32(msg + 4) == 0x0100)
+            check(user(c, "TranslateMessage", {msg}) == 1, "the key-down counts as translated");
+    }
+    check(order == std::vector<uint32_t>{0x0100, 0x0101, 0x0100, 0x100e9, 0x0101},
+          "dead key, then e: one WM_CHAR, e-acute, between the e's down and up (%zu)",
+          order.size());
+
+    // A Unicode window gets UTF-16: a character outside the BMP is a
+    // surrogate pair, two WM_CHARs, from a key or from the input method.
+    const uint32_t wide = make_unicode_window(c);
+    user(c, "SetFocus", {wide});
+    drain(c);
+    g_seen.clear();
+    post_text(u"中\U0001F600");
+    host_post_key_text(0x0100, 'Z', 0x002c0001u, 0x1F600);
+    drain(c);
+    check(text_seen(wide) == "102:4e2d 102:d83d 102:de00 102:d83d 102:de00", "Unicode window: %s",
+          text_seen(wide).c_str());
+
+    user(c, "DestroyWindow", {wide});
+    user(c, "DestroyWindow", {hwnd});
     drain(c);
 }
 
@@ -975,6 +1123,7 @@ int main() {
         {"SetFocus", test_set_focus},
         {"a fullscreen game's Command-Tab", test_fullscreen_deactivation},
         {"keyboard translation", test_translate},
+        {"text from the input method, and IMM32", test_text_input},
         {"per-thread queues and cross-thread SendMessage", test_threads},
         {"a thread's windows end with it", test_thread_windows_end_with_it},
         {"timers and WM_SETCURSOR", test_timer_and_cursor},

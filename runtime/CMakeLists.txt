@@ -3,7 +3,7 @@
 set(POP_RUNTIME_SOURCES
   memory.cpp loader.cpp imports.cpp import_argc.cpp cpu.cpp thunks.cpp seh.cpp profile.cpp kernel32.cpp kernel32_wide.cpp
   resources.cpp oleaut32.cpp mods_seam.cpp user32.cpp user32_wide.cpp user32_vcl.cpp user32_static.cpp user32_activation.cpp user32_ansi.cpp
-  misc.cpp misc_dlls.cpp winsock.cpp iphlpapi.cpp net_adapters.cpp comctl32.cpp codepages.cpp gdi32.cpp gdi32_draw.cpp gdi32_text.cpp gdi32_truetype.cpp gdi32_fontdb.cpp msimg32.cpp
+  misc.cpp misc_dlls.cpp winsock.cpp iphlpapi.cpp net_adapters.cpp comctl32.cpp codepages.cpp imm32.cpp gdi32.cpp gdi32_draw.cpp gdi32_text.cpp gdi32_truetype.cpp gdi32_fontdb.cpp msimg32.cpp
   media_foundation.cpp layout.cpp interp.cpp discovery.cpp dispatch.cpp
   msvcrt.cpp msvcrt_heap.cpp msvcrt_locale.cpp msvcrt_string.cpp msvcrt_format.cpp msvcrt_stdio.cpp
   msvcrt_math.cpp msvcrt_float.cpp msvcrt_time.cpp msvcp60.cpp msvc_eh.cpp

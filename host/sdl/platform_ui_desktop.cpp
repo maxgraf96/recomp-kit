@@ -102,6 +102,10 @@ void platform_ui_init_hints() {
     // event, rather than being swallowed as the activating click.
     SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
     SDL_SetHint(SDL_HINT_VIDEO_ALLOW_SCREENSAVER, "0");
+    // Text input stays on for the game's keyboard text (sdl/main.cpp), and a
+    // held key must repeat, as on Windows, rather than open macOS's accent
+    // picker.
+    SDL_SetHint(SDL_HINT_MAC_PRESS_AND_HOLD, "0");
 }
 
 GamePath platform_ui_resolve_game(const char *flag, std::string *error) {

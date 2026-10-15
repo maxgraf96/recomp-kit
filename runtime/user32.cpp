@@ -1042,6 +1042,7 @@ bool retrieve(X86 *c, uint32_t filter_hwnd, uint32_t min_msg, uint32_t max_msg, 
                 q.erase(it);
             if (out->flags & MSGF_TRANSLATED)
                 translated_keys()[guest_current_thread_id()] = *out;
+            ime_message_retrieved(*out, remove);
             return true;
         }
         if (it == q.end())
@@ -1298,6 +1299,8 @@ void u_SendMessageA(X86 *c) {
 
 void def_window_proc(X86 *c, bool wide) {
     uint32_t hwnd = arg(c, 0), msg = arg(c, 1);
+    if (ime_def_window_proc(c, wide))
+        return;
     Window *w = find_window(hwnd);
     switch (msg) {
     case 0x000c: // WM_SETTEXT

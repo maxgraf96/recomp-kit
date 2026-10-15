@@ -37,6 +37,27 @@ bool host_gate_wheel(int32_t dz);
 // delivered on any path.
 bool host_key_event(uint16_t mac_keycode, bool down, uint32_t character);
 
+// TEXT FROM THE PLATFORM'S INPUT METHOD. A desktop host keeps SDL's text
+// input on, so dead keys, Option characters, any keyboard layout and an
+// input method's committed text all arrive as text events, separately from
+// the key events. A key whose character comes that way is posted with
+// HOST_KEY_TEXT_FOLLOWS (runtime/win32.h): its message counts as translated
+// and its WM_CHAR is whatever text follows (none for a dead key).
+//
+// The character to pass host_key_event for a key-down while text input is
+// on: HOST_KEY_TEXT_FOLLOWS for a key that types, `character` unchanged for
+// Return, Tab, Backspace and Escape (the input method sends no text for
+// them), for a key with no character, and with Control or Command held
+// (TranslateMessage makes the control character). `character` is the key's
+// character with Shift and Caps Lock, `keypad_text` whether it is a numeric
+// keypad key that types (its keycode is no character).
+uint32_t host_key_character_with_input_method(uint32_t character, bool keypad_text,
+                                              bool command_held);
+// Text the input method committed, as UTF-8, for the guest's focus window
+// (host_post_text: WM_CHAR, or an IME result for an ANSI window and a
+// character code page 1252 lacks). Call it under the baton.
+void host_text_input(const char *utf8);
+
 // A click at GUEST coordinates, with no physical mapping in the way.
 //
 // The scripted `click` moves a mouse: it sends relative motion, and the game

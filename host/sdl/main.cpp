@@ -287,7 +287,8 @@ struct PendingInput {
         FOCUS,
         RELEASE_CAPTURE,
         PLACE,
-        RAW_MOTION
+        RAW_MOTION,
+        TEXT
     } kind;
     int32_t x = 0, y = 0, dz = 0;
     double dx = 0, dy = 0; // Drawable deltas preserve subpixel motion in the queue.
@@ -300,6 +301,7 @@ struct PendingInput {
     uint32_t flags = 0;
     bool minimized = false; // FOCUS: the window is minimised or hidden
     bool raw = false;       // BUTTON, WHEEL: the pointer was the game's (relative mode)
+    std::string text;       // TEXT: what the input method committed, UTF-8
 };
 std::vector<PendingInput> g_pending_input;
 // The queue is FILLED on the host thread inside an idle slice, with the
@@ -803,6 +805,20 @@ bool is_modifier_scancode(SDL_Scancode sc) {
            sc == SDL_SCANCODE_LGUI || sc == SDL_SCANCODE_RGUI || sc == SDL_SCANCODE_CAPSLOCK;
 }
 
+// The game's keyboard text comes through SDL's text input on a desktop: dead
+// keys, Option characters, every layout and input method (host_text_input).
+// A touch device would raise its on-screen keyboard, so there text input
+// belongs to the on-screen controls alone.
+bool keyboard_text_input_on() {
+    return g_window && !platform_ui_touch_device() && SDL_TextInputActive(g_window);
+}
+// Kept on whenever the game window exists; the controls editor turning it
+// off after its prompt is undone on the next service.
+void update_keyboard_text_input() {
+    if (g_window && !platform_ui_touch_device() && !SDL_TextInputActive(g_window))
+        SDL_StartTextInput(g_window);
+}
+
 void handle_key(const SDL_KeyboardEvent &event, bool down) {
     if (is_modifier_scancode(event.scancode)) {
         PendingInput e;
@@ -840,6 +856,18 @@ void handle_key(const SDL_KeyboardEvent &event, bool down) {
         event.scancode, SDL_Keymod(event.mod & (SDL_KMOD_SHIFT | SDL_KMOD_CAPS)), false);
     e.character =
         text < 0x40000000 && text >= 0x20 && !(event.mod & SDL_KMOD_CTRL) ? (uint32_t)text : 0u;
+    // With text input on, a real keyboard's key that types gets its character
+    // from the text event SDL sends after it (dead keys, Option, any layout);
+    // a key event the host made itself (scripted, on-screen) brings none.
+    if (down && event.which != 0 && keyboard_text_input_on()) {
+        const bool keypad =
+            (event.scancode >= SDL_SCANCODE_KP_DIVIDE && event.scancode <= SDL_SCANCODE_KP_PERIOD &&
+             event.scancode != SDL_SCANCODE_KP_ENTER) ||
+            event.scancode == SDL_SCANCODE_KP_EQUALS;
+        e.character =
+            host_key_character_with_input_method(text < 0x40000000 ? (uint32_t)text : 0u, keypad,
+                                                 (event.mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0);
+    }
     e.flags = host_modifier_flags_from_sdl(event.mod);
     queue_or_apply(e);
 }
@@ -883,6 +911,9 @@ void apply_input(const PendingInput &e) {
         break;
     case PendingInput::KEY:
         apply_key(e.key, e.down, e.character, e.flags);
+        break;
+    case PendingInput::TEXT:
+        host_text_input(e.text.c_str());
         break;
     case PendingInput::MODIFIERS:
         host_modifier_event(e.flags);
@@ -1221,6 +1252,14 @@ void handle_event(const SDL_Event &event) {
             queue_or_apply(e);
         }
         break;
+    case SDL_EVENT_TEXT_INPUT:
+        if (keyboard_text_input_on() && event.text.text && *event.text.text) {
+            PendingInput e;
+            e.kind = PendingInput::TEXT;
+            e.text = event.text.text;
+            queue_or_apply(e);
+        }
+        break;
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP:
         // Command combinations belong to the application, not the game:
@@ -1547,6 +1586,7 @@ void after_events() {
         controls::host_set_wanted(absent, controls::gamepad_connected());
         controls::host_pump(SDL_GetTicksNS());
         update_editor_text_input();
+        update_keyboard_text_input();
     }
     // A shell-launched process does not always come forward on its own, and a
     // window that never gained focus receives no key events at all. Ask again,
