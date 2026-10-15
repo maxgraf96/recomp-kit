@@ -410,8 +410,16 @@ mouse would, with nobody there: a line-based script of actions (`move`,
 `moveby`, `click`, `button`, `key`, `dump NAME` to a PNG) and of waits on what
 the game does (`wait MS`, `wait frames N`, `wait message WM_X`, `wait change`
 against the picture before the last action or a `mark`, `wait still N`,
-`wait size W H`, `wait pixel X Y RRGGBB`, `wait pointer`), each wait with a `within` after which the
-script fails and says which line and why. The header has the whole language.
+`wait size W H`, `wait pixel X Y RRGGBB`, `wait pointer`, `wait file PATH`), each wait with a
+`within` after which the script fails and says which line and why. The header has the whole
+language.
+
+`follow PATH` makes the rest of a run live: the lines appended to PATH are its next steps, run
+as they arrive, until a line `end`. A session whose next step depends on something no script
+can know - a player on another machine joining, a dialog nobody predicted - is driven that way
+while the game keeps running; a followed line that does not parse is reported and skipped
+rather than ending the run, and `timeout` there extends the whole script. `wait file PATH`
+is the one-shot form: go on once something outside the game has made the file.
 
 Nothing reaches the guest by a side door. In the windowed app
 (`RECOMP_INPUT_SCRIPT=FILE`, `RECOMP_INPUT_SCRIPT_OUT=DIR`) each action is an
@@ -450,8 +458,9 @@ program presents nothing (call `boot_present_windows` from the tick); in the
 windowed app, the Direct3D 7 tap's frames with the GDI overlay composed over
 them.
 
-Frame dumps are capped (64 a run by default): a dump directory that fills a
-disk is a dump directory nobody reads. `input_script_tests` runs the language
+Frame dumps are capped (64 file names a run by default; dumping a name again
+replaces its file): a dump directory that fills a disk is a dump directory
+nobody reads. `input_script_tests` runs the language
 against a simulated game.
 
 ## The player host

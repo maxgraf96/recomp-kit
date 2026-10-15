@@ -14,6 +14,7 @@
 #include <atomic>
 #include <map>
 #include <mutex>
+#include <set>
 #include <sstream>
 
 namespace iscript {
@@ -265,218 +266,246 @@ uint32_t message_for_name(const char *name) {
     return 0;
 }
 
-bool parse(const std::string &text, Script *out, std::string *error) {
-    Script s;
-    std::istringstream in(text);
-    std::string raw;
-    int number = 0;
+bool parse_line(const std::string &raw, int number, Script *s, bool continuing, bool *end,
+                std::string *error) {
     auto fail = [&](const std::string &why) {
         if (error)
             *error = "line " + std::to_string(number) + ": " + why;
         return false;
     };
-    while (std::getline(in, raw)) {
-        ++number;
-        const size_t hash = raw.find('#');
-        std::string line = hash == std::string::npos ? raw : raw.substr(0, hash);
-        std::vector<std::string> w = words(line);
-        if (w.empty())
-            continue;
-        const std::string verb = w[0];
-        auto is = [&](const char *v) { return equal_nocase(verb.c_str(), v); };
-        Step st;
-        st.line = number;
-        std::string why;
-        long a = 0, b = 0;
-        if (is("timeout")) {
-            if (w.size() != 2 || !integer(w[1], &a) || a <= 0)
-                return fail("timeout needs a positive number of ms");
-            s.timeout_ms = uint32_t(a);
-            continue;
-        } else if (is("pointer")) {
-            if (w.size() == 2 && equal_nocase(w[1].c_str(), "system")) {
-                st.pointer = 0;
-            } else {
-                if (w.size() != 4 ||
-                    (!equal_nocase(w[1].c_str(), "i32") && !equal_nocase(w[1].c_str(), "f32")))
-                    return fail("pointer needs i32|f32 XADDR YADDR, or system");
-                if (!address(w[2], &st.addr) || !address(w[3], &st.addr_y))
-                    return fail("pointer addresses are 0xADDR, [0xADDR]+OFFSET or 0xADDR+OFFSET");
-                st.pointer = equal_nocase(w[1].c_str(), "f32") ? 2 : 1;
-            }
-            // Before any step it is how the script starts; after one, a step
-            // that switches the pointer there.
-            if (s.steps.empty()) {
-                s.has_pointer = st.pointer != 0;
-                s.pointer_float = st.pointer == 2;
-                s.pointer_x = st.addr;
-                s.pointer_y = st.addr_y;
-                continue;
-            }
-            st.op = Op::Pointer;
-        } else if (is("pointer_tolerance")) {
-            double t = 0;
-            if (w.size() != 2 || !real(w[1], &t) || t < 0.5)
-                return fail("pointer_tolerance needs a number of pixels (at least 0.5)");
-            s.pointer_tolerance = t;
-            continue;
-        } else if (is("hold")) {
-            if (w.size() != 2 || !integer(w[1], &a) || a < 0)
-                return fail("hold needs a number of ms");
-            s.hold_ms = uint32_t(a);
-            continue;
-        } else if (is("wait")) {
-            if (w.size() < 2)
-                return fail("wait needs MS, frames, message, change, still or pointer");
-            const std::string kind = w[1];
-            auto kind_is = [&](const char *k) { return equal_nocase(kind.c_str(), k); };
-            st.ms = kDefaultWithin;
-            bool within = false;
-            if (!take_within(w, 2, &st.ms, &why, &within))
-                return fail(why);
-            if (integer(kind, &a)) {
-                if (w.size() != 2 || a < 0 || within)
-                    return fail("wait MS takes nothing else");
-                st.op = Op::Wait;
-                st.ms = uint32_t(a);
-            } else if (kind_is("frames")) {
-                if (w.size() != 3 || !integer(w[2], &a) || a <= 0)
-                    return fail("wait frames needs a positive count");
-                st.op = Op::WaitFrames;
-                st.count = uint32_t(a);
-            } else if (kind_is("message")) {
-                if (w.size() != 3 || !(st.msg = message_for_name(w[2].c_str())))
-                    return fail("wait message needs a WM_ name or a message number");
-                st.op = Op::WaitMessage;
-                st.text = w[2];
-            } else if (kind_is("change")) {
-                st.op = Op::WaitChange;
-                if (w.size() == 3 &&
-                    (!real(w[2], &st.fraction) || st.fraction <= 0 || st.fraction >= 1))
-                    return fail("wait change takes a fraction between 0 and 1");
-                if (w.size() > 3)
-                    return fail("wait change [FRACTION] [within MS]");
-            } else if (kind_is("still")) {
-                if (w.size() != 3 || !integer(w[2], &a) || a < 2)
-                    return fail("wait still needs a count of at least 2 frames");
-                st.op = Op::WaitStill;
-                st.count = uint32_t(a);
-            } else if (kind_is("pointer")) {
-                if (w.size() != 2)
-                    return fail("wait pointer [within MS]");
-                st.op = Op::WaitPointer;
-            } else if (kind_is("pixel")) {
-                // wait pixel X Y RRGGBB [tol N]
-                long tol = 16;
-                for (size_t i = 5; i + 1 < w.size(); ++i)
-                    if (equal_nocase(w[i].c_str(), "tol")) {
-                        if (!integer(w[i + 1], &tol) || tol < 0 || tol > 255)
-                            return fail("tol is 0 to 255");
-                        w.erase(w.begin() + long(i), w.begin() + long(i) + 2);
-                        break;
-                    }
-                const std::string hex = w.size() == 5 ? w[4] : std::string();
-                char *end = nullptr;
-                const unsigned long color = hex.size() == 6 ? strtoul(hex.c_str(), &end, 16) : 0;
-                if (w.size() != 5 || !integer(w[2], &a) || !integer(w[3], &b) || a < 0 || b < 0 ||
-                    hex.size() != 6 || !end || *end)
-                    return fail("wait pixel X Y RRGGBB [tol N] [within MS]");
-                st.op = Op::WaitPixel;
-                st.x = int32_t(a);
-                st.y = int32_t(b);
-                st.color = uint32_t(color);
-                st.tol = int(tol);
-            } else if (kind_is("size")) {
-                if (w.size() != 4 || !integer(w[2], &a) || !integer(w[3], &b) || a <= 0 || b <= 0)
-                    return fail("wait size W H [within MS]");
-                st.op = Op::WaitSize;
-                st.x = int32_t(a);
-                st.y = int32_t(b);
-            } else {
-                return fail(
-                    "wait needs MS, frames, message, change, still, pointer, size or pixel");
-            }
-        } else if (is("move") || is("moveby")) {
-            if (w.size() != 3 || !integer(w[1], &a) || !integer(w[2], &b))
-                return fail(verb + " needs two whole numbers");
-            st.op = is("move") ? Op::Move : Op::MoveBy;
-            st.x = int32_t(a);
-            st.y = int32_t(b);
-        } else if (is("click")) {
-            size_t i = 1;
-            if (w.size() == 4) {
-                if ((st.button = button_for(w[1])) < 0)
-                    return fail("click button is left, right or middle");
-                i = 2;
-            } else if (w.size() != 3) {
-                return fail("click [left|right|middle] X Y");
-            }
-            if (!integer(w[i], &a) || !integer(w[i + 1], &b))
-                return fail("click needs two whole numbers");
-            st.op = Op::Click;
-            st.x = int32_t(a);
-            st.y = int32_t(b);
-        } else if (is("button")) {
-            if (w.size() != 3 || (st.button = button_for(w[1])) < 0 ||
-                !(equal_nocase(w[2].c_str(), "down") || equal_nocase(w[2].c_str(), "up")))
-                return fail("button left|right|middle down|up");
-            st.op = Op::Button;
-            st.down = equal_nocase(w[2].c_str(), "down") ? 1 : 0;
-        } else if (is("key")) {
-            if (w.size() < 2 || w.size() > 3 || !(st.dik = dik_for_name(w[1].c_str())))
-                return fail("key needs a DirectInput key name (ESCAPE, RETURN, A, F1, ...)");
-            if (w.size() == 3) {
-                if (equal_nocase(w[2].c_str(), "down"))
-                    st.down = 1;
-                else if (equal_nocase(w[2].c_str(), "up"))
-                    st.down = 0;
-                else
-                    return fail("key NAME [down|up]");
-            }
-            st.op = Op::Key;
-            st.text = w[1];
-        } else if (is("dump")) {
-            if (w.size() != 2 || !dump_name_ok(w[1]))
-                return fail("dump needs a name of letters, digits, _ - and .");
-            st.op = Op::Dump;
-            st.text = w[1];
-        } else if (is("mark")) {
-            if (w.size() != 1)
-                return fail("mark takes nothing");
-            st.op = Op::Mark;
-        } else if (is("peek")) {
-            if (w.size() < 2 || w.size() > 3 || !address(w[1], &st.addr))
-                return fail("peek ADDR [COUNT]");
-            st.count = 1;
-            if (w.size() == 3) {
-                if (!integer(w[2], &a) || a <= 0 || a > 64)
-                    return fail("peek COUNT is 1 to 64 dwords");
-                st.count = uint32_t(a);
-            }
-            st.op = Op::Peek;
-        } else if (is("log")) {
-            st.op = Op::Log;
-            const size_t at = line.find_first_not_of(" \t", line.find(verb) + verb.size());
-            st.text = at == std::string::npos ? std::string() : line.substr(at);
-            while (!st.text.empty() && isspace((unsigned char)st.text.back()))
-                st.text.pop_back();
-        } else if (is("quit")) {
-            if (w.size() != 1)
-                return fail("quit takes nothing");
-            st.op = Op::Quit;
-        } else if (is("type")) {
-            const size_t at = line.find_first_not_of(" \t", line.find(verb) + verb.size());
-            st.text = at == std::string::npos ? std::string() : line.substr(at);
-            while (!st.text.empty() && isspace((unsigned char)st.text.back()))
-                st.text.pop_back();
-            if (st.text.empty())
-                return fail("type needs text");
-            st.op = Op::Type;
+    if (end)
+        *end = false;
+    const size_t hash = raw.find('#');
+    std::string line = hash == std::string::npos ? raw : raw.substr(0, hash);
+    std::vector<std::string> w = words(line);
+    if (w.empty())
+        return true;
+    const std::string verb = w[0];
+    auto is = [&](const char *v) { return equal_nocase(verb.c_str(), v); };
+    Step st;
+    st.line = number;
+    std::string why;
+    long a = 0, b = 0;
+    if (is("timeout")) {
+        if (w.size() != 2 || !integer(w[1], &a) || a <= 0)
+            return fail("timeout needs a positive number of ms");
+        s->timeout_ms = uint32_t(a);
+        return true;
+    } else if (is("pointer")) {
+        if (w.size() == 2 && equal_nocase(w[1].c_str(), "system")) {
+            st.pointer = 0;
         } else {
-            return fail("unknown step '" + verb + "'");
+            if (w.size() != 4 ||
+                (!equal_nocase(w[1].c_str(), "i32") && !equal_nocase(w[1].c_str(), "f32")))
+                return fail("pointer needs i32|f32 XADDR YADDR, or system");
+            if (!address(w[2], &st.addr) || !address(w[3], &st.addr_y))
+                return fail("pointer addresses are 0xADDR, [0xADDR]+OFFSET or 0xADDR+OFFSET");
+            st.pointer = equal_nocase(w[1].c_str(), "f32") ? 2 : 1;
         }
-        s.steps.push_back(st);
+        // Before any step it is how the script starts; after one, a step
+        // that switches the pointer there.
+        if (s->steps.empty() && !continuing) {
+            s->has_pointer = st.pointer != 0;
+            s->pointer_float = st.pointer == 2;
+            s->pointer_x = st.addr;
+            s->pointer_y = st.addr_y;
+            return true;
+        }
+        st.op = Op::Pointer;
+    } else if (is("pointer_tolerance")) {
+        double t = 0;
+        if (w.size() != 2 || !real(w[1], &t) || t < 0.5)
+            return fail("pointer_tolerance needs a number of pixels (at least 0.5)");
+        s->pointer_tolerance = t;
+        return true;
+    } else if (is("hold")) {
+        if (w.size() != 2 || !integer(w[1], &a) || a < 0)
+            return fail("hold needs a number of ms");
+        s->hold_ms = uint32_t(a);
+        return true;
+    } else if (is("wait")) {
+        if (w.size() < 2)
+            return fail("wait needs MS, frames, message, change, still or pointer");
+        const std::string kind = w[1];
+        auto kind_is = [&](const char *k) { return equal_nocase(kind.c_str(), k); };
+        st.ms = kDefaultWithin;
+        bool within = false;
+        if (!take_within(w, 2, &st.ms, &why, &within))
+            return fail(why);
+        if (integer(kind, &a)) {
+            if (w.size() != 2 || a < 0 || within)
+                return fail("wait MS takes nothing else");
+            st.op = Op::Wait;
+            st.ms = uint32_t(a);
+        } else if (kind_is("frames")) {
+            if (w.size() != 3 || !integer(w[2], &a) || a <= 0)
+                return fail("wait frames needs a positive count");
+            st.op = Op::WaitFrames;
+            st.count = uint32_t(a);
+        } else if (kind_is("message")) {
+            if (w.size() != 3 || !(st.msg = message_for_name(w[2].c_str())))
+                return fail("wait message needs a WM_ name or a message number");
+            st.op = Op::WaitMessage;
+            st.text = w[2];
+        } else if (kind_is("change")) {
+            st.op = Op::WaitChange;
+            if (w.size() == 3 &&
+                (!real(w[2], &st.fraction) || st.fraction <= 0 || st.fraction >= 1))
+                return fail("wait change takes a fraction between 0 and 1");
+            if (w.size() > 3)
+                return fail("wait change [FRACTION] [within MS]");
+        } else if (kind_is("still")) {
+            if (w.size() != 3 || !integer(w[2], &a) || a < 2)
+                return fail("wait still needs a count of at least 2 frames");
+            st.op = Op::WaitStill;
+            st.count = uint32_t(a);
+        } else if (kind_is("pointer")) {
+            if (w.size() != 2)
+                return fail("wait pointer [within MS]");
+            st.op = Op::WaitPointer;
+        } else if (kind_is("pixel")) {
+            // wait pixel X Y RRGGBB [tol N]
+            long tol = 16;
+            for (size_t i = 5; i + 1 < w.size(); ++i)
+                if (equal_nocase(w[i].c_str(), "tol")) {
+                    if (!integer(w[i + 1], &tol) || tol < 0 || tol > 255)
+                        return fail("tol is 0 to 255");
+                    w.erase(w.begin() + long(i), w.begin() + long(i) + 2);
+                    break;
+                }
+            const std::string hex = w.size() == 5 ? w[4] : std::string();
+            char *end = nullptr;
+            const unsigned long color = hex.size() == 6 ? strtoul(hex.c_str(), &end, 16) : 0;
+            if (w.size() != 5 || !integer(w[2], &a) || !integer(w[3], &b) || a < 0 || b < 0 ||
+                hex.size() != 6 || !end || *end)
+                return fail("wait pixel X Y RRGGBB [tol N] [within MS]");
+            st.op = Op::WaitPixel;
+            st.x = int32_t(a);
+            st.y = int32_t(b);
+            st.color = uint32_t(color);
+            st.tol = int(tol);
+        } else if (kind_is("size")) {
+            if (w.size() != 4 || !integer(w[2], &a) || !integer(w[3], &b) || a <= 0 || b <= 0)
+                return fail("wait size W H [within MS]");
+            st.op = Op::WaitSize;
+            st.x = int32_t(a);
+            st.y = int32_t(b);
+        } else if (kind_is("file")) {
+            if (w.size() != 3)
+                return fail("wait file PATH [within MS]");
+            st.op = Op::WaitFile;
+            st.text = w[2];
+        } else {
+            return fail(
+                "wait needs MS, frames, message, change, still, pointer, size, pixel or file");
+        }
+    } else if (is("move") || is("moveby")) {
+        if (w.size() != 3 || !integer(w[1], &a) || !integer(w[2], &b))
+            return fail(verb + " needs two whole numbers");
+        st.op = is("move") ? Op::Move : Op::MoveBy;
+        st.x = int32_t(a);
+        st.y = int32_t(b);
+    } else if (is("click")) {
+        size_t i = 1;
+        if (w.size() == 4) {
+            if ((st.button = button_for(w[1])) < 0)
+                return fail("click button is left, right or middle");
+            i = 2;
+        } else if (w.size() != 3) {
+            return fail("click [left|right|middle] X Y");
+        }
+        if (!integer(w[i], &a) || !integer(w[i + 1], &b))
+            return fail("click needs two whole numbers");
+        st.op = Op::Click;
+        st.x = int32_t(a);
+        st.y = int32_t(b);
+    } else if (is("button")) {
+        if (w.size() != 3 || (st.button = button_for(w[1])) < 0 ||
+            !(equal_nocase(w[2].c_str(), "down") || equal_nocase(w[2].c_str(), "up")))
+            return fail("button left|right|middle down|up");
+        st.op = Op::Button;
+        st.down = equal_nocase(w[2].c_str(), "down") ? 1 : 0;
+    } else if (is("key")) {
+        if (w.size() < 2 || w.size() > 3 || !(st.dik = dik_for_name(w[1].c_str())))
+            return fail("key needs a DirectInput key name (ESCAPE, RETURN, A, F1, ...)");
+        if (w.size() == 3) {
+            if (equal_nocase(w[2].c_str(), "down"))
+                st.down = 1;
+            else if (equal_nocase(w[2].c_str(), "up"))
+                st.down = 0;
+            else
+                return fail("key NAME [down|up]");
+        }
+        st.op = Op::Key;
+        st.text = w[1];
+    } else if (is("dump")) {
+        if (w.size() != 2 || !dump_name_ok(w[1]))
+            return fail("dump needs a name of letters, digits, _ - and .");
+        st.op = Op::Dump;
+        st.text = w[1];
+    } else if (is("mark")) {
+        if (w.size() != 1)
+            return fail("mark takes nothing");
+        st.op = Op::Mark;
+    } else if (is("peek")) {
+        if (w.size() < 2 || w.size() > 3 || !address(w[1], &st.addr))
+            return fail("peek ADDR [COUNT]");
+        st.count = 1;
+        if (w.size() == 3) {
+            if (!integer(w[2], &a) || a <= 0 || a > 64)
+                return fail("peek COUNT is 1 to 64 dwords");
+            st.count = uint32_t(a);
+        }
+        st.op = Op::Peek;
+    } else if (is("log")) {
+        st.op = Op::Log;
+        const size_t at = line.find_first_not_of(" \t", line.find(verb) + verb.size());
+        st.text = at == std::string::npos ? std::string() : line.substr(at);
+        while (!st.text.empty() && isspace((unsigned char)st.text.back()))
+            st.text.pop_back();
+    } else if (is("quit")) {
+        if (w.size() != 1)
+            return fail("quit takes nothing");
+        st.op = Op::Quit;
+    } else if (is("type")) {
+        const size_t at = line.find_first_not_of(" \t", line.find(verb) + verb.size());
+        st.text = at == std::string::npos ? std::string() : line.substr(at);
+        while (!st.text.empty() && isspace((unsigned char)st.text.back()))
+            st.text.pop_back();
+        if (st.text.empty())
+            return fail("type needs text");
+        st.op = Op::Type;
+    } else if (is("follow")) {
+        st.ms = 0;
+        bool within = false;
+        if (!take_within(w, 1, &st.ms, &why, &within))
+            return fail(why);
+        if (w.size() != 2)
+            return fail("follow PATH [within MS]");
+        st.op = Op::Follow;
+        st.within = within;
+        st.text = w[1];
+    } else if (continuing && is("end")) {
+        if (w.size() != 1)
+            return fail("end takes nothing");
+        if (end)
+            *end = true;
+        return true;
+    } else {
+        return fail("unknown step '" + verb + "'");
     }
+    s->steps.push_back(st);
+    return true;
+}
+
+bool parse(const std::string &text, Script *out, std::string *error) {
+    Script s;
+    std::istringstream in(text);
+    std::string raw;
+    int number = 0;
+    while (std::getline(in, raw))
+        if (!parse_line(raw, ++number, &s, false, nullptr, error))
+            return false;
     *out = std::move(s);
     return true;
 }
@@ -569,6 +598,10 @@ const char *op_name(Op op) {
         return "wait size";
     case Op::WaitPixel:
         return "wait pixel";
+    case Op::WaitFile:
+        return "wait file";
+    case Op::Follow:
+        return "follow";
     case Op::Move:
         return "move";
     case Op::MoveBy:
@@ -676,6 +709,8 @@ struct Runner::Impl {
         settle_frames = frames_now;
     }
     uint32_t steps_run = 0;
+    std::set<std::string> dump_names;   // every name a dump was armed for (the cap)
+    std::vector<std::string> files{""}; // followed files, by Step::file (0: the script)
 
     // Shared with pixels() and message(), under `m`.
     mutable std::mutex m;
@@ -699,9 +734,15 @@ struct Runner::Impl {
         fflush(log);
         va_end(ap);
     }
+    // "line N", or "PATH line N" for a followed file's line.
+    std::string where(const Step &st) const {
+        const std::string line = "line " + std::to_string(st.line);
+        return st.file > 0 && size_t(st.file) < files.size() ? files[size_t(st.file)] + " " + line
+                                                             : line;
+    }
     void failed(const Step &st, const std::string &what) {
         fail = true;
-        why = "line " + std::to_string(st.line) + ": " + op_name(st.op) + ": " + what;
+        why = where(st) + ": " + op_name(st.op) + ": " + what;
         say("FAILED %s", why.c_str());
     }
 
@@ -938,6 +979,18 @@ struct Runner::Impl {
             }
             return false;
         }
+        case Op::WaitFile: {
+            OsStat info;
+            if (os_stat(st.text.c_str(), &info) == 0) {
+                say("%s: %s is there", where(st).c_str(), st.text.c_str());
+                return true;
+            }
+            if (now - step_ms > st.ms)
+                failed(st, st.text + " did not appear within " + std::to_string(st.ms) + " ms");
+            return false;
+        }
+        case Op::Follow:
+            return true; // Runner::tick reads the file (it adds steps before this one)
         case Op::Move:
         case Op::Click: {
             if (phase == 0) {
@@ -994,10 +1047,12 @@ struct Runner::Impl {
         }
         case Op::Dump: {
             if (phase == 0) {
-                if (dumps_armed >= max_dumps) {
+                // The cap counts files: a name dumped again replaces its file.
+                if (!dump_names.count(st.text) && dump_names.size() >= max_dumps) {
                     failed(st, "more than " + std::to_string(max_dumps) + " dumps");
                     return false;
                 }
+                dump_names.insert(st.text);
                 if (out_dir.empty()) {
                     failed(st, "no output directory");
                     return false;
@@ -1088,6 +1143,82 @@ struct Runner::Impl {
         }
         return true;
     }
+
+    // The `follow` at steps[index]: reads the complete lines its file gained
+    // since the last look (at most every 100 ms), puts their steps in front
+    // of it, and applies their settings. Returns 2 when it added steps (the
+    // first of them is now at `index`), 1 when an `end` line ended it, 0 while
+    // it waits. A line that does not parse is reported and skipped.
+    int follow(size_t index, uint32_t now) {
+        Step::FollowState &fs = script.steps[index].follow;
+        const Step f = script.steps[index]; // a copy: inserting moves the step
+        if (!fs.started) {
+            fs.started = true;
+            fs.since = now;
+            fs.file = int(files.size());
+            files.push_back(f.text);
+            say("%s: following %s", where(f).c_str(), f.text.c_str());
+        }
+        if (fs.ended)
+            return 1;
+        if (fs.polled && now - fs.polled < 100)
+            return 0;
+        fs.polled = now;
+        std::string chunk;
+        if (FILE *in = fopen(f.text.c_str(), "rb")) {
+            if (fseek(in, long(fs.offset), SEEK_SET) == 0) {
+                char buf[4096];
+                size_t n;
+                while ((n = fread(buf, 1, sizeof buf, in)) > 0)
+                    chunk.append(buf, n);
+            }
+            fclose(in);
+        }
+        const size_t complete = chunk.rfind('\n');
+        std::vector<Step> added;
+        bool ended = false;
+        if (complete != std::string::npos) {
+            fs.offset += complete + 1;
+            std::istringstream lines(chunk.substr(0, complete + 1));
+            std::string raw;
+            while (!ended && std::getline(lines, raw)) {
+                if (!raw.empty() && raw.back() == '\r')
+                    raw.pop_back();
+                const int number = ++fs.lines;
+                Script one;
+                one.timeout_ms = script.timeout_ms;
+                one.hold_ms = script.hold_ms;
+                one.pointer_tolerance = script.pointer_tolerance;
+                std::string error;
+                if (!parse_line(raw, number, &one, true, &ended, &error)) {
+                    say("%s %s: ignored", f.text.c_str(), error.c_str());
+                    continue;
+                }
+                script.timeout_ms = one.timeout_ms;
+                script.hold_ms = one.hold_ms;
+                script.pointer_tolerance = one.pointer_tolerance;
+                const size_t text = raw.find_first_not_of(" \t");
+                if (text != std::string::npos && raw[text] != '#')
+                    say("%s line %d: %s", f.text.c_str(), number, raw.c_str() + text);
+                for (Step &st : one.steps) {
+                    st.file = fs.file;
+                    added.push_back(st);
+                }
+            }
+        }
+        if (ended)
+            fs.ended = true;
+        if (!added.empty()) {
+            fs.since = now;
+            script.steps.insert(script.steps.begin() + long(index), added.begin(), added.end());
+            return 2;
+        }
+        if (ended)
+            return 1;
+        if (f.within && now - fs.since > f.ms)
+            failed(f, "no new line in " + f.text + " within " + std::to_string(f.ms) + " ms");
+        return 0;
+    }
 };
 
 Runner::Runner() : impl_(std::make_unique<Impl>()) {}
@@ -1173,6 +1304,19 @@ void Runner::tick(Sink &sink, uint32_t now, uint64_t frames) {
             d.move = Impl::Move{d.move.gain_x, d.move.gain_y};
             if (is_action(st.op))
                 d.baseline();
+        }
+        if (st.op == Op::Follow) {
+            const int r = d.follow(d.pc, now); // may insert steps: `st` is stale after it
+            if (d.fail || r == 0)
+                return;
+            if (r == 2) {
+                d.step_begun = false; // the first new step begins in its own right
+                continue;
+            }
+            ++d.steps_run;
+            ++d.pc;
+            d.step_begun = false;
+            continue;
         }
         const bool complete = d.run_step(sink, st, now);
         if (d.fail)

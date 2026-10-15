@@ -58,6 +58,12 @@
 //                                 colour, each channel within N (default 16):
 //                                 a screen known by one of its own pixels, when
 //                                 a loading screen comes and goes before it
+//   wait file PATH [within MS]    a file exists at PATH (relative to the host's
+//                                 working directory): something outside the
+//                                 game - another machine's run, a person - says
+//                                 the script may go on
+//   follow PATH [within MS]       the steps that follow are PATH's lines, read as
+//                                 the file grows (see FOLLOWING A FILE)
 //   move X Y                      the pointer to client pixel (X, Y)
 //   moveby DX DY                  relative motion, in mouse counts
 //   click [left|right|middle] X Y move, press, hold, release
@@ -76,6 +82,30 @@
 //
 // Every wait that takes `within` fails the script when it runs out; the
 // default is 30000 ms. A failed script stops where it failed and says why.
+// PATHs are one word (no spaces, no `#`).
+//
+// FOLLOWING A FILE
+//
+// `follow PATH` runs the lines appended to PATH as they arrive, so a session
+// whose next step depends on what happens - a player on another machine, a
+// dialog nobody predicted - can be driven live while the game keeps running.
+// Each complete line (ending in a newline) is one step, run in order after
+// the ones read before it; at the end of the file the follow waits for more
+// (the file need not exist yet). A line `end` ends the follow, and the script
+// goes on after it. In a followed file:
+//   - a line that does not parse is reported and skipped, not fatal: the next
+//     line can say it right;
+//   - `timeout`, `hold` and `pointer_tolerance` change the running script
+//     (`timeout` is still measured from the script's start, so a live session
+//     can extend it);
+//   - `pointer` is always a step;
+//   - `within MS` on the follow fails it after MS with no new line (default:
+//     only the script's timeout).
+// A followed file can follow another.
+//
+// Dumps are capped (Runner::set_output): at most `max_dumps` file names are
+// written; a dump of a name already written replaces it and does not count
+// again.
 #pragma once
 #include <stdint.h>
 #include <stdio.h>
@@ -95,6 +125,8 @@ enum class Op {
     WaitPointer,
     WaitSize,
     WaitPixel,
+    WaitFile,
+    Follow,
     Move,
     MoveBy,
     Click,
@@ -132,7 +164,19 @@ struct Step {
     Address addr;           // peek; pointer: x
     Address addr_y;         // pointer: y
     int pointer = 0;        // pointer: 0 system, 1 i32, 2 f32
-    std::string text;       // dump name, log text, key name, typed text (UTF-8)
+    bool within = false;    // `within` was given (follow: an idle limit)
+    std::string text;       // dump name, log text, key name, typed text (UTF-8), path
+    int file = 0;           // where the line came from: 0 the script, n the nth followed file
+    // follow: how far the runner has read PATH.
+    struct FollowState {
+        uint64_t offset = 0;  // bytes consumed: complete lines only
+        int lines = 0;        // lines consumed
+        int file = 0;         // its number for the steps it adds (Step::file)
+        uint32_t since = 0;   // when the last new line arrived (host ms)
+        uint32_t polled = 0;  // when the file was last looked at
+        bool started = false; // `since` and `file` are set
+        bool ended = false;   // an `end` line was read
+    } follow;
 };
 
 struct Script {
@@ -147,6 +191,12 @@ struct Script {
 
 // Parses `text`. False with `error` naming the line and the problem.
 bool parse(const std::string &text, Script *out, std::string *error);
+// Parses one line numbered `number` into `s`: a step appended to s->steps, a
+// setting changed, or nothing (blank, comment). `continuing` is a line that
+// comes after a script's steps - a followed file's: `pointer` is a step there
+// and `end` is accepted (*end set). False with `error` naming the line.
+bool parse_line(const std::string &raw, int number, Script *s, bool continuing, bool *end,
+                std::string *error);
 // The DirectInput scan code a key name stands for, or 0.
 uint8_t dik_for_name(const char *name);
 // The key a US layout types `codepoint` with, and whether Shift is held for
@@ -190,8 +240,9 @@ class Runner {
     // The script. False with `error` when it does not parse or cannot be read.
     bool load_file(const std::string &path, std::string *error);
     bool load_text(const std::string &text, std::string *error);
-    // Where `dump` writes, created on first use. At most `max_dumps` frames are
-    // ever written (default 64); a script that asks for more fails.
+    // Where `dump` writes, created on first use. At most `max_dumps` file names
+    // are ever written (default 64; a name dumped again is replaced in place);
+    // a script that asks for more fails.
     void set_output(const std::string &dir, uint32_t max_dumps = 64);
     void set_memory_reader(MemoryReader reader);
     void set_log(FILE *log); // default stdout; lines start with "[script]"

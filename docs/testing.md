@@ -31,7 +31,8 @@ lines, volume and fades, the reverb, the General MIDI bank and a concurrent
 render thread. `dmusic_render` measures a game's own segments the same way.
 `input_script_tests` (`nogame`) runs scripted input (`host/input_script.h`)
 against a simulated game: the language and its errors, the closed-loop
-pointer, the waits and the capped PNG dumps.
+pointer, the waits (a file appearing included), a followed file growing
+while the script runs, and the capped PNG dumps.
 `win32_ui_tests` (`nogame`, beside `dx_tests`) drives the window system
 through guest calls and guest threads: activation and focus sequences, sent
 messages in order with queued input, per-thread queues, PostThreadMessage and

@@ -402,7 +402,105 @@ static void test_dumps() {
         remove((std::string(dir) + "/a.png").c_str());
         remove((std::string(dir) + "/b.png").c_str());
     }
+    {
+        // The cap counts files: a name dumped again replaces its file.
+        Sim sim("dump live\nwait frames 2\ndump live\ndump live\n");
+        sim.r.set_output(dir, 1);
+        sim.run(5000);
+        CHECK(sim.r.finished());
+        OsStat st;
+        CHECK(os_stat((std::string(dir) + "/live.png").c_str(), &st) == 0);
+        remove((std::string(dir) + "/live.png").c_str());
+    }
     os_rmdir(dir);
+}
+
+static std::string temp_path(const char *name) {
+    char path[256];
+    snprintf(path, sizeof path, "%s/input_script_tests-%d-%s",
+             getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", int(os_monotonic_ns() % 100000), name);
+    return path;
+}
+static void append(const std::string &path, const char *text) {
+    FILE *f = fopen(path.c_str(), "ab");
+    CHECK(f != nullptr);
+    if (f) {
+        fputs(text, f);
+        fclose(f);
+    }
+}
+
+// `wait file` goes on once something outside the game makes the file.
+static std::string g_wait_path;
+static void make_file_at_frame_20(Sim &sim) {
+    if (sim.frames == 20)
+        append(g_wait_path, "go\n");
+}
+static void test_wait_file() {
+    Script s;
+    std::string e;
+    CHECK(parse("wait file /tmp/x within 50\nfollow /tmp/y\nfollow /tmp/z within 9\n", &s, &e));
+    CHECK(s.steps.size() == 3 && s.steps[0].op == Op::WaitFile && s.steps[0].text == "/tmp/x" &&
+          s.steps[0].ms == 50);
+    CHECK(s.steps[1].op == Op::Follow && s.steps[1].text == "/tmp/y" && !s.steps[1].within);
+    CHECK(s.steps[2].op == Op::Follow && s.steps[2].within && s.steps[2].ms == 9);
+    for (const char *b : {"wait file", "wait file a b", "follow", "follow a b", "end"}) {
+        CHECK(!parse(std::string("wait 1\n") + b + "\n", &s, &e));
+        CHECK(e.rfind("line 2:", 0) == 0);
+    }
+
+    g_wait_path = temp_path("go");
+    remove(g_wait_path.c_str());
+    Sim sim(("wait file " + g_wait_path + " within 5000\nkey RETURN\n").c_str());
+    sim.paint = make_file_at_frame_20;
+    sim.run(10000);
+    CHECK(sim.r.finished());
+    CHECK(sim.frames >= 20 && sim.game.events.size() == 2 && sim.game.events[0] == "key 1c down");
+    remove(g_wait_path.c_str());
+
+    Sim never(("wait file " + g_wait_path + " within 300\n").c_str());
+    never.run(5000);
+    CHECK(never.r.failed());
+    CHECK(never.r.failure().find("did not appear within 300 ms") != std::string::npos);
+}
+
+// `follow` runs the lines a file gains, in order, while the game runs; a bad
+// line is skipped; settings change the running script; `end` hands back.
+static void test_follow() {
+    const std::string path = temp_path("live.script");
+    remove(path.c_str());
+    Sim sim(("timeout 3000\nlog before\nfollow " + path + "\nkey ESCAPE\n").c_str());
+    sim.run(500); // no file yet: the follow waits
+    CHECK(sim.r.running() && sim.game.events.empty());
+    append(path, "key RETURN\nfrobnicate\ntimeout 100000\n# a comment\nhold 30\npointer system\n"
+                 "move 3 4\nmo");
+    sim.run(2000);
+    CHECK(sim.r.running());
+    const std::vector<std::string> first = {"key 1c down", "key 1c up", "place 3 4"};
+    CHECK(sim.game.events == first);
+    sim.run(2000); // past the first timeout: the followed `timeout` replaced it
+    CHECK(sim.r.running());
+    append(path, "ve 5 6\nend\nkey F1\n");
+    sim.run(2000);
+    CHECK(sim.r.finished());
+    const std::vector<std::string> all = {"key 1c down", "key 1c up",   "place 3 4",
+                                          "place 5 6",   "key 01 down", "key 01 up"};
+    CHECK(sim.game.events == all); // F1 came after `end`: never read
+    remove(path.c_str());
+
+    // A followed step that fails names its file and line.
+    append(path, "wait 1\nwait pixel 1 1 ff0000 within 100\n");
+    Sim bad(("follow " + path + "\n").c_str());
+    bad.run(3000);
+    CHECK(bad.r.failed());
+    CHECK(bad.r.failure().find(path + " line 2: wait pixel") == 0);
+    remove(path.c_str());
+
+    // `within` on the follow: no new line in time fails it.
+    Sim idle(("follow " + path + " within 300\n").c_str());
+    idle.run(3000);
+    CHECK(idle.r.failed());
+    CHECK(idle.r.failure().find("no new line in") != std::string::npos);
 }
 
 // A game that draws its own cursor at the menu and hands the system pointer
@@ -487,6 +585,8 @@ int main() {
     test_click_settles_before_the_next_action();
     test_waits();
     test_dumps();
+    test_wait_file();
+    test_follow();
     printf("input_script_tests: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Scripted input can wait for the world outside the game: `wait file PATH`
+  goes on once the file exists, and `follow PATH` runs the lines appended to
+  a file as they arrive (until a line `end`), so a run whose next step
+  depends on another machine or on what appears on screen can be driven live.
+  A followed line that does not parse is skipped with a message instead of
+  ending the run; `timeout`, `hold` and `pointer_tolerance` there change the
+  running script. The dump cap counts file names: a name dumped again
+  replaces its file.
 - Show a fullscreen DirectDraw 7 program's GDI windows over its last frame
   (`runtime/display_seam.h`), as a desktop compositor shows an owned popup -
   a game's lobby after `FlipToGDISurface` - instead of over black and
