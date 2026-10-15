@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- A zero-sized `BitBlt`, `StretchBlt` or `MaskBlt` (no width or no height at
+  either end) returns TRUE and draws nothing, as on Windows (measured on
+  Windows 11, a 32-bit process), instead of being refused and logged as
+  `REFUSED blit`; one from a handle that is no device context still fails. A
+  toolkit lays out an empty control that way: Empire Earth's lobby made a
+  dozen at each screen.
+- `abort()`, `terminate()`, a pure virtual call and `_exit()` say where they
+  were called from - the return address and the guest's EBP chain above it
+  (`msvcrt: abort() from 1001c47e (called from ...)`) - and flush the guest's
+  C streams and the host's own stdout and stderr before the process ends, so
+  a program's error log and the run's log keep their last lines even when the
+  exit's DLL detach code never finishes. Windows' `abort()` does not flush:
+  msvcrt raises SIGABRT and calls `_exit(3)`, which skips the terminators
+  where `_flushall` runs; this is for diagnosis. (The guest's streams write
+  through to their descriptors, so they held nothing to lose before either.)
+- `boot_add_load_step(fn)` (`host/boot.h`): a source a game links into the
+  kit's hosts - it owns none of their `main()`s - registers a step from a
+  static constructor, and `boot_load` runs it once the image, its translated
+  modules and the mods are in, before the entry point. Empire Earth hooks its
+  engine's assertion there, in the windowed app, the player host and its
+  headless runner alike.
+- `RECOMP_SCRIPT_BACKGROUND=1` with `RECOMP_INPUT_SCRIPT` runs a windowed
+  script behind whatever the person at the machine is using (`open -g`): the
+  window is never raised, the game is told it has the focus whatever the
+  window's, and the script keeps its own pointer position (SDL tracks neither
+  an unfocused window nor pushed events). Before, a click elsewhere during a
+  scripted run made the game unacquire its foreground DirectInput devices and
+  the script's clicks stopped short.
 - `CreateFile` with `CREATE_NEW`, `CREATE_ALWAYS` or `TRUNCATE_EXISTING` creates
   or truncates the file whatever access it asks for, as Windows does, and
   `OPEN_ALWAYS` with read access only creates a file no tier has; a second

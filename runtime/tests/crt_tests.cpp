@@ -1278,6 +1278,82 @@ static void test_registration() {
 }
 
 // ---------------------------------------------------------------------------
+// The fatal exits keep what was said before them (msvcrt.cpp,
+// flush_before_fatal_exit). A child process writes a log line through the
+// guest's stdio and never closes the file, prints a line to its own stdout (a
+// file, so fully buffered) and calls the exit. Its ExitProcess ends the
+// process at once and flushes nothing - what a fault in a DLL's detach code
+// does after a failed assertion - so what reaches the files was written or
+// flushed before the exit began.
+// ---------------------------------------------------------------------------
+static void exit_without_flushing(X86 *c) {
+    os_exit_immediately((int)arg(c, 0));
+}
+static std::vector<uint32_t> fatal_exit_args(const char *which) {
+    return strcmp(which, "_exit") ? std::vector<uint32_t>{} : std::vector<uint32_t>{5};
+}
+static int fatal_exit_expected(const char *which) {
+    return !strcmp(which, "_purecall") ? 255 : !strcmp(which, "_exit") ? 5 : 3;
+}
+static int fatal_exit_child(const char *which, const char *dir) {
+    const std::string out = std::string(dir) + "/stdout.txt",
+                      err = std::string(dir) + "/stderr.txt";
+    if (!freopen(out.c_str(), "w", stdout) || !freopen(err.c_str(), "w", stderr))
+        return 98;
+    setvbuf(stdout, nullptr, _IOFBF, 1 << 16);
+    reset_world();
+    win32_init(dir);
+    imports_alloc_data("msvcrt.dll", "_iob");
+    static const ImportShim die[] = {{"KERNEL32.dll", "ExitProcess", 1, exit_without_flushing}};
+    imports_register(die, 1);
+    uint32_t f = ms("fopen", {gstr("Error.log"), gstr("w")});
+    ms("fputs", {gstr("Verification failure (last words)\n"), f});
+    printf("host log: the last line before %s", which);
+    ms(which, fatal_exit_args(which));
+    return 97; // the exit does not return
+}
+static std::string file_text(const std::string &path) {
+    std::string text;
+    if (FILE *f = fopen(path.c_str(), "rb")) {
+        char buf[4096];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof buf, f)) > 0)
+            text.append(buf, n);
+        fclose(f);
+    }
+    return text;
+}
+static void test_fatal_exits(const char *exe) {
+    printf("fatal exits\n");
+    for (const char *which : {"abort", "_purecall", "?terminate@@YAXXZ", "_exit"}) {
+        char dir[256];
+        snprintf(dir, sizeof dir, "%s/crt-fatal-XXXXXX", os_temp_dir());
+        if (!check(os_mkdtemp(dir) == 0, "temporary directory"))
+            return;
+        const char *args[] = {exe, "--fatal-exit", which, dir, nullptr};
+        int64_t pid = 0;
+        int code = -1;
+        check(os_spawn(args, &pid) == 0 && os_wait(pid, &code) == 0, "%s: the child ran", which);
+        check(code == fatal_exit_expected(which), "%s: exit code %d (expected %d)", which, code,
+              fatal_exit_expected(which));
+        const std::string dirs(dir);
+        check(file_text(dirs + "/Error.log") == "Verification failure (last words)\r\n",
+              "%s: the program's own log keeps its last line", which);
+        check(file_text(dirs + "/stdout.txt")
+                      .find(std::string("host log: the last line before ") + which) !=
+                  std::string::npos,
+              "%s: the host's buffered output is flushed before the exit", which);
+        if (!strcmp(which, "abort"))
+            check(file_text(dirs + "/stderr.txt").find("abort() from 00401234") !=
+                      std::string::npos,
+                  "abort: the log names where it was called from");
+        for (const char *name : {"/Error.log", "/stdout.txt", "/stderr.txt"})
+            os_unlink((dirs + name).c_str());
+        os_rmdir(dir);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The behaviour vectors: `crt_tests --vectors in.tsv out.tsv` runs the file a
 // Windows harness runs against msvcrt.dll, through the HLE, and prints the
 // results in the same format (the game repository's tests/crt describes both
@@ -1971,6 +2047,8 @@ static void test_codepages() {
 int main(int argc, char **argv) {
     if (argc == 4 && !strcmp(argv[1], "--vectors"))
         return run_vectors(argv[2], argv[3]);
+    if (argc == 4 && !strcmp(argv[1], "--fatal-exit"))
+        return fatal_exit_child(argv[2], argv[3]);
     test_heap();
     test_strings();
     test_locale();
@@ -1984,6 +2062,7 @@ int main(int argc, char **argv) {
     test_time();
     test_cxx();
     test_registration();
+    test_fatal_exits(argv[0]);
     test_codepages();
     printf("%d checks, %d failures\n", g_checks, g_failures);
     mem_shutdown();

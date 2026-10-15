@@ -59,6 +59,29 @@ static uint32_t frame_pixel(int x, int y) {
     f.read(reinterpret_cast<char *>(p), 3);
     return f ? uint32_t(p[0]) << 16 | uint32_t(p[1]) << 8 | p[2] : 0xffffffff;
 }
+// Load steps (boot_add_load_step): what a game's own host sources add to every
+// boot. They run in the order they were added, a function added twice runs
+// once, and a boot whose image does not load runs none of them.
+static std::vector<int> g_steps_ran;
+static void load_step_a() {
+    g_steps_ran.push_back(1);
+}
+static void load_step_b() {
+    g_steps_ran.push_back(2);
+}
+static void test_load_steps() {
+    boot_add_load_step(load_step_a);
+    boot_add_load_step(load_step_b);
+    boot_add_load_step(load_step_a);
+    boot_add_load_step(nullptr);
+    BootOptions opts;
+    opts.exe = "/nonexistent/recomp-load-steps/GAME.EXE";
+    opts.load_mods = false;
+    check(!boot_load(opts), "a boot with no image fails");
+    check(g_steps_ran.empty(), "a boot that does not load runs no load step");
+    boot_run_load_steps();
+    check(g_steps_ran == std::vector<int>({1, 2}), "load steps run once each, in order added");
+}
 int main(int argc, char **argv) {
     if (argc != 2)
         return 2;
@@ -264,6 +287,7 @@ int main(int argc, char **argv) {
     method(c, device, 2);
     method(c, swap, 2);
     call(c, "USER32.dll", "DestroyWindow", {output_window});
+    test_load_steps();
     printf("%d checks, %d failures\n", checks, failures);
     mem_shutdown();
     return failures ? 1 : 0;

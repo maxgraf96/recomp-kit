@@ -62,8 +62,14 @@ bool blit(uint32_t dst, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t src
           int32_t sy, int32_t sw, int32_t sh, uint32_t rop, uint32_t mask = 0, int32_t mx = 0,
           int32_t my = 0) {
     int dw, dh, srcw, srch;
-    if (!dc_size(dst, &dw, &dh) || !dc_size(src, &srcw, &srch) || !w || !h || !sw || !sh)
+    if (!dc_size(dst, &dw, &dh) || !dc_size(src, &srcw, &srch))
         return false;
+    // A rectangle with no width or no height, at either end, draws nothing
+    // and succeeds: Windows returns TRUE for a zero-sized BitBlt, StretchBlt
+    // or MaskBlt and leaves the destination alone (measured on Windows 11, a
+    // 32-bit process). A toolkit lays out an empty control that way.
+    if (!w || !h || !sw || !sh)
+        return true;
     int64_t width = std::abs(int64_t(w)), height = std::abs(int64_t(h));
     Rect clip = clip_box(dst);
     int64_t left = std::max<int64_t>(clip.l, w < 0 ? int64_t(x) - width : x),

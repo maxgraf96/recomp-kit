@@ -98,6 +98,21 @@ struct BootOptions {
 // waiter and loader_init_context. False means the image did not load, or
 // (with BootOptions::load_code) its translation did not; boot_error() says why. Must be called before boot_run().
 bool boot_load(const BootOptions &opts);
+
+// A load step: what a source a game links into the kit's hosts adds to every
+// boot. A game repository puts its own files into the windowed app, the
+// player host and its headless runner, but owns none of their main()s; a
+// step registered from such a file's static constructor is how it takes part.
+// boot_load calls the steps once the image, its translation and the mods are
+// loaded (every module mapped and its translated code registered, the symbols
+// read) and before the entry point runs: on the thread that boots, with no
+// guest thread yet. They run in the order they were added; adding a function
+// twice adds it once. A step that installs a hook through the mods module
+// publishes it itself (mods_registry_pump_preentry), as a host's own
+// pre-entry code does.
+void boot_add_load_step(void (*step)());
+// Runs the steps: boot_load does, and a test can without an image.
+void boot_run_load_steps();
 // Why boot_load returned false: its own reason (BootOptions::load_code), else
 // loader_error().
 const char *boot_error();

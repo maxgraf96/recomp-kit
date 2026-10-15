@@ -54,6 +54,39 @@ void set_errno(int e) {
         wr32(a, (uint32_t)e);
 }
 
+// The fatal exits - abort(), terminate(), a pure virtual call, _exit() - keep
+// what was said before them. On Windows they do not: msvcrt's abort() raises
+// SIGABRT and then calls _exit(3), whose termination skips the
+// pre-terminators where _flushall runs and marks termination done, so
+// msvcrt.dll's process detach does not flush either; a FILE buffer the program
+// had not flushed is lost. Here, for diagnosis, the guest's streams are
+// flushed first (today they write through and hold nothing: msvcrt_stdio.cpp),
+// and so is the host's own output, the run's log: a packaged app keeps it in a
+// file, fully buffered, and the exit runs every DLL's detach code next, in a
+// program that has just failed and may never finish it.
+void flush_before_fatal_exit() {
+    stdio_flush_all();
+    fflush(stdout);
+    fflush(stderr);
+}
+
+// " from RET (called from A B C)": where a fatal exit was called, and the
+// frames above it along the caller's EBP chain, for a log that has to say
+// which of a program's assertions or handlers gave up.
+std::string fatal_origin(X86 *c) {
+    char word[24];
+    snprintf(word, sizeof word, " from %08x", rd32(c->r[R_ESP]));
+    std::string out = word;
+    std::vector<uint32_t> chain = win32_return_chain(c->r[R_EBP], 8);
+    for (size_t i = 0; i < chain.size(); ++i) {
+        snprintf(word, sizeof word, "%s%08x", i ? " " : " (called from ", chain[i]);
+        out += word;
+    }
+    if (!chain.empty())
+        out += ")";
+    return out;
+}
+
 namespace {
 
 // ---------------------------------------------------------------------------
@@ -134,21 +167,26 @@ void crt_exit(X86 *c) {
     run_exit_handlers(c);
     exit_process(c, arg(c, 0));
 }
+
 void crt_exit_now(X86 *c) {
+    flush_before_fatal_exit();
     exit_process(c, arg(c, 0));
 }
 void crt_abort(X86 *c) {
-    LOGW("msvcrt: abort() from %08x: abnormal program termination", rd32(c->r[R_ESP]));
+    LOGW("msvcrt: abort()%s: abnormal program termination", fatal_origin(c).c_str());
+    flush_before_fatal_exit();
     exit_process(c, 3);
 }
 // A pure virtual call: msvcrt reports run-time error R6025 and exits with 255.
 void crt_purecall(X86 *c) {
-    LOGW("msvcrt: R6025 - pure virtual function call (return address %08x)", rd32(c->r[R_ESP]));
+    LOGW("msvcrt: R6025 - pure virtual function call%s", fatal_origin(c).c_str());
+    flush_before_fatal_exit();
     exit_process(c, 255);
 }
 // std::terminate with no handler installed calls abort().
 void crt_terminate(X86 *c) {
-    LOGW("msvcrt: terminate() called from %08x", rd32(c->r[R_ESP]));
+    LOGW("msvcrt: terminate() called%s", fatal_origin(c).c_str());
+    flush_before_fatal_exit();
     exit_process(c, 3);
 }
 

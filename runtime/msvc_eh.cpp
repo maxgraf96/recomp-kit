@@ -321,6 +321,7 @@ uint32_t call_funclet_guarded(X86 *c, uint32_t funclet, uint32_t ebp) {
         LOGW("msvcrt: the terminate handler %08x returned; aborting", handler);
     }
     LOGW("msvcrt: abnormal program termination");
+    crt::flush_before_fatal_exit();
     guest_call(c, imports_resolve("KERNEL32.dll", "ExitProcess"), 3);
     exit(3); // ExitProcess does not return; this is for the compiler
 }

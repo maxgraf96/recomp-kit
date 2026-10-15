@@ -192,6 +192,13 @@ int64_t stdio_write(uint32_t file, const char *data, size_t n);
 // Runs the process onexit table and flushes the streams: exit() without the
 // ExitProcess. Used by exit() and by the tests.
 void run_exit_handlers(X86 *c);
+// What abort(), terminate(), a pure virtual call and _exit() do before the
+// process ends: flush the guest's streams and the host's log (msvcrt.cpp has
+// why, and how Windows differs).
+void flush_before_fatal_exit();
+// " from RET (called from A B ...)" for a fatal exit's log line: the shim's
+// return address and the guest's EBP chain above it.
+std::string fatal_origin(X86 *c);
 // The value of _fmode (0 for text, 0x8000 for _O_BINARY).
 uint32_t fmode_value();
 // For the tests: type_info::name's undecoration and __getmainargs' split.

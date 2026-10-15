@@ -506,6 +506,29 @@ const char *boot_error() {
     return g_boot_error.empty() ? loader_error() : g_boot_error.c_str();
 }
 
+namespace {
+// Function-local, so a step added from another file's static constructor
+// finds the list constructed whatever order the constructors run in.
+std::vector<void (*)()> &load_steps() {
+    static std::vector<void (*)()> steps;
+    return steps;
+}
+} // namespace
+
+void boot_add_load_step(void (*step)()) {
+    if (!step)
+        return;
+    for (auto known : load_steps())
+        if (known == step)
+            return;
+    load_steps().push_back(step);
+}
+
+void boot_run_load_steps() {
+    for (auto step : load_steps())
+        step();
+}
+
 bool boot_load(const BootOptions &opts) {
     g_opt = opts;
     g_window_next_ns = g_primary_present_ns = 0;
@@ -570,6 +593,9 @@ bool boot_load(const BootOptions &opts) {
     }
     // The presenters ask this before they touch the page.
     host_page_set_enabled(page_enabled);
+    // What the game's own host sources add (boot_add_load_step): last, so
+    // they find every module, its translated code and the symbols in place.
+    boot_run_load_steps();
 
     g_loaded = true;
     return true;

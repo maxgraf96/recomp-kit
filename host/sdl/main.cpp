@@ -879,10 +879,27 @@ void handle_key(const SDL_KeyboardEvent &event, bool down) {
     queue_or_apply(e);
 }
 
+// RECOMP_SCRIPT_BACKGROUND=1 beside RECOMP_INPUT_SCRIPT: a scripted run that
+// stays behind whatever the person at the machine is using. The window is
+// shown but never raised, and the guest is told it has the focus whatever the
+// window's own focus is: a script's input does not come from the window
+// system, and a game that loses the focus unacquires its foreground
+// DirectInput devices and stops reading it.
+bool script_in_background() {
+    static const bool on = [] {
+        const char *e = recomp_env("SCRIPT_BACKGROUND");
+        const char *script = recomp_env("INPUT_SCRIPT");
+        return e && *e && atoi(e) != 0 && script && *script;
+    }();
+    return on;
+}
+
 // Called from the event pump, including inside an idle slice. It decides that
 // the focus changed and records WHEN, relative to the input around it; nothing
 // guest-visible happens here.
 void note_focus(bool focused) {
+    if (script_in_background())
+        focused = true;
     const bool minimized = window_minimized_or_hidden();
     if (focused == g_focused && minimized == g_minimized && g_focus_noted)
         return;
@@ -1485,7 +1502,7 @@ class SdlScriptSink : public iscript::Sink {
   public:
     void motion(int32_t dx, int32_t dy) override {
         float x = 0, y = 0;
-        SDL_GetMouseState(&x, &y);
+        pointer(&x, &y);
         push_motion(x + float(dx), y + float(dy), float(dx), float(dy));
     }
     void place(int32_t gx, int32_t gy) override {
@@ -1494,7 +1511,7 @@ class SdlScriptSink : public iscript::Sink {
         const double mw = g_mode_w > 0 ? g_mode_w : 640, mh = g_mode_h > 0 ? g_mode_h : 480;
         const float x = float(r.x + (gx + 0.5) * r.w / mw), y = float(r.y + (gy + 0.5) * r.h / mh);
         float cx = 0, cy = 0;
-        SDL_GetMouseState(&cx, &cy);
+        pointer(&cx, &cy);
         push_motion(x, y, x - cx, y - cy);
         x_ = x;
         y_ = y;
@@ -1542,7 +1559,30 @@ class SdlScriptSink : public iscript::Sink {
     }
 
   private:
+    // Where the pointer is, in window points: SDL's, which follows the real
+    // mouse. A script in the background keeps its own, starting in the middle
+    // of the window: SDL tracks neither a window the real mouse is not over
+    // nor the events this sink pushes.
+    void pointer(float *x, float *y) {
+        if (!script_in_background()) {
+            SDL_GetMouseState(x, y);
+            return;
+        }
+        if (!tracked_) {
+            int bw = 0, bh = 0;
+            if (g_window)
+                SDL_GetWindowSize(g_window, &bw, &bh);
+            tx_ = float(bw) / 2;
+            ty_ = float(bh) / 2;
+            tracked_ = true;
+        }
+        *x = tx_;
+        *y = ty_;
+    }
     void push_motion(float x, float y, float dx, float dy) {
+        tx_ = x;
+        ty_ = y;
+        tracked_ = true;
         SDL_Event e{};
         e.type = SDL_EVENT_MOUSE_MOTION;
         e.motion.windowID = g_window ? SDL_GetWindowID(g_window) : 0;
@@ -1555,6 +1595,8 @@ class SdlScriptSink : public iscript::Sink {
     }
     float x_ = 0, y_ = 0;
     bool placed_ = false;
+    float tx_ = 0, ty_ = 0; // the background script's pointer
+    bool tracked_ = false;
 };
 SdlScriptSink g_script_sink;
 bool g_script = false;
@@ -1655,7 +1697,7 @@ void after_events() {
     // A shell-launched process does not always come forward on its own, and a
     // window that never gained focus receives no key events at all. Ask again,
     // briefly, rather than once at startup and never afterwards.
-    if (g_window && !window_focused() && boot_elapsed() < 3.0)
+    if (g_window && !window_focused() && boot_elapsed() < 3.0 && !script_in_background())
         SDL_RaiseWindow(g_window);
     note_focus(window_focused());
 
@@ -2263,7 +2305,8 @@ int main(int argc, char **argv) {
     }
 
     SDL_ShowWindow(g_window);
-    SDL_RaiseWindow(g_window);
+    if (!script_in_background())
+        SDL_RaiseWindow(g_window);
     SDL_PumpEvents();
     int bw, bh, dw, dh;
     window_sizes(&bw, &bh, &dw, &dh);
@@ -2274,9 +2317,13 @@ int main(int argc, char **argv) {
     host_present_start(g_surface, dw, dh);
     // Said out loud, because "the keyboard does nothing" and "the window
     // never gained focus" look identical from the outside.
-    printf(RECOMP_APP_NAME ": window %dx%d points, %dx%d pixels, focus %s\n", bw, bh, dw, dh,
-           window_focused() ? "yes" : "no");
+    printf(RECOMP_APP_NAME ": window %dx%d points, %dx%d pixels, focus %s%s\n", bw, bh, dw, dh,
+           window_focused() ? "yes" : "no",
+           script_in_background() ? " (a script in the background: the game has it)" : "");
     fflush(stdout);
+    // In the background no focus event may ever come: say it once.
+    if (script_in_background())
+        note_focus(true);
 
     BootOptions options;
     options.name = "windowed";

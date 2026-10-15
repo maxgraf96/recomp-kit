@@ -288,6 +288,38 @@ static void test_drawing() {
                       {dc, 24, 24, 2, 2, mem, 0, 0, 0, 0, 0, 0xcc0020}) == 1 &&
               call_import(&c, "GDI32.dll", "GetPixel", {dc, 24, 24}) == 0xff00,
           "zero-mask MaskBlt");
+    // A zero-sized rectangle at either end succeeds and draws nothing, as on
+    // Windows 11 (a 32-bit process: TRUE, last error 0, the pixel kept). A
+    // game's lobby lays out empty buttons this way, a dozen per screen.
+    {
+        call_import(&c, "GDI32.dll", "SetPixel", {dc, 16, 16, 0x123456});
+        const uint32_t zero[][4] = {
+            {0, 30, 0, 30}, {30, 0, 30, 0}, {0, 0, 0, 0}, {uint32_t(-5), 0, uint32_t(-5), 0}};
+        bool all = true;
+        for (const auto &z : zero)
+            all = all && call_import(&c, "GDI32.dll", "BitBlt",
+                                     {dc, 16, 16, z[0], z[1], mem, 0, 0, 0xcc0020}) == 1;
+        check(all, "a zero-sized BitBlt returns TRUE");
+        all = true;
+        for (const auto &z : zero)
+            all =
+                all && call_import(&c, "GDI32.dll", "StretchBlt",
+                                   {dc, 16, 16, z[0], z[1], mem, 0, 0, z[2], z[3], 0xcc0020}) == 1;
+        // Only the source empty: Windows draws nothing here either.
+        all = all && call_import(&c, "GDI32.dll", "StretchBlt",
+                                 {dc, 16, 16, 2, 2, mem, 0, 0, 0, 2, 0xcc0020}) == 1;
+        all = all && call_import(&c, "GDI32.dll", "StretchBlt",
+                                 {dc, 16, 16, 2, 2, mem, 0, 0, 2, 0, 0xcc0020}) == 1;
+        check(all, "a StretchBlt with an empty source or destination returns TRUE");
+        check(call_import(&c, "GDI32.dll", "MaskBlt",
+                          {dc, 16, 16, 0, 2, mem, 0, 0, 0, 0, 0, 0xcc0020}) == 1,
+              "a zero-sized MaskBlt returns TRUE");
+        check(call_import(&c, "GDI32.dll", "GetPixel", {dc, 16, 16}) == 0x123456,
+              "and none of them drew");
+        check(call_import(&c, "GDI32.dll", "BitBlt", {dc, 16, 16, 0, 2, 0x7777, 0, 0, 0xcc0020}) ==
+                  0,
+              "a zero-sized BitBlt from no DC still fails");
+    }
     // A monochrome mask: a set bit takes the foreground operation, SRCCOPY, and
     // a clear one the background, 0xaa, which leaves the destination. This is
     // how the VCL draws a transparent bitmap, so a refusal here loses whole
