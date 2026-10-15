@@ -726,6 +726,26 @@ static void test_ansi_entry_points() {
     check(user(c, "CreateCursor", {0, 0, 0, 32, 32, buf, buf}) != 0, "CreateCursor");
     check(user(c, "LoadStringA", {0, 1, buf, 16}) == 0 && rd8(buf) == 0,
           "LoadStringA without a string resource: 0 and an empty buffer");
+
+    // GetMonitorInfoA, which a multi-monitor-aware display plugin looks up
+    // by GetProcAddress: the window's monitor is the primary and the display.
+    const uint32_t monitor = user(c, "MonitorFromWindow", {hwnd, 2 /* NEAREST */});
+    check(monitor != 0, "MonitorFromWindow");
+    gm_zero(buf, 80);
+    wr32(buf, 72); // MONITORINFOEXA
+    check(user(c, "GetMonitorInfoA", {monitor, buf}) == 1, "GetMonitorInfoA (MONITORINFOEXA)");
+    check(rd32(buf + 4) == 0 && rd32(buf + 8) == 0 && rd32(buf + 12) == w && rd32(buf + 16) == hh &&
+              rd32(buf + 36) == 1,
+          "the display's rectangle, MONITORINFOF_PRIMARY");
+    check(gm_str(buf + 40) == "\\\\.\\DISPLAY1", "szDevice in ANSI: %s", gm_str(buf + 40).c_str());
+    gm_zero(buf, 80);
+    wr32(buf, 40); // MONITORINFO
+    check(user(c, "GetMonitorInfoA", {monitor, buf}) == 1 && rd32(buf + 36) == 1 &&
+              rd32(buf + 40) == 0,
+          "the short form, and nothing written past it");
+    wr32(buf, 12);
+    check(user(c, "GetMonitorInfoA", {monitor, buf}) == 0, "a cbSize too small fails");
+    check(user(c, "GetMonitorInfoA", {0x1234, buf}) == 0, "an unknown monitor fails");
     user(c, "DestroyWindow", {hwnd});
     drain(c);
 }

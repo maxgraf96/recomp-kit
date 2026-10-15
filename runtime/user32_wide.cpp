@@ -499,7 +499,11 @@ void enum_devices(X86 *c) {
     wr32(p + 324, 5);
     set_eax(c, 1);
 }
-void monitor_info(X86 *c) {
+// GetMonitorInfo{A,W}(hMonitor, lpmi): the one monitor (handle 1, as
+// MonitorFromWindow and friends answer) is the primary and the whole display.
+// MONITORINFO is 40 bytes; MONITORINFOEX adds szDevice, 32 characters, at 40
+// (72 bytes in the ANSI form, 104 in the wide one).
+void monitor_info_common(X86 *c, bool wide) {
     uint32_t p = arg(c, 1);
     if (arg(c, 0) != 1 || !p || !gm_valid(p, 40) || rd32(p) < 40) {
         set_eax(c, 0);
@@ -507,10 +511,18 @@ void monitor_info(X86 *c) {
     }
     display_rect(p + 4);
     display_rect(p + 20);
-    wr32(p + 36, 1);
-    if (rd32(p) >= 104 && gm_valid(p, 104))
+    wr32(p + 36, 1); // MONITORINFOF_PRIMARY
+    if (wide && rd32(p) >= 104 && gm_valid(p, 104))
         gm_put_wstr(p + 40, "\\\\.\\DISPLAY1", 32);
+    if (!wide && rd32(p) >= 72 && gm_valid(p, 72))
+        gm_put_str(p + 40, "\\\\.\\DISPLAY1", 32);
     set_eax(c, 1);
+}
+void monitor_info(X86 *c) {
+    monitor_info_common(c, true);
+}
+void monitor_info_a(X86 *c) {
+    monitor_info_common(c, false);
 }
 void dialog_message(X86 *c) {
     set_eax(c, 0);
@@ -557,6 +569,7 @@ const ImportShim shims[] = {
     W("EnumDisplaySettingsA", 3, enum_settings_a),
     W("EnumDisplayDevicesW", 4, enum_devices),
     W("GetMonitorInfoW", 2, monitor_info),
+    W("GetMonitorInfoA", 2, monitor_info_a),
     W("IsDialogMessageW", 2, dialog_message),
     W("IsDialogMessageA", 2, dialog_message),
 #undef W
