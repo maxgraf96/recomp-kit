@@ -573,6 +573,46 @@ static void test_threads() {
     drain(c);
 }
 
+// A thread's windows die with it. A splash-screen thread that leaves its loop
+// and returns without DestroyWindow takes its windows along, as on Windows:
+// the handles go, no window procedure runs on the ended thread, and the
+// activation moves to the window still there.
+static uint32_t g_ending_window = 0, g_ending_child = 0, g_ending_id = 0;
+static void ending_body(X86 *c) {
+    g_ending_id = guest_current_thread_id();
+    g_ending_window = make_window(c, true);
+    g_ending_child =
+        user(c, "CreateWindowExA",
+             {0, g_class_atom, 0, 0x50000000u, 0, 0, 10, 10, g_ending_window, 0, 0, 0});
+    drain(c);
+    set_eax(c, 0); // returns: no DestroyWindow
+}
+static void test_thread_windows_end_with_it() {
+    X86 *c = &g_main;
+    const uint32_t mine = make_window(c, true);
+    drain(c);
+    const uint32_t body = imports_alloc_trampoline("test", "ending_body", ending_body, 1);
+    const uint32_t th = call(c, "KERNEL32.dll", "CreateThread", {0, 0, body, 0, 0, 0});
+    check(th != 0, "CreateThread");
+    check(call(c, "KERNEL32.dll", "WaitForSingleObject", {th, 2000}) == 0, "the thread ended");
+    check(g_ending_window && g_ending_child, "it created a window and a child");
+    g_seen.clear();
+    // The exit is announced when the thread finishes; let it.
+    for (int i = 0; i < 50 && user(c, "IsWindow", {g_ending_window}); ++i)
+        call(c, "KERNEL32.dll", "Sleep", {1});
+    check(!user(c, "IsWindow", {g_ending_window}), "the ended thread's window is gone");
+    check(!user(c, "IsWindow", {g_ending_child}), "and its child");
+    bool ran = false;
+    for (const Seen &s : g_seen)
+        ran |= s.thread == g_ending_id;
+    check(!ran, "no window procedure ran on the ended thread");
+    check(host_main_window() != g_ending_window, "the host's main window is not the dead one");
+    check(user(c, "IsWindow", {mine}) != 0, "the main thread's window is untouched");
+    call(c, "KERNEL32.dll", "CloseHandle", {th});
+    user(c, "DestroyWindow", {mine});
+    drain(c);
+}
+
 // Timers fire on the queue of the window's thread, and SetCursor(NULL) from
 // WM_SETCURSOR is what a game drawing its own cursor does.
 static void test_timer_and_cursor() {
@@ -916,6 +956,7 @@ int main() {
         {"a fullscreen game's Command-Tab", test_fullscreen_deactivation},
         {"keyboard translation", test_translate},
         {"per-thread queues and cross-thread SendMessage", test_threads},
+        {"a thread's windows end with it", test_thread_windows_end_with_it},
         {"timers and WM_SETCURSOR", test_timer_and_cursor},
         {"ANSI entry points", test_ansi_entry_points},
         {"DirectInput foreground and exclusive mouse", test_dinput_foreground},

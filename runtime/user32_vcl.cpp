@@ -206,18 +206,26 @@ void pump_window_timers() {
 }
 // Snapshot children before callbacks: WM_DESTROY/WM_NCDESTROY can recursively
 // destroy another window, change parentage or create a new window.
-bool destroy_window(X86 *c, uint32_t hwnd) {
-    if (!find_window(hwnd) || hwnd == desktop_handle || destroying.count(hwnd))
+//
+// `ended_thread` names a thread that has ended: its windows get no
+// WM_DESTROY or WM_NCDESTROY, because there is no thread left to run their
+// window procedure on (Windows sends nothing to a thread in cleanup).
+bool destroy_window(X86 *c, uint32_t hwnd, uint32_t ended_thread) {
+    Window *w = find_window(hwnd);
+    if (!w || hwnd == desktop_handle || destroying.count(hwnd))
         return false;
+    const bool quiet = ended_thread && w->thread == ended_thread;
     destroying.insert(hwnd);
-    host_dispatch_to_wndproc(c, hwnd, 2, 0, 0);
+    if (!quiet)
+        host_dispatch_to_wndproc(c, hwnd, 2, 0, 0);
     std::vector<uint32_t> children;
     for (const auto &kv : windows())
         if (kv.second.parent == hwnd || kv.second.owner == hwnd)
             children.push_back(kv.first);
     for (uint32_t child : children)
-        destroy_window(c, child);
-    host_dispatch_to_wndproc(c, hwnd, 0x82, 0, 0);
+        destroy_window(c, child, ended_thread);
+    if (!quiet)
+        host_dispatch_to_wndproc(c, hwnd, 0x82, 0, 0);
     forget_window_services(hwnd);
     gdi_destroy_window(hwnd);
     windows().erase(hwnd);
@@ -259,6 +267,9 @@ bool destroy_window(X86 *c, uint32_t hwnd) {
     destroying.erase(hwnd);
     return true;
 }
+bool destroy_window(X86 *c, uint32_t hwnd) {
+    return destroy_window(c, hwnd, 0);
+}
 void client_origin(uint32_t hwnd, int32_t *x, int32_t *y) {
     *x = *y = 0;
     std::set<uint32_t> seen;
@@ -283,6 +294,24 @@ bool is_child(uint32_t parent, uint32_t hwnd) {
     return false;
 }
 } // namespace user32
+
+// A thread's windows die with it. Windows destroys every window a thread
+// created when the thread ends, children with their parents, and runs none
+// of their window procedures for it: the thread is gone. What the rest of
+// the system sees is what any destruction shows - the handles are invalid,
+// the window's queued messages are dropped, and activation moves on to
+// another window, whose own thread is told as usual.
+void win32_destroy_thread_windows(X86 *c, uint32_t thread_id) {
+    std::vector<uint32_t> mine;
+    for (const auto &kv : user32::windows())
+        if (kv.second.thread == thread_id && !kv.second.parent)
+            mine.push_back(kv.first);
+    for (uint32_t hwnd : mine)
+        if (user32::find_window(hwnd)) {
+            LOGV("user32: thread %u ended: its window %08x is destroyed", thread_id, hwnd);
+            user32::destroy_window(c, hwnd, thread_id);
+        }
+}
 
 namespace {
 using namespace user32;

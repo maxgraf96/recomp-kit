@@ -270,6 +270,10 @@ void sched_registry_lock();
 void sched_registry_unlock();
 void sched_set_checkpoint(void (*fn)());
 void sched_set_thread_exit_observer(void (*fn)());
+// The windows a guest thread created are destroyed when it ends, without
+// their window procedures (user32_vcl.cpp). The scheduler calls it from the
+// ending thread, under the baton, before the exit observer.
+void win32_destroy_thread_windows(X86 *c, uint32_t thread_id);
 // Called at every point the baton can move, with no lock held.
 void sched_run_checkpoint();
 

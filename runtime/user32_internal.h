@@ -136,6 +136,9 @@ void reorder_window(uint32_t hwnd, uint32_t after);
 void pump_mouse_input(X86 *c);
 void forget_window_services(uint32_t hwnd);
 bool destroy_window(X86 *c, uint32_t hwnd);
+// The same, without the window procedure calls for the windows of a thread
+// that has ended (see win32_destroy_thread_windows).
+bool destroy_window(X86 *c, uint32_t hwnd, uint32_t ended_thread);
 void client_origin(uint32_t hwnd, int32_t *x, int32_t *y);
 void display_rect(uint32_t out);
 void alias_ansi(X86 *c, const char *name);

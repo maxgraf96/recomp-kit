@@ -3182,6 +3182,10 @@ void thread_run_exit_cleanup(GuestThread *t) {
     // every frame. The weak seam makes this free in a build without mods.
     mods_hooks_unwind_to_esp(0xffffffffu);
     recomp_profile_truncate(0);
+    // Its windows go with it, as on Windows: a window left behind would keep
+    // the activation, the host's main-window role and a WM_CLOSE meant for a
+    // live one.
+    win32_destroy_thread_windows(&t->ctx, t->id);
     if (g_thread_exit_observer)
         g_thread_exit_observer();
     // Last, so that mod code running in the unwind or the observer still sees
