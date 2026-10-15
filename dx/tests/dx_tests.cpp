@@ -13590,6 +13590,13 @@ int main() {
     // and a fail-fast abort drops everything queued, including the name of
     // the test that died.
     setvbuf(stdout, nullptr, _IONBF, 0);
+    // The kit's defaults, whatever the game's game.toml chose ([runtime]
+    // ddraw7, dmusic): DirectDrawCreateEx refuses IDirectDraw7 (d3d7_tests
+    // covers it on), and DirectMusic's classes are left to the test that
+    // borrows the loader's CLSID for a guest-built class (dmusic_tests covers
+    // DirectMusic).
+    os_setenv("RECOMP_DDRAW7", "0");
+    os_setenv("RECOMP_DMUSIC", "0");
     mem_init();
     imports_init();
     dx_register_shims();

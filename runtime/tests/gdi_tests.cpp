@@ -1657,6 +1657,10 @@ int main(int argc, char **argv) {
         mem_shutdown();
         return rc;
     }
+    // The kit's default, whatever the game's game.toml chose ([runtime]
+    // system_fonts): the bundled faces. The suites about the installed faces
+    // turn them on themselves.
+    os_setenv("RECOMP_SYSTEM_FONTS", "0");
     mem_init();
     imports_init();
     test_model();
