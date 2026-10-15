@@ -62,7 +62,7 @@ class PlayerHost(unittest.TestCase):
         resources = self.binary.parent.parent / "Resources"
         self.assertFalse((resources / "symbols.json").exists(), "symbols.json in the player host")
         self.assertFalse((resources / "texture-pack").exists(), "a texture pack in the player host")
-        self.assertEqual(self.binary.parents[2].parent.name, "player")
+        self.assertEqual(self.binary.parents[3].name, "player")
 
     def test_starts_without_a_translation(self):
         # Answered before SDL, the GPU or the game: the binary loads and links.

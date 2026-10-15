@@ -328,9 +328,11 @@ endif()
 # translation linked in, built whether or not this tree has one. A game's
 # first run compiles the player's own copy into freestanding bundles, and
 # RECOMP_CODE_DIR names them (host/code_dir.h); the host never looks for a
-# developer's game copy. <build>/player/<app>.app carries no symbols.json and
-# no texture pack, for the game's packager to finish (tools/build.py
-# --target player). player_host_tests checks it links no translated code.
+# developer's game copy. It carries no symbols.json and no texture pack, for
+# the game's packager to finish. The one to give away comes from the tree with
+# no translation at all (tools/build.py --target player: build/player/
+# <app>.app); any other tree builds its own copy inside itself, for
+# player_host_tests, which checks it links no translated code.
 if(APPLE AND NOT IOS AND NOT ANDROID AND NOT EMSCRIPTEN)
   pop_host(recomp_player UI_LAYER OPT 2
     SOURCES ${POP_APP_SOURCES} ${HOST}/code_dir.cpp
@@ -338,7 +340,11 @@ if(APPLE AND NOT IOS AND NOT ANDROID AND NOT EMSCRIPTEN)
     FRAMEWORKS ${FW_METAL})
   pop_link_sdl(recomp_player)
   target_compile_definitions(recomp_player PRIVATE RECOMP_PLAYER_HOST=1)
-  pop_mac_bundle(recomp_player PLAYER)
+  if(POP_TRANSLATE STREQUAL "OFF")
+    pop_mac_bundle(recomp_player PLAYER DIR ${POP_BUILD_DIR}/player)
+  else()
+    pop_mac_bundle(recomp_player PLAYER DIR ${CMAKE_CURRENT_BINARY_DIR}/player)
+  endif()
   pop_test_binary(recomp_player)
   add_test(NAME player_host_tests
     COMMAND ${Python3_EXECUTABLE} -m unittest ${POP_ROOT}/tools/recomp/tests/test_player_host.py

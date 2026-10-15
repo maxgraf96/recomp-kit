@@ -1,14 +1,16 @@
-# pop_mac_bundle(<target> [PLAYER]): make <target> a .app in build/, named by
-# RECOMP_APP_NAME, with Info.plist copied verbatim and the resources,
-# core mods, texture pack and ad-hoc signature applied after the link.
-# PLAYER (the player host) puts it in build/player/ instead, with nothing from
-# the build root: no symbols.json, no texture pack.
+# pop_mac_bundle(<target> [PLAYER] [DIR <dir>]): make <target> a .app in
+# build/ (or DIR), named by RECOMP_APP_NAME, with Info.plist copied verbatim
+# and the resources, core mods, texture pack and ad-hoc signature applied after
+# the link. PLAYER (the player host) takes nothing from the build root: no
+# symbols.json, no texture pack.
 function(pop_mac_bundle target)
-  cmake_parse_arguments(ARG "PLAYER" "" "" ${ARGN})
+  cmake_parse_arguments(ARG "PLAYER" "DIR" "" ${ARGN})
   set(bundle_dir ${POP_BUILD_DIR})
+  if(ARG_DIR)
+    set(bundle_dir ${ARG_DIR})
+  endif()
   set(player_args)
   if(ARG_PLAYER)
-    set(bundle_dir ${POP_BUILD_DIR}/player)
     set(player_args --player)
   endif()
   # Core plugins are compiled during bundle finishing. Relink/repackage when
