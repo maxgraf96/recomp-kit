@@ -526,6 +526,20 @@ std::string host_guest_cursor_description();
 // A SetCursorPos the host has not applied yet, in the main window's client
 // pixels (the host's input space); each move is taken once.
 bool host_take_cursor_warp(int32_t *x, int32_t *y);
+// The platform's clipboard, for the text a program copies and pastes
+// (user32_clipboard.cpp). Every member is optional. get_text is asked only
+// when a program reads a text format (a paste), and may answer false when
+// the platform's clipboard cannot be read on the calling thread; set_text
+// gets what a program copied, with LF line ends. Without a bridge the
+// clipboard is the process's own.
+struct HostClipboard {
+    bool (*has_text)();
+    bool (*get_text)(std::string *utf8);
+    void (*set_text)(const std::string &utf8);
+};
+void host_set_clipboard(const HostClipboard *bridge);
+// The platform's clipboard changed (another application copied): any thread.
+void host_clipboard_changed();
 
 // ---------------------------------------------------------------------------
 // Activation (user32_activation.cpp). The host reports what the platform

@@ -1131,10 +1131,8 @@ void insert_menu(X86 *c) {
               insert_item(arg(c, 0), arg(c, 1), flags & 0x400, item);
     set_eax(c, ok);
 }
-// Private clipboard ownership never reaches the host clipboard. GlobalAlloc
-// handles in this runtime are guest heap addresses; EmptyClipboard releases them.
-bool clipboard_open = false;
-std::map<uint32_t, uint32_t> clipboard;
+// Registered clipboard formats and window messages share the 0xc000 range.
+// The clipboard itself is user32_clipboard.cpp's.
 std::map<std::string, uint32_t> clipboard_formats, window_messages;
 uint32_t register_name(std::map<std::string, uint32_t> &names, uint32_t p) {
     std::string name = gm_wstr(p);
@@ -1156,45 +1154,6 @@ void register_clipboard(X86 *c) {
 }
 void register_message(X86 *c) {
     set_eax(c, register_name(window_messages, arg(c, 0)));
-}
-void open_clipboard(X86 *c) {
-    bool ok = !clipboard_open;
-    if (ok)
-        clipboard_open = true;
-    set_eax(c, ok);
-}
-void close_clipboard(X86 *c) {
-    bool was = clipboard_open;
-    clipboard_open = false;
-    set_eax(c, was);
-}
-void empty_clipboard(X86 *c) {
-    if (!clipboard_open) {
-        set_eax(c, 0);
-        return;
-    }
-    std::set<uint32_t> freed;
-    for (auto &kv : clipboard)
-        if (kv.second && freed.insert(kv.second).second)
-            heap_free(kv.second);
-    clipboard.clear();
-    set_eax(c, 1);
-}
-void set_clipboard(X86 *c) {
-    uint32_t fmt = arg(c, 0), data = arg(c, 1);
-    if (!clipboard_open || !fmt) {
-        set_eax(c, 0);
-        return;
-    }
-    clipboard[fmt] = data;
-    set_eax(c, data);
-}
-void get_clipboard(X86 *c) {
-    auto i = clipboard.find(arg(c, 0));
-    set_eax(c, clipboard_open && i != clipboard.end() ? i->second : 0);
-}
-void clipboard_available(X86 *c) {
-    set_eax(c, clipboard.count(arg(c, 0)) != 0);
 }
 struct Hook {
     uint32_t kind, proc, module, thread;
@@ -1549,12 +1508,6 @@ const ImportShim shims[] = {
     U("SetScrollInfo", 4, win32_set_scroll_info),
     U("ShowScrollBar", 3, win32_show_scroll_bar),
     U("EnableScrollBar", 3, win32_enable_scroll_bar),
-    U("OpenClipboard", 1, open_clipboard),
-    U("CloseClipboard", 0, close_clipboard),
-    U("GetClipboardData", 1, get_clipboard),
-    U("IsClipboardFormatAvailable", 1, clipboard_available),
-    U("EmptyClipboard", 0, empty_clipboard),
-    U("SetClipboardData", 2, set_clipboard),
     U("RegisterClipboardFormatW", 1, register_clipboard),
     U("RegisterWindowMessageW", 1, register_message),
     U("SetWindowsHookExW", 4, set_hook),

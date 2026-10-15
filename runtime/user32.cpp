@@ -1688,10 +1688,6 @@ void u_GetKeyboardLayout(X86 *c) {
 } // en-US
 
 // ---------------------------------------------------------------------------
-// Clipboard: nothing is shared with the host clipboard.
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Message boxes and formatting
 // ---------------------------------------------------------------------------
 // The answer a message box gets when there is nobody to click it.
@@ -1925,20 +1921,6 @@ void u_WaitMessage(X86 *c) {
     set_eax(c, 1);
 }
 
-// Clipboard: nothing is shared with the host clipboard.
-void u_OpenClipboard(X86 *c) {
-    set_eax(c, 1);
-}
-void u_CloseClipboard(X86 *c) {
-    set_eax(c, 1);
-}
-void u_IsClipboardFormatAvailable(X86 *c) {
-    set_eax(c, 0);
-}
-void u_GetClipboardData(X86 *c) {
-    set_eax(c, 0);
-}
-
 // Mouse capture: only the handle is remembered. The host already delivers
 // pointer input to the one window whether the button is over it or not.
 uint32_t g_capture_hwnd = 0;
@@ -2109,9 +2091,5 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "CloseWindow", 1, u_CloseWindow},
     {"USER32.dll", "SetForegroundWindow", 1, u_SetForegroundWindow},
     {"USER32.dll", "SetActiveWindow", 1, u_SetActiveWindow},
-    {"USER32.dll", "OpenClipboard", 1, u_OpenClipboard},
-    {"USER32.dll", "CloseClipboard", 0, u_CloseClipboard},
-    {"USER32.dll", "IsClipboardFormatAvailable", 1, u_IsClipboardFormatAvailable},
-    {"USER32.dll", "GetClipboardData", 1, u_GetClipboardData},
 };
 const size_t g_user32_shim_count = sizeof(g_user32_shims) / sizeof(g_user32_shims[0]);

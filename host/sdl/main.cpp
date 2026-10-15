@@ -47,6 +47,7 @@
 #include "../window_presentation.h"
 #include "keymap.h"
 #include "guest_cursor.h"
+#include "platform_clipboard.h"
 #include "platform_ui.h"
 #include "version.h"
 #include "../../dx/dx.h"
@@ -1253,6 +1254,9 @@ void handle_event(const SDL_Event &event) {
             queue_or_apply(e);
         }
         break;
+    case SDL_EVENT_CLIPBOARD_UPDATE:
+        host_clipboard_changed(); // read only when the game pastes
+        break;
     case SDL_EVENT_TEXT_INPUT:
         if (keyboard_text_input_on() && event.text.text && *event.text.text) {
             PendingInput e;
@@ -1752,6 +1756,7 @@ void pump() {
     g_guest_pointer_hidden = host_guest_pointer_hidden();
     update_relative_mouse();
     update_guest_cursor();
+    sdl_clipboard_pump(); // a copy made on a guest worker thread
     apply_window_mode();
     apply_mode_change();
     service(0.0);
@@ -2130,6 +2135,7 @@ int main(int argc, char **argv) {
         return 3;
     }
     note_screen_size();
+    sdl_clipboard_install();
     g_surface = gpu::native_surface_for_window(g_window);
     if (!g_surface) {
         fprintf(stderr, RECOMP_APP_NAME ": no %s surface for the window: %s\n",

@@ -29,6 +29,18 @@
   compiler's environment, so no SDK is looked up and a bundle is the same
   whoever builds it.
 
+- Copy and paste between a game and the Mac. Text a program copies
+  (`CF_UNICODETEXT`, else `CF_TEXT`) goes to the platform's clipboard when
+  it closes the clipboard; another application's text is read when the
+  program pastes, never merely because the clipboard changed, with CR LF
+  line ends on the Windows side. `CF_UNICODETEXT`, `CF_TEXT` (code page
+  1252) and `CF_OEMTEXT` (437) are converted into each other on request;
+  the same window or thread may open the clipboard again while it has it
+  open, as on Windows; and the handle `GetClipboardData` returns is the
+  text itself, for a program that reads it without `GlobalLock`. The SDL
+  host bridges through SDL's clipboard on the main thread; without a host
+  bridge the clipboard stays the process's own.
+
 - Draw `Arc`, `Chord` and `Pie` as elliptical arcs, as GDI defines them:
   the part of `Ellipse`'s outline between the rays through the two points,
   counterclockwise unless `SetArcDirection(AD_CLOCKWISE)` (new, with

@@ -936,6 +936,129 @@ static void test_cursors() {
 }
 
 // ---------------------------------------------------------------------------
+// The clipboard: Windows' rules, text conversions, and the platform bridge
+// ---------------------------------------------------------------------------
+static std::string g_platform_text;
+static bool g_platform_has = false;
+static int g_platform_reads = 0;
+static std::vector<std::string> g_platform_writes;
+static const HostClipboard g_fake_bridge = {
+    []() { return g_platform_has; },
+    [](std::string *out) {
+        ++g_platform_reads;
+        *out = g_platform_text;
+        return g_platform_has;
+    },
+    [](const std::string &text) {
+        g_platform_writes.push_back(text);
+        g_platform_text = text;
+        g_platform_has = true;
+    },
+};
+
+// What a toolkit's copy does: open, empty, a GMEM_MOVEABLE block, set, close.
+static void copy_unicode(X86 *c, uint32_t owner, const std::u16string &text) {
+    user(c, "OpenClipboard", {owner});
+    user(c, "EmptyClipboard", {});
+    const uint32_t h =
+        call(c, "KERNEL32.dll", "GlobalAlloc", {0x2002, uint32_t(text.size() * 2 + 2)});
+    const uint32_t p = call(c, "KERNEL32.dll", "GlobalLock", {h});
+    memcpy(g_mem + p, text.data(), text.size() * 2);
+    wr16(p + uint32_t(text.size() * 2), 0);
+    call(c, "KERNEL32.dll", "GlobalUnlock", {h});
+    user(c, "SetClipboardData", {13, h});
+    user(c, "CloseClipboard", {});
+}
+// What its paste does: the handle read as the text, with no GlobalLock.
+static std::u16string paste_unicode(X86 *c) {
+    user(c, "OpenClipboard", {0});
+    const uint32_t h = user(c, "GetClipboardData", {13});
+    std::u16string out;
+    for (uint32_t i = 0; h && rd16(h + 2 * i); ++i)
+        out.push_back(char16_t(rd16(h + 2 * i)));
+    user(c, "CloseClipboard", {});
+    return out;
+}
+
+static void test_clipboard() {
+    X86 *c = &g_main;
+    const uint32_t hwnd = make_window(c, false), other = make_window(c, false);
+    drain(c);
+
+    // Opening: the same window again succeeds, another one does not.
+    check(user(c, "OpenClipboard", {hwnd}) == 1 && user(c, "OpenClipboard", {hwnd}) == 1,
+          "OpenClipboard twice from the same window");
+    check(user(c, "OpenClipboard", {other}) == 0 &&
+              call(c, "KERNEL32.dll", "GetLastError", {}) == 5,
+          "another window is refused (ERROR_ACCESS_DENIED)");
+    check(user(c, "CloseClipboard", {}) == 1 && user(c, "CloseClipboard", {}) == 0,
+          "CloseClipboard once");
+    check(user(c, "GetClipboardData", {13}) == 0 &&
+              call(c, "KERNEL32.dll", "GetLastError", {}) == 1418,
+          "GetClipboardData needs it open (ERROR_CLIPBOARD_NOT_OPEN)");
+    check(user(c, "OpenClipboard", {0}) == 1 && user(c, "OpenClipboard", {0}) == 1,
+          "OpenClipboard(NULL) twice from one thread");
+    user(c, "CloseClipboard", {});
+
+    // Copy and paste within the process; the other text formats are converted.
+    copy_unicode(c, 0, u"copy é €\r\nline");
+    check(paste_unicode(c) == u"copy é €\r\nline",
+          "the CF_UNICODETEXT handle is the text, readable without GlobalLock");
+    user(c, "OpenClipboard", {0});
+    const uint32_t ansi = user(c, "GetClipboardData", {1});
+    check(ansi &&
+              std::string(reinterpret_cast<const char *>(g_mem + ansi)) == "copy \xe9 \x80\r\nline",
+          "CF_TEXT is converted to code page 1252");
+    const uint32_t oem = user(c, "GetClipboardData", {7});
+    check(oem && rd8(oem + 5) == 0x82, "CF_OEMTEXT to code page 437 (e-acute 0x82)");
+    check(user(c, "IsClipboardFormatAvailable", {1}) == 1 &&
+              user(c, "IsClipboardFormatAvailable", {2}) == 0,
+          "IsClipboardFormatAvailable: text yes, bitmap no");
+    user(c, "CloseClipboard", {});
+    user(c, "OpenClipboard", {hwnd});
+    user(c, "EmptyClipboard", {});
+    const uint32_t narrow = call(c, "KERNEL32.dll", "GlobalAlloc", {0x2002, 4});
+    memcpy(g_mem + narrow, "\x80\x93x", 4);
+    user(c, "SetClipboardData", {1, narrow});
+    user(c, "CloseClipboard", {});
+    check(paste_unicode(c) == u"€“x", "CF_TEXT alone reads back as CF_UNICODETEXT");
+    user(c, "OpenClipboard", {0});
+    check(user(c, "GetClipboardOwner", {}) == hwnd, "EmptyClipboard made the window the owner");
+    user(c, "CloseClipboard", {});
+
+    // The platform's clipboard. A copy is published at CloseClipboard, with
+    // LF line ends; another application's text is read only at a paste.
+    host_set_clipboard(&g_fake_bridge);
+    g_platform_has = false;
+    g_platform_reads = 0;
+    g_platform_writes.clear();
+    copy_unicode(c, hwnd, u"to the Mac\r\n中");
+    check(g_platform_writes.size() == 1 && g_platform_writes[0] == "to the Mac\n\xe4\xb8\xad",
+          "a copy reaches the platform's clipboard as UTF-8 with LF");
+    host_clipboard_changed(); // the platform reports its own change back
+    check(paste_unicode(c) == u"to the Mac\r\n中", "and reads back unchanged");
+    g_platform_text = "from the Mac\nsecond \xe2\x84\xa2";
+    host_clipboard_changed();
+    const int reads = g_platform_reads;
+    user(c, "OpenClipboard", {0});
+    check(user(c, "IsClipboardFormatAvailable", {13}) == 1 && g_platform_reads == reads,
+          "IsClipboardFormatAvailable asks whether there is text, without reading it");
+    user(c, "CloseClipboard", {});
+    check(paste_unicode(c) == u"from the Mac\r\nsecond ™" && g_platform_reads == reads + 1,
+          "another application's text is read at the paste, with CR LF");
+    user(c, "OpenClipboard", {0});
+    const uint32_t tm = user(c, "GetClipboardData", {1});
+    check(tm && rd8(tm + 21) == 0x99, "and converts to CF_TEXT (the trade mark sign 0x99)");
+    user(c, "CloseClipboard", {});
+    check(g_platform_writes.size() == 1, "reading publishes nothing");
+    host_set_clipboard(nullptr);
+
+    user(c, "DestroyWindow", {hwnd});
+    user(c, "DestroyWindow", {other});
+    drain(c);
+}
+
+// ---------------------------------------------------------------------------
 // The ANSI odds and ends a Windows game of the time imports
 // ---------------------------------------------------------------------------
 static void test_ansi_entry_points() {
@@ -1265,6 +1388,7 @@ int main() {
         {"a thread's windows end with it", test_thread_windows_end_with_it},
         {"timers and WM_SETCURSOR", test_timer_and_cursor},
         {"cursors", test_cursors},
+        {"the clipboard", test_clipboard},
         {"ANSI entry points", test_ansi_entry_points},
         {"DirectInput foreground and exclusive mouse", test_dinput_foreground},
         {"DirectInput buffers and objects", test_dinput_buffers},

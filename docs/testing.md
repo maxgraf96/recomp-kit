@@ -36,7 +36,8 @@ pointer, the waits and the capped PNG dumps.
 through guest calls and guest threads: activation and focus sequences, sent
 messages in order with queued input, per-thread queues, PostThreadMessage and
 cross-thread SendMessage, keyboard translation, text from the input method
-(WM_CHAR, the IME result path and IMM32), timers and WM_SETCURSOR, and
+(WM_CHAR, the IME result path and IMM32), cursors, the clipboard (with a
+fake platform bridge), timers and WM_SETCURSOR, and
 DirectInput's foreground and exclusive semantics, its 256-record buffer,
 granularity and object info. `gdi_tests` pins GDI's text-measuring rules on a
 generated font that carries VDMX and hdmx tables (`make_gdi_font.py`), and the

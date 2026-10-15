@@ -620,6 +620,8 @@ void imports_init() {
     user32_ansi_register();
     extern void user32_cursor_register();
     user32_cursor_register();
+    extern void user32_clipboard_register();
+    user32_clipboard_register();
     imports_register(g_misc_shims, g_misc_shim_count);
     imports_register(g_gdi32_shims, g_gdi32_shim_count);
     extern void gdi_model_register();
