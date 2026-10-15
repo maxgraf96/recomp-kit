@@ -279,12 +279,18 @@ copy is current, and pixels move only when the other side asks:
 Without a backend every operation is done on the CPU and draws are dropped,
 which is how the headless tests drive DirectDraw.
 
-**Flip copies.** `Flip` copies the back buffer into the front buffer and
-presents the front, so the back buffer keeps its contents: a menu drawn once
-and then only patched by a software cursor stays on screen. It waits for the
-display's refresh unless `DDFLIP_NOVSYNC` (`RECOMP_D3D7_VSYNC=0` turns the
-wait off). A `Blt` to the primary presents its destination rectangle, which
-is the windowed present.
+**Flip exchanges.** `Flip` exchanges the buffers, as Windows does: the back
+buffer's pixels become the front buffer's and are presented, and the back
+buffer then holds the frame shown before (with two back buffers the memory
+rotates, front <- back 1 <- back 2 <- front). The surfaces trade their guest
+memory and their backend resources (`host_d7_swap`); nothing is copied. A
+program that keeps state per buffer depends on it: Empire Earth's menu cursor
+saves the background under itself on each buffer and restores it there two
+frames later, and with a copying Flip every restore landed a frame late and
+left a trail of cursors. A `Flip` while either buffer is locked or has a DC
+fails with `DDERR_SURFACEBUSY`. It waits for the display's refresh unless
+`DDFLIP_NOVSYNC` (`RECOMP_D3D7_VSYNC=0` turns the wait off). A `Blt` to the
+primary presents its destination rectangle, which is the windowed present.
 
 **Direct3D records state and submits.** Each draw becomes one `HostD7Draw`:
 the guest's vertices (any FVF, `XYZRHW` included), its indices, and a

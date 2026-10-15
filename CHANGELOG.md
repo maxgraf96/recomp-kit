@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- DirectDraw 7's `Flip` exchanges the front and back buffers, as Windows
+  does, instead of copying the back buffer into the front: after a Flip the
+  back buffer holds the frame shown before, and its `Lock` pointer is the
+  front buffer's old memory (two back buffers rotate). The surfaces trade
+  their guest memory and their backend resources through a new seam call,
+  `host_d7_swap`, so nothing is copied. Empire Earth's menu cursor keeps a
+  save-under per buffer and restores it two frames later; with the copy every
+  restore landed a frame late and left a trail of cursor fragments over the
+  menu (at 16 and 32 bits per pixel). A `Flip` while a buffer is locked or
+  has a DC fails with `DDERR_SURFACEBUSY`.
 - A `bind` that fails with `WSAEADDRINUSE` says so once per port, whatever
   the tracing (`winsock: UDP port 33334 is already in use ...`): a program
   with fixed ports that a second copy of it, or another program, holds fails

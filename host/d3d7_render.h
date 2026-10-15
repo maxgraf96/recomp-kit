@@ -2,11 +2,11 @@
 // (dx/d3d7_host.h), over gpu.h.
 //
 // Every surface the shim names is a GPU texture here; DirectDraw fills and
-// blits, Direct3D draws and Flip's copy all run on the GPU, in one command
-// stream, in the order the guest submitted them. Pixels cross to the CPU only
-// when the shim asks (a Lock of a surface the GPU wrote), and from it only as
-// uploads encoded in the same stream, so a draw submitted before an upload
-// samples the old pixels.
+// blits and Direct3D draws run on the GPU, in one command stream, in the order
+// the guest submitted them, and Flip exchanges two textures without a copy.
+// Pixels cross to the CPU only when the shim asks (a Lock of a surface the GPU
+// wrote), and from it only as uploads encoded in the same stream, so a draw
+// submitted before an upload samples the old pixels.
 #pragma once
 #include "../dx/d3d7_host.h"
 #include "gpu/gpu.h"
@@ -35,6 +35,7 @@ class D3D7Renderer {
     void fill(uint32_t id, const HostD7Rect &r, uint32_t bgra);
     void fill_depth(uint32_t id, const HostD7Rect &r, float z);
     void blit(const HostD7Blit &b);
+    void swap(uint32_t a, uint32_t b);
     void draw(const HostD7Draw &d);
     void present(uint32_t id, const HostD7Rect &r, int mode_w, int mode_h);
     void flush();

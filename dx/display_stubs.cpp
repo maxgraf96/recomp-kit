@@ -74,6 +74,7 @@ __attribute__((weak)) int host_d7_readback(uint32_t, int, const HostD7Rect *, vo
 __attribute__((weak)) void host_d7_fill(uint32_t, const HostD7Rect *, uint32_t) {}
 __attribute__((weak)) void host_d7_fill_depth(uint32_t, const HostD7Rect *, float) {}
 __attribute__((weak)) void host_d7_blit(const HostD7Blit *) {}
+__attribute__((weak)) void host_d7_swap(uint32_t, uint32_t) {}
 __attribute__((weak)) void host_d7_present(uint32_t, const HostD7Rect *, int, int) {}
 __attribute__((weak)) void host_d7_flush(void) {}
 __attribute__((weak)) void host_d7_draw(const HostD7Draw *) {}

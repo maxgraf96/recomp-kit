@@ -229,8 +229,22 @@ static void test_cooperative_level_and_mode() {
 // ---------------------------------------------------------------------------
 // Surfaces
 // ---------------------------------------------------------------------------
-// A flip chain: GetAttachedSurface walks it, and Flip shows the back buffer
-// while the back buffer keeps its contents.
+// Where Lock puts a surface's pixels.
+static uint32_t lock_pointer(uint32_t surf) {
+    const uint32_t d = gmem(d7::DDSD2_SIZE);
+    wr32(d, d7::DDSD2_SIZE);
+    uint32_t p = 0;
+    if (call_method(surf, S_Lock, {0, d, d7::DDLOCK_READONLY, 0}) == 0) {
+        p = rd32(d + d7::DDSD2_lpSurface);
+        call_method(surf, S_Unlock, {0});
+    }
+    heap_free(d);
+    return p;
+}
+
+// A flip chain: GetAttachedSurface walks it, and Flip exchanges the buffers
+// as Windows does: the back buffer's picture is shown, and the back buffer
+// then holds what the front buffer held.
 static void flip_chain(bool soft) {
     cpu_reset();
     const uint32_t dd = create_dd();
@@ -253,10 +267,14 @@ static void flip_chain(bool soft) {
     CHECK_EQ(hr, d7::DDERR_NOTFOUND);
     CHECK_EQ(call_method(back, S_Flip, {0, d7::DDFLIP_DONOTWAIT}), d7::DDERR_NOTFLIPPABLE);
 
-    // Draw a picture once, then patch it, flipping in between.
+    // Picture A in the back buffer, flipped: A is shown, and the back buffer
+    // holds the front buffer's old pixels (never drawn: black). The memory
+    // moved with the pixels, as on Windows.
     g_shown.clear();
     CHECK_EQ(fill(back, 0x00336699u), 0);
     CHECK_EQ(fill(back, 0x00ffffffu, 10, 10, 20, 20), 0);
+    const uint32_t back_memory = lock_pointer(back), front_memory = lock_pointer(front);
+    CHECK(back_memory != 0 && front_memory != 0 && back_memory != front_memory);
     CHECK_EQ(call_method(front, S_Flip, {0, d7::DDFLIP_DONOTWAIT}), 0);
     CHECK_EQ(g_shown.size(), 1);
     if (!g_shown.empty()) {
@@ -265,25 +283,43 @@ static void flip_chain(bool soft) {
         CHECK_EQ(g_shown[0].argb[0] & 0xffffff, 0x336699);
         CHECK_EQ(g_shown[0].argb[15 * 64 + 15] & 0xffffff, 0xffffff);
     }
-    // The back buffer still holds the picture, and so does the front.
+    CHECK_EQ(lock_pointer(front), back_memory);
+    CHECK_EQ(lock_pointer(back), front_memory);
     Image b = read(back), f = read(front);
+    CHECK_EQ(b.at(0, 0) & 0xffffff, 0);
+    CHECK_EQ(b.at(15, 15) & 0xffffff, 0);
+    CHECK_EQ(f.at(0, 0) & 0xffffff, 0x336699);
+    CHECK_EQ(f.at(15, 15) & 0xffffff, 0xffffff);
+    // Picture B: B is shown, and the back buffer holds A again.
+    CHECK_EQ(fill(back, 0x00ff0000u), 0);
+    CHECK_EQ(call_method(front, S_Flip, {0, d7::DDFLIP_DONOTWAIT | d7::DDFLIP_NOVSYNC}), 0);
+    CHECK_EQ(g_shown.size(), 2);
+    if (g_shown.size() == 2)
+        CHECK_EQ(g_shown[1].argb[15 * 64 + 15] & 0xffffff, 0xff0000);
+    b = read(back);
     CHECK_EQ(b.at(0, 0) & 0xffffff, 0x336699);
     CHECK_EQ(b.at(15, 15) & 0xffffff, 0xffffff);
-    CHECK_EQ(f.at(15, 15) & 0xffffff, 0xffffff);
-    // A cursor-sized patch, flipped twice: both presents show picture and patch.
-    CHECK_EQ(fill(back, 0x00ff0000u, 40, 30, 48, 38), 0);
+    // A Flip with nothing drawn shows A again: the buffers alternate.
     CHECK_EQ(call_method(front, S_Flip, {0, d7::DDFLIP_DONOTWAIT}), 0);
-    CHECK_EQ(call_method(front, S_Flip, {0, d7::DDFLIP_DONOTWAIT | d7::DDFLIP_NOVSYNC}), 0);
     CHECK_EQ(g_shown.size(), 3);
-    for (size_t i = 1; i < g_shown.size(); ++i) {
-        CHECK_EQ(g_shown[i].argb[15 * 64 + 15] & 0xffffff, 0xffffff);
-        CHECK_EQ(g_shown[i].argb[32 * 64 + 42] & 0xffffff, 0xff0000);
-        CHECK_EQ(g_shown[i].argb[5 * 64 + 5] & 0xffffff, 0x336699);
-    }
+    if (g_shown.size() == 3)
+        CHECK_EQ(g_shown[2].argb[15 * 64 + 15] & 0xffffff, 0xffffff);
+    // A locked buffer cannot be flipped.
+    const uint32_t d = gmem(d7::DDSD2_SIZE);
+    wr32(d, d7::DDSD2_SIZE);
+    CHECK_EQ(call_method(back, S_Lock, {0, d, 0, 0}), 0);
+    CHECK_EQ(call_method(front, S_Flip, {0, d7::DDFLIP_DONOTWAIT}), DDERR_SURFACEBUSY);
+    CHECK_EQ(call_method(back, S_Unlock, {0}), 0);
+    heap_free(d);
+    CHECK_EQ(g_shown.size(), 3);
     // A depth buffer attached to the back buffer is found by its caps.
     const uint32_t z = zbuffer(dd, 64, 48, PF_Z24);
     CHECK(z != 0);
     CHECK_EQ(call_method(back, S_AddAttachedSurface, {z}), 0);
+    CHECK_EQ(attached(back, d7::DDSCAPS_ZBUFFER), z);
+    call_method(z, Release, {});
+    // It stays with the back buffer across a Flip; only the colour moves.
+    CHECK_EQ(call_method(front, S_Flip, {0, d7::DDFLIP_DONOTWAIT}), 0);
     CHECK_EQ(attached(back, d7::DDSCAPS_ZBUFFER), z);
     call_method(z, Release, {});
     call_method(z, Release, {}); // the attachment holds the last reference
@@ -291,6 +327,136 @@ static void flip_chain(bool soft) {
     CHECK_EQ(call_method(front, Release, {}), 0);
     call_method(dd, Release, {});
     (void)soft;
+}
+
+// Two back buffers: each Flip rotates the memory, front <- back 1 <- back 2
+// <- front, so every buffer is shown in turn and the guest always draws into
+// the one shown longest ago. A target override exchanges the front buffer with
+// that buffer only.
+static void triple_buffering(bool) {
+    cpu_reset();
+    const uint32_t dd = create_dd();
+    CHECK_EQ(call_method(dd, DD_SetCooperativeLevel, {0x1000, 0x513}), 0);
+    CHECK_EQ(call_method(dd, DD_SetDisplayMode, {32, 24, 16, 0, 0}), 0);
+    SurfaceSpec s;
+    s.caps = d7::DDSCAPS_PRIMARYSURFACE | d7::DDSCAPS_FLIP | d7::DDSCAPS_COMPLEX |
+             d7::DDSCAPS_3DDEVICE | d7::DDSCAPS_VIDEOMEMORY;
+    s.back_buffers = 2;
+    const uint32_t front = create_surface(dd, s);
+    const uint32_t back1 = attached(front, d7::DDSCAPS_BACKBUFFER);
+    const uint32_t back2 = attached(back1, d7::DDSCAPS_FLIP);
+    CHECK(front && back1 && back2 && back2 != front);
+    const d7::Format f = d7::format_r5g6b5();
+    const uint32_t red = 0xf800, green = 0x07e0, blue = 0x001f;
+    CHECK_EQ(fill(front, red), 0);
+    CHECK_EQ(fill(back1, green), 0);
+    CHECK_EQ(fill(back2, blue), 0);
+    g_shown.clear();
+    CHECK_EQ(call_method(front, S_Flip, {0, d7::DDFLIP_DONOTWAIT}), 0);
+    CHECK_EQ(read(front).at(1, 1), d7::pixel_to_bgra(f, green));
+    CHECK_EQ(read(back1).at(1, 1), d7::pixel_to_bgra(f, blue));
+    CHECK_EQ(read(back2).at(1, 1), d7::pixel_to_bgra(f, red));
+    CHECK_EQ(call_method(front, S_Flip, {0, d7::DDFLIP_DONOTWAIT}), 0);
+    CHECK_EQ(call_method(front, S_Flip, {0, d7::DDFLIP_DONOTWAIT}), 0);
+    CHECK_EQ(g_shown.size(), 3);
+    const uint32_t order[3] = {green, blue, red};
+    for (size_t i = 0; i < std::min<size_t>(3, g_shown.size()); ++i)
+        CHECK_EQ(g_shown[i].argb[5] | 0xff000000u, d7::pixel_to_bgra(f, order[i]));
+    // Back where it started; now exchange the front buffer with back 2 alone.
+    CHECK_EQ(call_method(front, S_Flip, {back2, d7::DDFLIP_DONOTWAIT}), 0);
+    CHECK_EQ(read(front).at(1, 1), d7::pixel_to_bgra(f, blue));
+    CHECK_EQ(read(back1).at(1, 1), d7::pixel_to_bgra(f, green));
+    CHECK_EQ(read(back2).at(1, 1), d7::pixel_to_bgra(f, red));
+    for (uint32_t o : {back2, back1, front, dd})
+        call_method(o, Release, {});
+}
+
+// Empire Earth's menu cursor, at 16 bits per pixel: the menu is drawn once
+// into each buffer, and then each frame restores, on the buffer it draws to,
+// the background it saved on that same buffer two frames before (one save
+// surface per buffer), saves the background at the new position, draws the
+// cursor colour-keyed and flips. Every frame shown has the menu and exactly one
+// cursor; with a Flip that copied instead of exchanging, the restores landed a
+// frame late and left a trail of cursor fragments (the bug players saw).
+static void cursor_save_under(bool) {
+    cpu_reset();
+    const uint32_t dd = create_dd();
+    CHECK_EQ(call_method(dd, DD_SetCooperativeLevel, {0x1000, 0x513}), 0);
+    CHECK_EQ(call_method(dd, DD_SetDisplayMode, {96, 64, 16, 0, 0}), 0);
+    SurfaceSpec s;
+    s.caps = d7::DDSCAPS_PRIMARYSURFACE | d7::DDSCAPS_FLIP | d7::DDSCAPS_COMPLEX |
+             d7::DDSCAPS_3DDEVICE | d7::DDSCAPS_VIDEOMEMORY;
+    s.back_buffers = 1;
+    const uint32_t front = create_surface(dd, s);
+    const uint32_t back = attached(front, d7::DDSCAPS_BACKBUFFER);
+    CHECK(front && back);
+    const d7::Format f = d7::format_r5g6b5();
+    auto menu = [](int x, int y) {
+        return uint32_t((((x * 3 + y) & 0x1f) << 11) | (((y * 2) & 0x3f) << 5) | (x & 0x1f));
+    };
+    // The cursor: a yellow triangle keyed on magenta, as 5-6-5.
+    const uint32_t yellow = 0xffe0, magenta = 0xf81f;
+    auto inside = [](int x, int y) { return x + y < 8; };
+    const uint32_t cursor = offscreen(dd, 8, 8, PF_R5G6B5, false);
+    write(cursor, [&](int x, int y) { return inside(x, y) ? yellow : magenta; });
+    CHECK_EQ(set_src_key(cursor, magenta), 0);
+    const uint32_t saves[2] = {offscreen(dd, 8, 8, PF_R5G6B5, false),
+                               offscreen(dd, 8, 8, PF_R5G6B5, false)};
+    for (int i = 0; i < 2; ++i) {
+        write(back, menu);
+        CHECK_EQ(call_method(front, S_Flip, {0, d7::DDFLIP_DONOTWAIT | d7::DDFLIP_NOVSYNC}), 0);
+    }
+    g_shown.clear();
+    // Small steps that overlap the previous position, a rest, then a jump.
+    std::vector<std::pair<int, int>> path;
+    for (int i = 0; i < 12; ++i)
+        path.push_back({4 + 3 * i, 4 + 2 * i});
+    for (int i = 0; i < 4; ++i)
+        path.push_back(path.back());
+    path.push_back({70, 10});
+    path.push_back({72, 12});
+    path.push_back({20, 50});
+    int saved_x[2] = {-1, -1}, saved_y[2] = {-1, -1};
+    const uint32_t r8 = rect(0, 0, 8, 8);
+    for (size_t frame = 0; frame < path.size(); ++frame) {
+        const int buffer = int(frame & 1);
+        const uint32_t save = saves[buffer];
+        if (saved_x[buffer] >= 0) {
+            const uint32_t d =
+                rect(saved_x[buffer], saved_y[buffer], saved_x[buffer] + 8, saved_y[buffer] + 8);
+            CHECK_EQ(call_method(back, S_Blt, {d, save, r8, d7::DDBLT_DONOTWAIT, 0}), 0);
+            heap_free(d);
+        }
+        const int x = path[frame].first, y = path[frame].second;
+        const uint32_t d = rect(x, y, x + 8, y + 8);
+        CHECK_EQ(call_method(save, S_Blt, {r8, back, d, d7::DDBLT_DONOTWAIT, 0}), 0);
+        CHECK_EQ(
+            call_method(back, S_Blt, {d, cursor, r8, d7::DDBLT_DONOTWAIT | d7::DDBLT_KEYSRC, 0}),
+            0);
+        heap_free(d);
+        saved_x[buffer] = x;
+        saved_y[buffer] = y;
+        CHECK_EQ(call_method(front, S_Flip, {0, d7::DDFLIP_DONOTWAIT | d7::DDFLIP_NOVSYNC}), 0);
+        if (g_shown.size() != frame + 1)
+            break;
+        const Shown &shown = g_shown.back();
+        int wrong = 0;
+        for (int py = 0; py < 64; ++py)
+            for (int px = 0; px < 96; ++px) {
+                const bool on_cursor =
+                    px >= x && px < x + 8 && py >= y && py < y + 8 && inside(px - x, py - y);
+                const uint32_t want = d7::pixel_to_bgra(f, on_cursor ? yellow : menu(px, py));
+                wrong += (shown.argb[size_t(py) * 96 + size_t(px)] | 0xff000000u) != want;
+            }
+        CHECK_EQ(wrong, 0);
+        if (wrong)
+            fprintf(stderr, "  frame %zu, cursor at (%d,%d): %d pixels wrong\n", frame, x, y,
+                    wrong);
+    }
+    CHECK_EQ(g_shown.size(), path.size());
+    heap_free(r8);
+    for (uint32_t o : {saves[0], saves[1], cursor, back, front, dd})
+        call_method(o, Release, {});
 }
 
 // The windowed present: a Blt from the back buffer onto the primary, aimed at
@@ -917,6 +1083,9 @@ int main() {
         {"display modes", test_display_modes},
         {"cooperative level and mode", test_cooperative_level_and_mode},
         {"flip chain", [] { both_paths(flip_chain); }},
+        {"triple buffering", [] { both_paths(triple_buffering); }},
+        {"a 16-bit software cursor with a save-under per buffer",
+         [] { both_paths(cursor_save_under); }},
         {"windowed present", [] { both_paths(windowed_present); }},
         {"a fullscreen Blt shows the whole primary",
          [] { both_paths(fullscreen_partial_present); }},

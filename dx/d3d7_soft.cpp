@@ -1016,6 +1016,18 @@ void s_blit(const HostD7Blit *b) {
         }
     }
 }
+void s_swap(uint32_t a, uint32_t b) {
+    auto &m = resources();
+    auto ia = m.find(a), ib = m.find(b);
+    if (ia != m.end() && ib != m.end()) {
+        std::swap(ia->second, ib->second);
+    } else if (ia != m.end() || ib != m.end()) {
+        const bool from_a = ia != m.end();
+        Res moved = std::move(from_a ? ia->second : ib->second);
+        m.erase(from_a ? a : b);
+        m[from_a ? b : a] = std::move(moved);
+    }
+}
 void s_draw(const HostD7Draw *d) {
     draw(d);
 }
@@ -1036,7 +1048,7 @@ void s_flush() {}
 
 const d7::Backend g_soft = {"software", s_available, s_generation, s_create,     s_destroy,
                             s_upload,   s_readback,  s_fill,       s_fill_depth, s_blit,
-                            s_draw,     s_present,   s_flush};
+                            s_swap,     s_draw,      s_present,    s_flush};
 } // namespace
 
 const uint32_t *pixels(uint32_t id, int level, int *w, int *h) {

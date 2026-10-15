@@ -88,6 +88,12 @@ typedef struct HostD7Blit {
     uint8_t mirror_x, mirror_y;
 } HostD7Blit;
 void host_d7_blit(const HostD7Blit *b);
+// Exchanges the resources named `a` and `b`: from now on `a` names what `b`
+// held and `b` what `a` held, with no pixel copied. This is DirectDraw's Flip,
+// which exchanges the memory behind a flip chain's buffers. Either may be
+// missing, and the other one then moves. Work submitted before the exchange
+// keeps the resource it named when it was submitted.
+void host_d7_swap(uint32_t a, uint32_t b);
 
 // Shows region `r` of resource `id` as the next frame, scaled by the host to
 // its window. The resource itself is not changed. `w` x `h` is the guest's

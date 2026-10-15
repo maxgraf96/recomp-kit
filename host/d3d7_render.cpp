@@ -631,6 +631,23 @@ struct D3D7Renderer::Impl {
         quad(q, src, rs, {});
         ++stats.blits;
     }
+    // Flip: the two ids trade textures. Encoded commands hold the textures
+    // they were given; an open pass names its target by id, so it ends first.
+    void swap(uint32_t a, uint32_t b) {
+        if (a == b)
+            return;
+        if (pass.open && (pass.color == a || pass.color == b || pass.depth == a || pass.depth == b))
+            end_pass();
+        auto ia = res.find(a), ib = res.find(b);
+        if (ia != res.end() && ib != res.end()) {
+            std::swap(ia->second, ib->second);
+        } else if (ia != res.end() || ib != res.end()) {
+            const bool from_a = ia != res.end();
+            const Res moved = from_a ? ia->second : ib->second;
+            res.erase(from_a ? a : b);
+            res[from_a ? b : a] = moved;
+        }
+    }
 
     // --- draws -------------------------------------------------------------
     void draw(const HostD7Draw &d);
@@ -1026,6 +1043,9 @@ void D3D7Renderer::fill_depth(uint32_t id, const HostD7Rect &r, float z) {
 void D3D7Renderer::blit(const HostD7Blit &b) {
     impl_->blit(b);
 }
+void D3D7Renderer::swap(uint32_t a, uint32_t b) {
+    impl_->swap(a, b);
+}
 void D3D7Renderer::draw(const HostD7Draw &d) {
     impl_->draw(d);
 }
@@ -1136,6 +1156,11 @@ void host_d7_blit(const HostD7Blit *b) {
     std::lock_guard lock(g_lock);
     if (D3D7Renderer *r = active(); r && b)
         r->blit(*b);
+}
+void host_d7_swap(uint32_t a, uint32_t b) {
+    std::lock_guard lock(g_lock);
+    if (D3D7Renderer *r = active())
+        r->swap(a, b);
 }
 void host_d7_draw(const HostD7Draw *d) {
     std::lock_guard lock(g_lock);

@@ -153,6 +153,7 @@ struct Backend {
     void (*fill)(uint32_t id, const HostD7Rect *r, uint32_t bgra);
     void (*fill_depth)(uint32_t id, const HostD7Rect *r, float z);
     void (*blit)(const HostD7Blit *b);
+    void (*swap)(uint32_t a, uint32_t b);
     void (*draw)(const HostD7Draw *d);
     void (*present)(uint32_t id, const HostD7Rect *r, int w, int h);
     void (*flush)();

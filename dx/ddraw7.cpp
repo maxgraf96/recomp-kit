@@ -6,10 +6,13 @@
 // and in guest memory once the guest locks them; each side is copied from the
 // other only when the other is the current one.
 //
-// Presentation: Flip shows the back buffer by COPYING it to the front buffer,
-// so the back buffer keeps its contents across Flip. A program that draws a
-// picture once and then only patches it (a menu under a software cursor) keeps
-// working, and a program that redraws every frame cannot tell the difference.
+// Presentation: Flip EXCHANGES the buffers, as Windows does: the back buffer's
+// pixels become the front buffer's and are shown, and the back buffer then
+// holds what the front buffer held, the frame before. Nothing is copied: the
+// two surfaces trade their guest memory and their backend resources. A program
+// that keeps one save-under per buffer (Empire Earth's menu cursor restores,
+// on each buffer, what it saved on that buffer two frames before) needs this;
+// with a copy every restore would land one frame late and leave a trail.
 // A Blt whose destination is the primary surface shows the destination
 // rectangle, which is the windowed present.
 #include "d3d7_internal.h"
@@ -238,7 +241,7 @@ uint32_t seam_generation() {
 const Backend g_seam = {
     "gpu",          seam_available,   seam_generation, host_d7_create,     host_d7_destroy,
     host_d7_upload, host_d7_readback, host_d7_fill,    host_d7_fill_depth, host_d7_blit,
-    host_d7_draw,   host_d7_present,  host_d7_flush};
+    host_d7_swap,   host_d7_draw,     host_d7_present, host_d7_flush};
 int g_soft_choice = -1; // -1: read RECOMP_D3D7_SOFTWARE once
 } // namespace
 
@@ -1480,36 +1483,76 @@ bool vsync_enabled() {
     return on != 0;
 }
 
-// Flip(lpDDSurfaceTargetOverride, dwFlags): copies the back buffer to the
-// front buffer and shows it. The back buffer keeps its contents.
+// Two buffers of a flip chain (the same size and format, each its own root)
+// trade their pixels: guest memory, backend resources and which copy is
+// current. What the guest holds - the interface pointers, the caps, an
+// attached depth buffer, a device rendering to the back buffer - stays with
+// the surface, as on Windows, so the back buffer is now the other memory.
+void exchange_buffers(Surface *a, Surface *b) {
+    // Every backend holding one of the two resources exchanges them (one that
+    // holds only one of them moves it).
+    const Backend *owners[2] = {nullptr, nullptr};
+    for (int i = 0; i < 2; ++i) {
+        Surface *s = i ? b : a;
+        auto it = resource_owner().find(s->id);
+        if (it != resource_owner().end() && s->resource_generation == it->second->generation())
+            owners[i] = it->second;
+    }
+    for (int i = 0; i < 2; ++i)
+        if (owners[i] && (i == 0 || owners[1] != owners[0]))
+            owners[i]->swap(a->id, b->id);
+    auto oa = resource_owner().find(a->id), ob = resource_owner().find(b->id);
+    const Backend *was_a = oa == resource_owner().end() ? nullptr : oa->second;
+    const Backend *was_b = ob == resource_owner().end() ? nullptr : ob->second;
+    resource_owner().erase(a->id);
+    resource_owner().erase(b->id);
+    if (was_b)
+        resource_owner()[a->id] = was_b;
+    if (was_a)
+        resource_owner()[b->id] = was_a;
+    std::swap(a->mem, b->mem);
+    std::swap(a->cpu_valid, b->cpu_valid);
+    std::swap(a->gpu_valid, b->gpu_valid);
+    std::swap(a->resource_generation, b->resource_generation);
+    ++a->uniqueness;
+    ++b->uniqueness;
+}
+
+// Flip(lpDDSurfaceTargetOverride, dwFlags): the back buffer becomes the front
+// buffer and is shown, and the front buffer becomes the back buffer, as on
+// Windows: the buffers exchange their memory, so after a Flip the back buffer
+// holds the frame shown before. With more back buffers the memory rotates
+// (front <- back 1 <- back 2 ... <- front); a target override exchanges the
+// front buffer with that buffer.
 void S7_Flip(X86 *c) {
     Surface *front = this_surface(c);
     if (!front || !(front->caps & DDSCAPS_FLIP) || !front->is_root() || front->chain.empty()) {
         com_ret(c, DDERR_NOTFLIPPABLE);
         return;
     }
-    Surface *back = arg(c, 1) ? surface_from_guest(arg(c, 1)) : surface(front->chain[0]);
-    if (!back ||
-        std::find(front->chain.begin(), front->chain.end(), back->id) == front->chain.end()) {
-        com_ret(c, DDERR_INVALIDPARAMS);
-        return;
+    std::vector<Surface *> ring{front};
+    if (arg(c, 1)) {
+        Surface *target = surface_from_guest(arg(c, 1));
+        if (!target ||
+            std::find(front->chain.begin(), front->chain.end(), target->id) == front->chain.end()) {
+            com_ret(c, DDERR_INVALIDPARAMS);
+            return;
+        }
+        ring.push_back(target);
+    } else {
+        for (uint32_t id : front->chain)
+            if (Surface *s = surface(id))
+                ring.push_back(s);
     }
+    for (Surface *s : ring)
+        if (s->lock_count > 0 || s->dc) {
+            com_ret(c, DDERR_SURFACEBUSY);
+            return;
+        }
     const HostD7Rect all{0, 0, int32_t(front->width), int32_t(front->height)};
     g_display.gdi_showing = false;
-    if (surface_on_backend(front) && surface_backend_current(back) &&
-        surface_backend_current(front)) {
-        HostD7Blit b;
-        memset(&b, 0, sizeof b);
-        b.dst = front->id;
-        b.dst_rect = all;
-        b.src = back->id;
-        b.src_rect = all;
-        b.src_has_alpha = 0;
-        backend()->blit(&b);
-        surface_backend_wrote(front);
-    } else {
-        cpu_blit(front, all, back, all, BlitOptions{});
-    }
+    for (size_t i = 0; i + 1 < ring.size(); ++i)
+        exchange_buffers(ring[i], ring[i + 1]);
     present(front, all);
     // A Flip without DDFLIP_NOVSYNC happens at the vertical blank, which is
     // what paces a game that flips as fast as it can draw. The wait is a

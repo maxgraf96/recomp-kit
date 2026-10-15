@@ -125,8 +125,9 @@ shape it does not handle.
 DirectDraw 7 and Direct3D 7 have two suites. `d3d7_tests` (`nogame`) drives the
 shims through the guest ABI: the object model, enumeration, locks, Blt and Flip
 on the CPU path and on the software reference renderer (which must agree
-exactly), GetDC, device state, coherence, and synthetic scenes against pixels
-computed by hand. `d3d7_gpu_tests` (`gpu`) renders the same scenes
+exactly), a 16-bit software cursor with a save-under per flip-chain buffer,
+GetDC, device state, coherence, and synthetic scenes against pixels computed
+by hand. `d3d7_gpu_tests` (`gpu`) renders the same scenes
 (`dx/tests/d3d7_scenes.h`) on the GPU and on the reference renderer and compares
 them channel by channel, each scene within its stated tolerance and edge
 budget; `RECOMP_D3D7_TEST_DUMP=<dir>` writes every compared pair as PPM. It also

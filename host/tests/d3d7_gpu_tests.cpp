@@ -7,8 +7,9 @@
 // A scene may differ by its stated tolerance everywhere, and by more only on
 // its edge budget (rasterization and filtering at edges are the GPU's).
 //
-// Also here: Flip's presentation with a software cursor (GPU blits, no
-// readbacks), and a frame-cost benchmark at the call rate an engine produces.
+// Also here: Flip's exchange with a 16-bit software cursor that keeps a
+// save-under per buffer (GPU blits, no readbacks), and a frame-cost benchmark
+// at the call rate an engine produces.
 // RECOMP_D3D7_TEST_DUMP=<dir> writes every compared pair as PPM.
 #include "../../dx/tests/guest_abi.h"
 #include "../../dx/tests/d3d7_scenes.h"
@@ -109,17 +110,26 @@ static void test_scenes() {
     }
 }
 
-// A menu drawn once into a flip chain's back buffer, then per frame: restore
-// the saved background under the cursor, save the new background, draw the
-// cursor colour-keyed, Flip. The back buffer keeps the menu across Flips, the
-// blits never read the GPU back, and each Flip presents the right picture.
+// Empire Earth's menu at 16 bits per pixel: a menu drawn with Direct3D into
+// each buffer of a flip chain, then per frame: restore, on the buffer drawn to,
+// the background saved on that buffer two frames before (one save surface per
+// buffer), save the background at the new position, draw the cursor
+// colour-keyed, Flip. Flip exchanges the buffers on the GPU, the blits never
+// read the GPU back, and every frame shows the menu and one cursor.
+static const int CURSOR_FRAMES = 10;
+static void cursor_position(int frame, int *x, int *y) {
+    // Overlapping steps, then a rest.
+    const int step = std::min(frame, 6);
+    *x = 10 + 4 * step;
+    *y = 10 + 3 * step;
+}
 static std::vector<Shown> cursor_frames(bool soft) {
     cpu_reset();
     d7::use_soft_backend(soft);
     g_shown.clear();
     const uint32_t dd = create_dd();
     CHECK_EQ(call_method(dd, DD_SetCooperativeLevel, {0x1000, 0x513}), 0);
-    CHECK_EQ(call_method(dd, DD_SetDisplayMode, {96, 64, 32, 0, 0}), 0);
+    CHECK_EQ(call_method(dd, DD_SetDisplayMode, {96, 64, 16, 0, 0}), 0);
     SurfaceSpec ps;
     ps.caps = d7::DDSCAPS_PRIMARYSURFACE | d7::DDSCAPS_FLIP | d7::DDSCAPS_COMPLEX |
               d7::DDSCAPS_3DDEVICE | d7::DDSCAPS_VIDEOMEMORY | d7::DDSCAPS_LOCALVIDMEM;
@@ -128,60 +138,66 @@ static std::vector<Shown> cursor_frames(bool soft) {
     const uint32_t back = attached(front, d7::DDSCAPS_BACKBUFFER);
     const uint32_t d3d = query(dd, d7::IID_IDirect3D7);
     const uint32_t dev = create_device(d3d, back);
-    // The "menu": a gradient drawn once with Direct3D.
+    // The "menu": a gradient drawn with Direct3D into each buffer in turn.
     viewport(dev, 0, 0, 96, 64);
     set_transform(dev, d7::TS_PROJECTION, ortho2d(96, 64));
     rs(dev, d7::RS_LIGHTING, 0);
     rs(dev, d7::RS_CULLMODE, d7::CULL_NONE);
-    call_method(dev, DEV_BeginScene, {});
-    clear(dev, d7::CLEAR_TARGET, 0xff102040u);
     tss(dev, 0, d7::TSS_COLOROP, d7::TOP_SELECTARG2);
     tss(dev, 0, d7::TSS_COLORARG2, d7::TA_DIFFUSE);
-    draw(dev, d7::PT_TRIANGLESTRIP,
-         {{8, 8, 0.5f, 0, 0, -1, 0xffff0000u, 0, 0},
-          {88, 8, 0.5f, 0, 0, -1, 0xff00ff00u, 0, 0},
-          {8, 56, 0.5f, 0, 0, -1, 0xff0000ffu, 0, 0},
-          {88, 56, 0.5f, 0, 0, -1, 0xffffffffu, 0, 0}});
-    call_method(dev, DEV_EndScene, {});
-    // The cursor (keyed on magenta) and its save surface, in video memory.
-    const uint32_t cursor = offscreen(dd, 8, 8, PF_X8R8G8B8, false);
-    write(cursor, [](int x, int y) { return x + y < 8 ? 0x00ffff00u : 0x00ff00ffu; });
-    CHECK_EQ(set_src_key(cursor, 0x00ff00ffu), 0);
-    const uint32_t save = offscreen(dd, 8, 8, PF_X8R8G8B8, false);
+    for (int i = 0; i < 2; ++i) {
+        call_method(dev, DEV_BeginScene, {});
+        clear(dev, d7::CLEAR_TARGET, 0xff102040u);
+        draw(dev, d7::PT_TRIANGLESTRIP,
+             {{8, 8, 0.5f, 0, 0, -1, 0xffff0000u, 0, 0},
+              {88, 8, 0.5f, 0, 0, -1, 0xff00ff00u, 0, 0},
+              {8, 56, 0.5f, 0, 0, -1, 0xff0000ffu, 0, 0},
+              {88, 56, 0.5f, 0, 0, -1, 0xffffffffu, 0, 0}});
+        call_method(dev, DEV_EndScene, {});
+        CHECK_EQ(call_method(front, S_Flip, {0, d7::DDFLIP_DONOTWAIT}), 0);
+    }
+    // The cursor (yellow, keyed on magenta) and a save surface per buffer.
+    const uint32_t cursor = offscreen(dd, 8, 8, PF_R5G6B5, false);
+    write(cursor, [](int x, int y) { return x + y < 8 ? 0xffe0u : 0xf81fu; });
+    CHECK_EQ(set_src_key(cursor, 0xf81fu), 0);
+    const uint32_t saves[2] = {offscreen(dd, 8, 8, PF_R5G6B5, false),
+                               offscreen(dd, 8, 8, PF_R5G6B5, false)};
     HostD7Stats before{}, after{};
     host_d7_stats(&before);
-    int px = 10, py = 10;
-    bool saved = false;
+    int saved_x[2] = {-1, -1}, saved_y[2] = {-1, -1};
     const uint32_t r8 = rect(0, 0, 8, 8);
-    for (int frame = 0; frame < 6; ++frame) {
+    for (int frame = 0; frame < CURSOR_FRAMES; ++frame) {
+        const int buffer = frame & 1;
         call_method(dev, DEV_BeginScene, {});
-        if (saved) {
-            const uint32_t d = rect(px, py, px + 8, py + 8);
-            CHECK_EQ(call_method(back, S_Blt, {d, save, r8, d7::DDBLT_DONOTWAIT, 0}), 0);
+        if (saved_x[buffer] >= 0) {
+            const uint32_t d =
+                rect(saved_x[buffer], saved_y[buffer], saved_x[buffer] + 8, saved_y[buffer] + 8);
+            CHECK_EQ(call_method(back, S_Blt, {d, saves[buffer], r8, d7::DDBLT_DONOTWAIT, 0}), 0);
             heap_free(d);
         }
-        px += 9;
-        py += 5;
+        int px = 0, py = 0;
+        cursor_position(frame, &px, &py);
         const uint32_t d = rect(px, py, px + 8, py + 8);
-        CHECK_EQ(call_method(save, S_Blt, {r8, back, d, d7::DDBLT_DONOTWAIT, 0}), 0);
+        CHECK_EQ(call_method(saves[buffer], S_Blt, {r8, back, d, d7::DDBLT_DONOTWAIT, 0}), 0);
         CHECK_EQ(
             call_method(back, S_Blt, {d, cursor, r8, d7::DDBLT_DONOTWAIT | d7::DDBLT_KEYSRC, 0}),
             0);
         heap_free(d);
-        saved = true;
+        saved_x[buffer] = px;
+        saved_y[buffer] = py;
         call_method(dev, DEV_EndScene, {});
-        if (frame == 5 && !soft)
+        if (frame == CURSOR_FRAMES - 1 && !soft)
             host_d7_stats(&after);
         CHECK_EQ(call_method(front, S_Flip, {0, d7::DDFLIP_DONOTWAIT}), 0);
     }
     if (!soft) {
-        // The blits stayed on the GPU: nothing was read back before the Flips
-        // that this test's host presents by reading back.
-        CHECK(after.blits - before.blits >= 17);
-        CHECK_EQ(after.readbacks - before.readbacks, 5);
+        // The blits stayed on the GPU: nothing was read back but by the
+        // presents of this test's host, which shows a frame by reading it.
+        CHECK(after.blits - before.blits >= uint64_t(3 * CURSOR_FRAMES - 2));
+        CHECK_EQ(after.readbacks - before.readbacks, uint64_t(CURSOR_FRAMES - 1));
     }
     heap_free(r8);
-    for (uint32_t o : {save, cursor, dev, d3d, back, front, dd})
+    for (uint32_t o : {saves[0], saves[1], cursor, dev, d3d, back, front, dd})
         call_method(o, Release, {});
     d7::use_soft_backend(false);
     return g_shown;
@@ -189,8 +205,9 @@ static std::vector<Shown> cursor_frames(bool soft) {
 static void test_cursor_flips() {
     const std::vector<Shown> ref = cursor_frames(true);
     const std::vector<Shown> gpu = cursor_frames(false);
-    CHECK_EQ(ref.size(), 6);
-    CHECK_EQ(gpu.size(), 6);
+    const size_t frames = 2 + CURSOR_FRAMES; // the menu twice, then the cursor
+    CHECK_EQ(ref.size(), frames);
+    CHECK_EQ(gpu.size(), frames);
     for (size_t i = 0; i < std::min(ref.size(), gpu.size()); ++i) {
         CHECK_EQ(ref[i].w, gpu[i].w);
         size_t differ = 0;
@@ -204,13 +221,28 @@ static void test_cursor_flips() {
         if (differ)
             fprintf(stderr, "  frame %zu: %zu pixels differ, worst %d\n", i, differ, worst);
     }
-    // The last frame shows the menu, one cursor, and no trail of old cursors.
-    if (gpu.size() == 6) {
-        const Shown &f = gpu[5];
-        const int cx = 10 + 9 * 6, cy = 10 + 5 * 6;
-        CHECK_EQ(f.argb[size_t(cy + 1) * 96 + size_t(cx + 1)] & 0xffffff, 0xffff00);
-        const int ox = 10 + 9 * 5, oy = 10 + 5 * 5;
-        CHECK((f.argb[size_t(oy + 1) * 96 + size_t(ox + 1)] & 0xffffff) != 0xffff00);
+    // Every cursor frame shows the menu and one cursor: outside the cursor's
+    // own 8x8 square each pixel is the menu's (the first frame, before any
+    // cursor), and no yellow is left anywhere else.
+    if (gpu.size() != frames)
+        return;
+    const Shown &menu = gpu[1];
+    for (int f = 0; f < CURSOR_FRAMES; ++f) {
+        const Shown &shown = gpu[size_t(2 + f)];
+        int cx = 0, cy = 0;
+        cursor_position(f, &cx, &cy);
+        CHECK_EQ(shown.argb[size_t(cy + 1) * 96 + size_t(cx + 1)] & 0xffffff, 0xffff00);
+        size_t trail = 0;
+        for (int y = 0; y < 64; ++y)
+            for (int x = 0; x < 96; ++x) {
+                if (x >= cx && x < cx + 8 && y >= cy && y < cy + 8)
+                    continue;
+                trail += max_diff(shown.argb[size_t(y) * 96 + size_t(x)],
+                                  menu.argb[size_t(y) * 96 + size_t(x)]) > 3;
+            }
+        CHECK_EQ(trail, size_t(0));
+        if (trail)
+            fprintf(stderr, "  frame %d: %zu pixels of trail\n", f, trail);
     }
 }
 
