@@ -54,7 +54,8 @@ static void section(const char *s) {
 namespace pe {
 
 const uint32_t SECTION_RVA = 0x1000, SECTION_SIZE = 0x3000, IMAGE_SIZE = 0x4000;
-const uint32_t EXPORTS = 0x2000, IMPORTS = 0x2400, RELOCS = 0x3000, TLS = 0x3800, RSRC = 0x3c00;
+// The export area holds names of C++ length (two of 313 characters).
+const uint32_t EXPORTS = 0x2000, IMPORTS = 0x2600, RELOCS = 0x3000, TLS = 0x3800, RSRC = 0x3c00;
 
 struct Import {
     std::string dll;
@@ -119,7 +120,7 @@ struct Image {
                 str += (uint32_t)exports[i].first.size() + 1;
             }
             dirs[0][0] = EXPORTS;
-            dirs[0][1] = 0x400;
+            dirs[0][1] = IMPORTS - EXPORTS;
         }
         if (!imports.empty()) {
             uint32_t str = IMPORTS + 0x800;
@@ -413,6 +414,13 @@ struct Config {
     std::vector<LoaderModuleSpec> specs;
 };
 
+// Two exports whose names agree for their first 300 characters, as C++
+// decorations of one template's overloads do: a loader that cuts names at
+// MAX_PATH binds both to whichever comes first.
+static std::string long_export_name(char last) {
+    return "?LongDecoration@" + std::string(296, 'x') + last;
+}
+
 static Config build_world() {
     Config cfg;
     // The executable: at its preferred base, relocations stripped. Imports
@@ -423,7 +431,7 @@ static Config build_world() {
     exe.dll = false;
     exe.strip = true;
     exe.name = "main.exe";
-    exe.imports = {{"alpha.dll", {"AlphaFn", "#2"}},
+    exe.imports = {{"alpha.dll", {"AlphaFn", "#2", long_export_name('B')}},
                    {"KERNEL32.dll", {"GetTickCount"}},
                    {"WS2_32.dll", {"#11", "#10"}},
                    {"WSOCK32.dll", {"#11"}}};
@@ -433,7 +441,10 @@ static Config build_world() {
     // elsewhere; it imports beta, which comes after it in the configuration.
     pe::Image alpha;
     alpha.name = "alpha.dll";
-    alpha.exports = {{"AlphaFn", 0x1010}, {"AlphaData", 0x1100}};
+    alpha.exports = {{"AlphaFn", 0x1010},
+                     {"AlphaData", 0x1100},
+                     {long_export_name('A'), 0x1050},
+                     {long_export_name('B'), 0x1060}};
     alpha.imports = {{"beta.dll", {"BetaFn"}}};
     alpha.pointer(0x1104, 0x1100);   // a pointer to its own data
     alpha.put32(0x1108, 0x10000000); // a constant that only looks like an address
@@ -501,6 +512,10 @@ static void test_relocation_and_binding(Config &cfg) {
           rd32(exe_iat));
     check(rd32(exe_iat + 4) == 0x10101100, "ordinal 2 binds to AlphaData (%08x)",
           rd32(exe_iat + 4));
+    check(rd32(exe_iat + 8) == 0x10101060,
+          "a 313-character export binds by its whole name, past a shared 300-character "
+          "prefix (%08x)",
+          rd32(exe_iat + 8));
     check(rd32(0x10100000 + pe::Image::iat_slot(0, 0)) == 0x10001020,
           "alpha binds BetaFn although beta is configured after it");
     check(rd32(0x10180000 + pe::Image::iat_slot(1, 0)) == 0x101c1040,

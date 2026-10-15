@@ -245,7 +245,10 @@ bool patch_iat(uint32_t g_base, uint32_t g_size, uint32_t imp_rva, uint32_t imp_
             uint32_t t = rd32(lookup);
             if (!t)
                 break;
-            char namebuf[280];
+            // C++ decorations run long (512 characters in one game's engine):
+            // a name is read whole, never cut at MAX_PATH, or two exports that
+            // share a long prefix would bind to whichever comes first.
+            char namebuf[4096];
             if (t & 0x80000000u) {
                 snprintf(namebuf, sizeof namebuf, "ord%u", t & 0xffff);
                 // A Winsock ordinal is a documented export: bind it by that name,
@@ -259,7 +262,7 @@ bool patch_iat(uint32_t g_base, uint32_t g_size, uint32_t imp_rva, uint32_t imp_
                     g_error = "import name lies outside the image";
                     return false;
                 }
-                std::string n = gm_str(g_base + t + 2, 260);
+                std::string n = gm_str(g_base + t + 2, sizeof namebuf - 1);
                 snprintf(namebuf, sizeof namebuf, "%s", n.c_str());
             }
             // DLLs can import code AND data from the executable. Both slots
@@ -612,7 +615,7 @@ uint32_t loader_module_export(const LoaderModule &m, const char *name) {
     for (uint32_t i = 0; i < nnames; ++i) {
         uint32_t name_rva = rd32(m.base + names + 4 * i);
         if (!in(name_rva, 1) ||
-            gm_str(m.base + name_rva, std::min(260u, m.size - name_rva)) != name)
+            gm_str(m.base + name_rva, std::min(4096u, m.size - name_rva)) != name)
             continue;
         uint32_t ordinal = rd16(m.base + ords + 2 * i);
         if (ordinal >= nfuncs)
