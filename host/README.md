@@ -148,6 +148,7 @@ Keys a Mac keyboard lacks, and what the Command key does:
 | Mac | Windows |
 | --- | --- |
 | Command-Q, the window's close button | WM_CLOSE to the game's main window (its own quit path) |
+| Command-comma | the settings page, open or closed (whatever key game.toml `[settings] key` gives it, F10 by default) |
 | Command-Tab, Command-H, clicking another app | deactivation: WM_ACTIVATE(WA_INACTIVE), WM_ACTIVATEAPP(FALSE); foreground DirectInput devices are unacquired |
 | Command-M, the yellow button | WM_SIZE(SIZE_MINIMIZED) and the deactivation; restoring activates again |
 | other Command combinations | the application's, never the game's |

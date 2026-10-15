@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The settings page's key is the game's choice: game.toml `[settings] key`
+  names a function key (F10 by default) or `"none"` for a game that needs its
+  function keys itself, as Empire Earth needs F10 for its own menu. On a Mac,
+  Command-comma opens and closes the page whatever the key.
 - `RECOMP_NET_PCAP=FILE` records a program's network traffic as it sees it,
   as a raw-IP pcap with wall-clock times: every datagram it sends or receives
   (a broadcast once, to the address it named) and every stream's bytes as

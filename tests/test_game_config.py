@@ -356,6 +356,23 @@ class LoadTests(unittest.TestCase):
                 game_config.load(game)
             self.assertIn("sharpness", str(caught.exception))
 
+    def test_settings_key_knob(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            (game / "globals.toml").write_text((ROOT / "games/stub/globals.toml").read_text())
+            base = (ROOT / "games/stub/game.toml").read_text()
+            (game / "game.toml").write_text(base)
+            self.assertIn("#define RECOMP_SETTINGS_KEY 0x44u", gen_game_config.render_header(game_config.load(game)))
+            (game / "game.toml").write_text(base + '\n[settings]\nkey = "none"\n')
+            self.assertIn("#define RECOMP_SETTINGS_KEY 0x00u", gen_game_config.render_header(game_config.load(game)))
+            (game / "game.toml").write_text(base + '\n[settings]\nkey = "F12"\n')
+            self.assertIn("#define RECOMP_SETTINGS_KEY 0x58u", gen_game_config.render_header(game_config.load(game)))
+            for bad in ("F11", "f10", "Escape"):
+                (game / "game.toml").write_text(base + '\n[settings]\nkey = "%s"\n' % bad)
+                with self.assertRaises(ValueError) as caught:
+                    game_config.load(game)
+                self.assertIn(bad, str(caught.exception))
+
     def test_mods_builtin_knob(self):
         with tempfile.TemporaryDirectory() as tmp:
             game = Path(tmp)

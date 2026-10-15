@@ -23,6 +23,12 @@ HEAP_BASE_DEFAULT = 0x01000000
 SETTINGS_ROWS = ("rendering", "ui_scale", "wide_view", "window", "resolution", "frame_limit",
                  "performance_overlay", "textures", "filtering", "controls")
 SETTINGS_ROW_ALIASES = {"keypad": "controls"}
+# [settings] key: the key that opens and closes the settings page (default F10),
+# by its DirectInput scan code; "none" leaves every function key to the game, and
+# the page opens only the platform's own way (Command-comma on a Mac, the
+# on-screen controls' button). F11 is the performance overlay's.
+SETTINGS_KEYS = {"F1": 0x3B, "F2": 0x3C, "F3": 0x3D, "F4": 0x3E, "F5": 0x3F, "F6": 0x40, "F7": 0x41,
+                 "F8": 0x42, "F9": 0x43, "F10": 0x44, "F12": 0x58, "none": 0}
 
 # [controls] default_layout and the on-screen layout picker's choices.
 CONTROLS_LAYOUTS = ("pad", "keys", "pad+keys", "hidden")
@@ -195,6 +201,10 @@ def load(game_dir):
         raise ValueError("%s: [settings] rows may name only %s, not %s"
                          % (source, ", ".join(SETTINGS_ROWS), ", ".join(map(repr, unknown))))
     settings["rows"] = rows
+    key = settings.setdefault("key", "F10")
+    if key not in SETTINGS_KEYS:
+        raise ValueError("%s: [settings] key must be one of %s, not %r"
+                         % (source, ", ".join(SETTINGS_KEYS), key))
     launcher = cfg.setdefault("launcher", {})
     launcher.setdefault("title", game["name"])
     launcher.setdefault("store", "")

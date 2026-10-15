@@ -106,6 +106,8 @@ def render_header(cfg, developer_paths=True):
     # One bit per settings-page row, in game_config.SETTINGS_ROWS order.
     mask = sum(1 << i for i, row in enumerate(game_config.SETTINGS_ROWS) if row in cfg["settings"]["rows"])
     lines.append("#define RECOMP_SETTINGS_ROWS 0x%03xu" % mask)
+    # The page's key as a DirectInput scan code; 0: none.
+    lines.append("#define RECOMP_SETTINGS_KEY 0x%02xu" % game_config.SETTINGS_KEYS[cfg["settings"]["key"]])
     # The launcher's data: what to call the game, where to get it, where an
     # install may be, and what an import copies (host/launcher/).
     launcher = cfg["launcher"]

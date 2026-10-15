@@ -1,4 +1,6 @@
 // F10 opens the game's native Options tabs once its menus are initialized.
+// The key is game.toml [settings] key (RECOMP_SETTINGS_KEY, F10 unless the game
+// needs F10 itself; 0 for none, when the host's own shortcut opens the page).
 // The host overlay below remains available to fixtures and early mod-init
 // callbacks that run before the native menu/font resources exist.
 //
@@ -19,6 +21,10 @@
 #include <string.h>
 #include <string>
 #include <vector>
+
+#ifndef RECOMP_SETTINGS_KEY
+#define RECOMP_SETTINGS_KEY 0x44u // DIK_F10
+#endif
 
 namespace {
 
@@ -165,7 +171,7 @@ int32_t on_key(const PopModApi *, int32_t dik, int32_t, int32_t down, void *) {
             mods_display_set(DISPLAY_OVERLAY, (mods_display_value(DISPLAY_OVERLAY) + 1) % 3);
         return 1;
     }
-    if (dik == 0x44) { // DIK_F10, reserved
+    if (RECOMP_SETTINGS_KEY && dik == (int32_t)RECOMP_SETTINGS_KEY) { // F10 unless the game says
         if (down) {
             if (mods_options_open(nullptr, true))
                 mods_page_close();

@@ -1058,6 +1058,14 @@ void toggle_system_keyboard() {
 void open_settings_page() {
     (void)mods_page_open(nullptr);
 }
+// Command-comma, the Mac's Settings shortcut: the settings page, open or
+// closed, whatever function key the game leaves it (game.toml [settings] key).
+void toggle_settings_page() {
+    if (mods_page_visible())
+        mods_page_close();
+    else
+        open_settings_page();
+}
 
 // Focus loss or backgrounding: every finger is gone, every key and modifier up.
 void touch_release_all() {
@@ -1273,9 +1281,14 @@ void handle_event(const SDL_Event &event) {
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP:
         // Command combinations belong to the application, not the game:
-        // Command-Q quits through SDL_EVENT_QUIT and Command-H hides.
-        if (event.key.mod & SDL_KMOD_GUI)
+        // Command-Q quits through SDL_EVENT_QUIT, Command-H hides and
+        // Command-comma opens or closes the settings page.
+        if (event.key.mod & SDL_KMOD_GUI) {
+            if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
+                event.key.scancode == SDL_SCANCODE_COMMA)
+                toggle_settings_page();
             break;
+        }
         handle_key(event.key, event.type == SDL_EVENT_KEY_DOWN);
         break;
     case SDL_EVENT_WINDOW_FOCUS_LOST:

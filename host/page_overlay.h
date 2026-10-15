@@ -16,7 +16,8 @@
 // otherwise, so a build with mods disabled - RECOMP_NO_MODS, or a host that
 // sets BootOptions::load_mods false - never registers the page's keyboard and
 // never draws it. That matters beyond the drawing: the page's key handler
-// consumes F10 unconditionally and every key while it is open, so registering
+// consumes its key (game.toml [settings] key, F10 by default) unconditionally
+// and every key while it is open, so registering
 // it with mods off would change what the guest sees.
 void host_page_set_enabled(bool enabled);
 bool host_page_enabled(void);
