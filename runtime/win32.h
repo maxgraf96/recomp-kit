@@ -518,6 +518,12 @@ void win32_reset_activation_for_test();
 // Calls the window's WNDPROC through recomp_call.
 uint32_t host_dispatch_to_wndproc(X86 *c, uint32_t hwnd, uint32_t msg, uint32_t wparam,
                                   uint32_t lparam);
+// Told of every message a window procedure is about to receive, sent or
+// posted, on the guest thread delivering it (under the baton). For a host
+// that waits on what the game does - scripted input waits for a message.
+// One observer; null removes it.
+void win32_set_message_observer(void (*fn)(uint32_t hwnd, uint32_t msg, uint32_t wparam,
+                                           uint32_t lparam));
 
 // ---------------------------------------------------------------------------
 // Something to run on the main guest thread between frames, from the guest's

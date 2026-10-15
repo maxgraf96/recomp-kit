@@ -65,6 +65,17 @@ pop_test_binary(input_touch_tests)
 add_test(NAME input_touch_tests COMMAND input_touch_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(input_touch_tests PROPERTIES LABELS nogame)
 
+# Scripted input against a simulated game: the parser, the closed-loop
+# pointer, the waits and the PNG dumps.
+add_executable(input_script_tests ${HOST}/input_script.cpp ${HOST}/tests/input_script_tests.cpp)
+target_include_directories(input_script_tests PRIVATE ${POP_ROOT})
+target_compile_options(input_script_tests PRIVATE ${POP_WARN_WERROR})
+target_link_libraries(input_script_tests PRIVATE recomp_miniz recomp_platform)
+pop_optimize(input_script_tests 1)
+pop_test_binary(input_script_tests)
+add_test(NAME input_script_tests COMMAND input_script_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(input_script_tests PROPERTIES LABELS nogame)
+
 add_executable(keypad_tests ${HOST}/keypad_layout.cpp ${HOST}/keypad_modifiers.cpp ${HOST}/tests/keypad_tests.cpp)
 target_include_directories(keypad_tests PRIVATE ${POP_ROOT})
 target_compile_options(keypad_tests PRIVATE ${POP_WARN_WERROR})

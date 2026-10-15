@@ -346,6 +346,11 @@ bool host_cursor_clip(int32_t *out) {
     return true;
 }
 
+static void (*g_message_observer)(uint32_t, uint32_t, uint32_t, uint32_t) = nullptr;
+void win32_set_message_observer(void (*fn)(uint32_t, uint32_t, uint32_t, uint32_t)) {
+    g_message_observer = fn;
+}
+
 uint32_t host_dispatch_to_wndproc(X86 *c, uint32_t hwnd, uint32_t msg, uint32_t wparam,
                                   uint32_t lparam) {
     Window *w = find_window(hwnd);
@@ -354,6 +359,8 @@ uint32_t host_dispatch_to_wndproc(X86 *c, uint32_t hwnd, uint32_t msg, uint32_t 
         LOGV("message %04x for window %08x has no WNDPROC", msg, hwnd);
         return 0;
     }
+    if (g_message_observer)
+        g_message_observer(hwnd, msg, wparam, lparam);
     return guest_call(c, proc, hwnd, msg, wparam, lparam);
 }
 
