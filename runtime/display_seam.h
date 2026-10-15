@@ -56,6 +56,44 @@ void ddraw_gdi_end_primary(uint32_t dc);
 }
 #endif
 
+// ---------------------------------------------------------------------------
+// Display layers. A fullscreen DirectDraw 7 program owns layer 0: the frame it
+// last presented, which stays on screen when it stops presenting (after
+// FlipToGDISurface, say). The visible top-level windows stacked above its
+// window are layer 1, the GDI overlay, shown over layer 0 the way a desktop
+// compositor shows an owned popup over a fullscreen game's last frame.
+//
+// A host that composes the overlay itself (on the GPU) says so through
+// host_display_overlay_supported and is handed the overlay, premultiplied
+// ARGB at the display mode's size, whenever it changes; frames keep reaching
+// host_display_present_window unchanged. Any other host gets frames with the
+// overlay already blended in, on the CPU, from display_present_frame and from
+// GDI's own presents.
+// ---------------------------------------------------------------------------
+#ifdef __cplusplus
+extern "C" {
+#endif
+// DirectDraw 7 (dx/ddraw7.cpp): true while an exclusive fullscreen primary
+// exists; *hwnd is its cooperative-level window. Weak (false) without dx.
+bool ddraw7_screen_owner(uint32_t *hwnd);
+// A frame for layer 0, from a presenter that has its pixels on the CPU. Use it
+// instead of host_display_present_window for DirectDraw 7 presents.
+void display_present_frame(const uint32_t *argb, int w, int h);
+// Layer 1 changed shape without a pixel being drawn: a window was shown,
+// hidden, moved, sized, restacked or destroyed, or the program flipped to the
+// GDI surface. The next GDI present composes and shows it again.
+void display_layers_changed(void);
+// The host's side. Weak defaults: not supported, nothing taken.
+int host_display_overlay_supported(void);
+// `argb` is w*h premultiplied ARGB words (BGRA8 bytes), or null to remove it.
+void host_display_present_overlay(const uint32_t *argb, int w, int h);
+// Blends the current overlay over a w x h frame in place (a script's view of
+// what the screen shows). False when there is no overlay of that size.
+bool display_overlay_compose(uint32_t *argb, int w, int h);
+#ifdef __cplusplus
+}
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif

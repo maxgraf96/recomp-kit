@@ -1271,7 +1271,239 @@ bool presented_pixels(PresentedSurface &s) {
 }
 } // namespace
 
+// ---------------------------------------------------------------------------
+// Display layers (display_seam.h): a fullscreen DirectDraw 7 program's last
+// frame is layer 0, and the windows stacked above its window are layer 1.
+// ---------------------------------------------------------------------------
+namespace {
+struct Layers {
+    // Layer 0 on the CPU: the frame display_present_frame showed last. Kept
+    // only for a host that cannot compose the overlay itself.
+    std::vector<uint32_t> frame;
+    int frame_w = 0, frame_h = 0;
+    uint64_t frame_ns = 0; // when the program last presented
+    // Layer 1: premultiplied ARGB at the display mode's size. `any` when a
+    // pixel of it is drawn; `changed` when a window changed shape since it
+    // was composed (display_layers_changed).
+    std::vector<uint32_t> overlay;
+    int w = 0, h = 0;
+    bool any = false, changed = true;
+    bool on_host = false; // the host holds an overlay it was handed
+    // The last composite presented on the CPU, repeated by a refresh.
+    std::vector<uint32_t> shown;
+    uint64_t shown_ns = 0;
+};
+Layers &layers() {
+    static Layers value;
+    return value;
+}
+// A premultiplied overlay pixel over an opaque frame pixel.
+inline uint32_t over(uint32_t top, uint32_t below) {
+    const uint32_t a = top >> 24;
+    if (a == 255)
+        return top;
+    if (!a)
+        return below | 0xff000000u;
+    uint32_t out = 0xff000000u;
+    for (unsigned shift = 0; shift < 24; shift += 8) {
+        const uint32_t c =
+            ((top >> shift) & 255) + (((below >> shift) & 255) * (255 - a) + 127) / 255;
+        out |= std::min<uint32_t>(c, 255) << shift;
+    }
+    return out;
+}
+// The windows over layer 0, bottom to top: every visible top-level window
+// stacked above `base` (the frame covers the screen, and so whatever is below
+// its window) with its children. All of them when `base` is not a top-level
+// window.
+std::vector<user32::Window *> overlay_surfaces(uint32_t base) {
+    std::vector<user32::Window *> out;
+    const std::vector<uint32_t> order = user32::window_z_order(0);
+    const auto at = std::find(order.begin(), order.end(), base);
+    for (auto it = at == order.end() ? order.begin() : at + 1; it != order.end(); ++it) {
+        auto *w = user32::find_window(*it);
+        if (!w || !w->visible)
+            continue;
+        if (!w->surface.argb.empty())
+            out.push_back(w);
+        collect_surfaces(*it, out);
+    }
+    return out;
+}
+// `windows` over a transparent w x h canvas, premultiplied. True when any
+// pixel was drawn. Clipping and layered windows as gdi_composite_windows.
+bool compose_overlay(const std::vector<user32::Window *> &windows, std::vector<uint32_t> &out,
+                     int w, int h) {
+    out.assign(size_t(w) * h, 0);
+    bool any = false;
+    for (auto *window : windows) {
+        auto &s = window->surface;
+        const bool keyed = (window->layered_flags & 1) != 0;
+        const uint32_t key = gdi::argb(window->layered_key) & 0xffffffu;
+        const uint32_t alpha = (window->layered_flags & 2) ? window->layered_alpha : 255u;
+        if (!alpha)
+            continue;
+        int32_t dx = 0, dy = 0;
+        user32::client_origin(window->hwnd, &dx, &dy);
+        int64_t clip_l = 0, clip_t = 0, clip_r = w, clip_b = h;
+        for (uint32_t up = window->parent; up;) {
+            auto *p = user32::find_window(up);
+            if (!p)
+                break;
+            int32_t px = 0, py = 0;
+            user32::client_origin(up, &px, &py);
+            clip_l = std::max<int64_t>(clip_l, px);
+            clip_t = std::max<int64_t>(clip_t, py);
+            clip_r = std::min<int64_t>(clip_r, int64_t(px) + p->w);
+            clip_b = std::min<int64_t>(clip_b, int64_t(py) + p->h);
+            up = p->parent;
+        }
+        for (int64_t y = std::max<int64_t>(clip_t, dy); y < std::min<int64_t>(clip_b, dy + s.h);
+             ++y) {
+            const uint32_t *src = s.argb.data() + size_t(y - dy) * s.w;
+            uint32_t *dst = out.data() + size_t(y) * w;
+            for (int64_t x = std::max<int64_t>(clip_l, dx); x < std::min<int64_t>(clip_r, dx + s.w);
+                 ++x) {
+                const uint32_t p = src[x - dx];
+                if (!(p >> 24) || (keyed && (p & 0xffffffu) == key))
+                    continue;
+                any = true;
+                if (alpha == 255) {
+                    dst[x] = p | 0xff000000u;
+                    continue;
+                }
+                uint32_t top = alpha << 24;
+                for (unsigned shift = 0; shift < 24; shift += 8)
+                    top |= ((((p >> shift) & 255) * alpha + 127) / 255) << shift;
+                const uint32_t below = dst[x];
+                uint32_t mixed = 0;
+                for (unsigned shift = 0; shift < 32; shift += 8)
+                    mixed |= std::min<uint32_t>(
+                                 ((top >> shift) & 255) +
+                                     (((below >> shift) & 255) * (255 - alpha) + 127) / 255,
+                                 255)
+                             << shift;
+                dst[x] = mixed;
+            }
+        }
+    }
+    return any;
+}
+// The program stopped owning the screen: nothing of the overlay may stay.
+void forget_layers() {
+    auto &l = layers();
+    if (l.on_host)
+        host_display_present_overlay(nullptr, 0, 0);
+    l = Layers{};
+}
+// GDI's present while a DirectDraw 7 program owns layer 0. False when it does
+// not, and the windows are the screen as before.
+bool present_layers(bool refresh) {
+    uint32_t base = 0;
+    if (surface_owns_screen() || mf_owns_the_screen() || !ddraw7_screen_owner(&base)) {
+        if (layers().on_host || layers().any || !layers().frame.empty())
+            forget_layers();
+        return false;
+    }
+    auto &l = layers();
+    const std::vector<user32::Window *> windows = overlay_surfaces(base);
+    uint32_t mw = 0, mh = 0, bpp = 32;
+    win32_display_mode(&mw, &mh, &bpp);
+    const int w = int(mw), h = int(mh);
+    if (w <= 0 || h <= 0 || uint64_t(w) * h > GUEST_SIZE / 4)
+        return true;
+    const bool host = host_display_overlay_supported() != 0;
+    const uint64_t now = os_monotonic_ns();
+    const bool dirty = l.changed || l.w != w || l.h != h || (host && l.any != l.on_host) ||
+                       std::any_of(windows.begin(), windows.end(),
+                                   [](auto *window) { return window->surface.dirty; });
+    if (!dirty) {
+        // Nothing new. A refresh repeats the composite while the program
+        // presents nothing, as a display keeps showing it - a few times a
+        // second, which is all a script's waits and dumps need.
+        if (refresh && !host && l.any && !l.shown.empty() && now - l.frame_ns > 2 * 16666667ull &&
+            now - l.shown_ns > 100000000ull) {
+            l.shown_ns = now;
+            host_display_present_window(l.shown.data(), l.w, l.h);
+        }
+        return true;
+    }
+    const bool had = l.any;
+    l.any = !windows.empty() && compose_overlay(windows, l.overlay, w, h);
+    if (!l.any)
+        l.overlay.clear();
+    l.w = w;
+    l.h = h;
+    l.changed = false;
+    for (auto *window : windows)
+        window->surface.dirty = false;
+    if (host) {
+        l.frame.clear();
+        l.frame_w = l.frame_h = 0;
+        if (l.any || l.on_host)
+            host_display_present_overlay(l.any ? l.overlay.data() : nullptr, w, h);
+        l.on_host = l.any;
+        return true;
+    }
+    // Nothing over the frame, and nothing that was there to take away: the
+    // program's own frames are the screen.
+    if (!l.any && !had)
+        return true;
+    l.shown.resize(size_t(w) * h);
+    const bool framed = l.frame_w == w && l.frame_h == h && !l.frame.empty();
+    for (size_t i = 0, n = size_t(w) * h; i < n; ++i)
+        l.shown[i] = l.any ? over(l.overlay[i], framed ? l.frame[i] : 0xff000000u)
+                           : (framed ? l.frame[i] : 0xff000000u);
+    l.shown_ns = now;
+    host_display_present_window(l.shown.data(), w, h);
+    return true;
+}
+} // namespace
+
+extern "C" void display_layers_changed(void) {
+    layers().changed = true;
+}
+
+extern "C" void display_present_frame(const uint32_t *argb, int w, int h) {
+    uint32_t base = 0;
+    if (!argb || w <= 0 || h <= 0 || surface_owns_screen() || mf_owns_the_screen() ||
+        !ddraw7_screen_owner(&base)) {
+        host_display_present_window(argb, w, h);
+        return;
+    }
+    auto &l = layers();
+    l.frame_ns = os_monotonic_ns();
+    if (host_display_overlay_supported()) {
+        // The host keeps layer 0 and composes the overlay over it.
+        host_display_present_window(argb, w, h);
+        return;
+    }
+    l.frame.assign(argb, argb + size_t(w) * h);
+    l.frame_w = w;
+    l.frame_h = h;
+    if (!l.any || l.w != w || l.h != h) {
+        host_display_present_window(argb, w, h);
+        return;
+    }
+    l.shown.resize(size_t(w) * h);
+    for (size_t i = 0, n = size_t(w) * h; i < n; ++i)
+        l.shown[i] = over(l.overlay[i], argb[i]);
+    l.shown_ns = l.frame_ns;
+    host_display_present_window(l.shown.data(), w, h);
+}
+
+extern "C" bool display_overlay_compose(uint32_t *argb, int w, int h) {
+    const auto &l = layers();
+    if (!argb || !l.any || l.w != w || l.h != h || l.overlay.size() != size_t(w) * h)
+        return false;
+    for (size_t i = 0, n = size_t(w) * h; i < n; ++i)
+        argb[i] = over(l.overlay[i], argb[i]);
+    return true;
+}
+
 void gdi_present_windows(bool refresh) {
+    if (present_layers(refresh))
+        return;
     auto surfaces = visible_surfaces();
     auto &presented = presented_surface();
     if ((!presented.owner && surfaces.empty()) ||

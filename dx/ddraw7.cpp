@@ -649,8 +649,9 @@ void present(Surface *s, const HostD7Rect &r) {
             s->format,
             gm_ptr(s->mem + uint32_t(r.y0 + y) * s->pitch + uint32_t(r.x0) * s->format.bytes()),
             argb.data() + size_t(y) * w, w);
-    // BGRA8 bytes are ARGB words on a little-endian host.
-    host_display_present_window(argb.data(), w, h);
+    // BGRA8 bytes are ARGB words on a little-endian host. Layer 0 of the
+    // display: the program's GDI windows are composed over it.
+    display_present_frame(argb.data(), w, h);
 }
 // A Blt onto the primary surface of a windowed program is its present. The
 // guest aims at its window's client area in desktop coordinates; the host's
@@ -718,6 +719,13 @@ void surface_destroy(ComObj *o) {
     if (it == surfaces().end())
         return;
     Surface *s = it->second.get();
+    if (s->id == g_display.primary) {
+        // No frame of the program's is on screen any more: the windows are
+        // shown on their own again.
+        g_display.primary = 0;
+        g_display.gdi_showing = false;
+        display_layers_changed();
+    }
     if (s->dc)
         release_surface_dc(s);
     if (s->attached_z) {
@@ -850,6 +858,8 @@ uint32_t create_surface(uint32_t dd, uint32_t desc, Surface **out) {
     if (flags & DDSD_LPSURFACE)
         log_once("ddraw7.lpsurface", "ddraw7: CreateSurface with client memory (DDSD_LPSURFACE) "
                                      "is not supported; the shim allocates its own");
+    if (primary)
+        g_display.primary = root->id;
     *out = root;
     return DD_OK;
 }
@@ -1095,6 +1105,16 @@ void DD7_GetSurfaceFromDC(X86 *c) {
 void DD7_ok(X86 *c) {
     com_ret(c, DD_OK);
 }
+// FlipToGDISurface: the program is about to show GDI windows over its display
+// and stops presenting. The frame it presented last stays on screen as layer 0
+// (runtime/display_seam.h) until its next Flip; its windows are composed over
+// it from now on. The GDI surface itself is never handed out (GetGDISurface).
+void DD7_FlipToGDISurface(X86 *c) {
+    g_display.gdi_showing = true;
+    ++g_display.flips_to_gdi;
+    display_layers_changed();
+    com_ret(c, DD_OK);
+}
 DX_STUB(DD7_CreateClipper, DDERR_UNSUPPORTED)
 DX_STUB(DD7_CreatePalette, DDERR_UNSUPPORTED)
 DX_STUB(DD7_DuplicateSurface, DDERR_UNSUPPORTED)
@@ -1114,7 +1134,7 @@ const ComMethod g_ddraw7[] = {
     {"DuplicateSurface", 3, DD7_DuplicateSurface},
     {"EnumDisplayModes", 5, DD7_EnumDisplayModes},
     {"EnumSurfaces", 5, DD7_EnumSurfaces},
-    {"FlipToGDISurface", 1, DD7_ok},
+    {"FlipToGDISurface", 1, DD7_FlipToGDISurface},
     {"GetCaps", 3, DD7_GetCaps},
     {"GetDisplayMode", 2, DD7_GetDisplayMode},
     {"GetFourCCCodes", 3, DD7_GetFourCCCodes},
@@ -1475,6 +1495,7 @@ void S7_Flip(X86 *c) {
         return;
     }
     const HostD7Rect all{0, 0, int32_t(front->width), int32_t(front->height)};
+    g_display.gdi_showing = false;
     if (surface_on_backend(front) && surface_backend_current(back) &&
         surface_backend_current(front)) {
         HostD7Blit b;
@@ -1953,9 +1974,29 @@ void ddraw7_reset() {
     surfaces().clear();
     mode_table().clear();
     g_display = DisplayState{};
+    display_layers_changed();
 }
 
 } // namespace d7
+
+// The owner of display layer 0 (runtime/display_seam.h): a primary surface in
+// exclusive fullscreen mode. Its cooperative-level window is the window the
+// frame covers; the windows stacked above it are shown over the frame.
+extern "C" bool ddraw7_screen_owner(uint32_t *hwnd) {
+    const d7::DisplayState &d = d7::display_state();
+    if (!d.primary || !(d.coop & d7::DDSCL_FULLSCREEN) || !d7::surface(d.primary))
+        return false;
+    if (hwnd)
+        *hwnd = d.hwnd;
+    return true;
+}
+// For tests: FlipToGDISurface calls, and whether the GDI surface is showing.
+extern "C" uint32_t ddraw7_flips_to_gdi(bool *showing) {
+    const d7::DisplayState &d = d7::display_state();
+    if (showing)
+        *showing = d.gdi_showing;
+    return d.flips_to_gdi;
+}
 
 // The test seam for the offered mode list (RECOMP_D3D7_MODES syntax). A null or
 // empty spec restores the built-in list. Returns 0 on a malformed spec.

@@ -56,6 +56,10 @@ struct CompositorInput {
     bool legacy;
     gpu::Texture legacy_frame;
     gpu::Texture settings_page; // immutable host-rendered 640x480 page, alpha outside panel
+    // The program's GDI windows over its frame (runtime/display_seam.h): a
+    // premultiplied BGRA8 texture at the guest's display mode, drawn over the
+    // whole guest frame and under the settings page. Empty when there is none.
+    gpu::Texture gdi_overlay;
     bool classic = false; // guest-resolution layered scene, aspect-preserving whole-frame mapping
     // Wide view off: the scene was projected at the guest's aspect, so on a
     // wider drawable it is boxed at that aspect with its HUD and input.

@@ -378,6 +378,13 @@ using HostCaptureFactory = HostFrameCapture (*)(HostScreenClass);
 void host_present_set_capture_factory(HostCaptureFactory factory);
 #endif
 
+#ifdef __cplusplus
+// The program's GDI windows over its frames (runtime/display_seam.h's layer
+// 1): premultiplied ARGB, w x h, or null to remove it. Every frame the
+// presenter composes from now on, repeats included, shows it on top.
+void host_present_set_gdi_overlay(const uint32_t *argb, int w, int h);
+bool host_present_has_gdi_overlay();
+#endif
 // Complete a standalone GDI window frame, with no DirectDraw frame dependency.
 extern "C" void host_present_seal_window(void);
 // Seconds to the presenter's next refresh boundary, `intervals` refreshes

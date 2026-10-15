@@ -1030,7 +1030,7 @@ void s_present(uint32_t id, const HostD7Rect *rect, int, int) {
             argb[size_t(y) * size_t(w) + size_t(x)] =
                 r->color[0][size_t(rect->y0 + y) * size_t(r->w) + size_t(rect->x0 + x)] |
                 0xff000000u;
-    host_display_present_window(argb.data(), w, h);
+    display_present_frame(argb.data(), w, h);
 }
 void s_flush() {}
 

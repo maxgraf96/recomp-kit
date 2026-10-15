@@ -343,6 +343,9 @@ void compositor_compose(gpu::Device *device, const CompositorInput *in, gpu::Tex
     };
     if (in->legacy) {
         draw(pass, *in, in->legacy_frame, pixel_rect(whole_rect(*in, false)), full_uv, Opaque);
+        if (in->gdi_overlay)
+            draw(pass, *in, in->gdi_overlay, pixel_rect(whole_rect(*in, false)), full_uv,
+                 Premultiplied);
         if (in->settings_page)
             draw(pass, *in, in->settings_page, settings_page_rect(*in), full_uv, Straight);
         finish();
@@ -392,6 +395,9 @@ void compositor_compose(gpu::Device *device, const CompositorInput *in, gpu::Tex
             }
         }
     }
+    if (in->gdi_overlay)
+        draw(pass, *in, in->gdi_overlay, pixel_rect(whole_rect(*in, false)), full_uv,
+             Premultiplied);
     if (in->settings_page)
         draw(pass, *in, in->settings_page, settings_page_rect(*in), full_uv, Straight);
     finish();

@@ -165,6 +165,13 @@ extern "C" __attribute__((weak)) int mods_display_filtering() {
 }
 
 extern "C" __attribute__((weak)) void host_display_present_window(const uint32_t *, int, int) {}
+extern "C" __attribute__((weak)) int host_display_overlay_supported() {
+    return 0;
+}
+extern "C" __attribute__((weak)) void host_display_present_overlay(const uint32_t *, int, int) {}
+extern "C" __attribute__((weak)) bool ddraw7_screen_owner(uint32_t *) {
+    return false;
+}
 extern "C" __attribute__((weak)) bool ddraw_gdi_primary_active() {
     return false;
 }

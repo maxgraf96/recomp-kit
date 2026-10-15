@@ -212,6 +212,9 @@ struct Service : std::enable_shared_from_this<Service> {
     uint64_t history_epoch = 0;
     std::shared_ptr<Composite> cached;
     std::shared_ptr<Composite> cached_settings;
+    // The GDI overlay (runtime/display_seam.h): the current one, which every
+    // frame is composed with, new or repeated, and the one `cached` has in it.
+    std::shared_ptr<Composite> gdi_overlay, cached_gdi_overlay;
     UiFrame cached_ui{};
 #ifdef POPM_PRESENT_HAS_UI_LAYER
     UiFrame previous_ui{}; // guest thread only, including sealed frames that were dropped
@@ -307,6 +310,7 @@ struct Service : std::enable_shared_from_this<Service> {
                 }
                 cached = f->composed;
                 cached_settings = f->settings_page;
+                cached_gdi_overlay = f->gdi_overlay;
                 last_id = f->frame_id;
                 cached_sealed_ts = f->sealed_ts;
                 cached_ui = f->ui;
@@ -685,7 +689,7 @@ struct Service : std::enable_shared_from_this<Service> {
         }
         std::shared_ptr<Frame> f;
         HostGameRect rect{};
-        bool placed = false;
+        bool placed = false, same_overlay = true;
         {
             std::lock_guard lock(mutex);
             if (stop)
@@ -762,6 +766,11 @@ struct Service : std::enable_shared_from_this<Service> {
             }
             flights.push_back(f);
             seal_pending = !mailbox.empty();
+            // The overlay is the screen's, not the frame's: a repeat shows
+            // the one there is now, and a change recomposes the frame under it.
+            f->gdi_overlay = gdi_overlay;
+            f->input.gdi_overlay = gdi_overlay ? gdi_overlay->texture : gpu::Texture{};
+            same_overlay = f->gdi_overlay == cached_gdi_overlay;
             f->submitted_ts = ts;
             f->acknowledgement_deadline = ts + acknowledgement_grace();
             f->input.drawable_w = rect.w;
@@ -822,8 +831,8 @@ struct Service : std::enable_shared_from_this<Service> {
             const gpu::TextureDesc drawable_desc =
                 drawable ? device->describe(drawable) : gpu::TextureDesc{};
             const gpu::Format out_format = offscreen ? gpu::Format::RGBA8 : drawable_desc.format;
-            bool reuse_composition = f->repeat && cached && cached->w == w && cached->h == h &&
-                                     cached->format == out_format;
+            bool reuse_composition = f->repeat && same_overlay && cached && cached->w == w &&
+                                     cached->h == h && cached->format == out_format;
             std::shared_ptr<Composite> out =
                 reuse_composition ? cached : composite(w, h, out_format);
             gpu::CommandBuffer cb = device->begin();
@@ -1850,6 +1859,38 @@ extern "C" double host_present_refresh_delay(int intervals) {
     }
     const double next = (std::floor(now / period) + intervals) * period;
     return next > now ? next - now : 0.0;
+}
+
+// The GDI overlay (runtime/display_seam.h), on the guest thread under the
+// baton: premultiplied ARGB words, which are BGRA8 bytes on this host. A new
+// texture each time it changes - frames in flight keep the one they were
+// composed with - and none at all once it is removed.
+void host_present_set_gdi_overlay(const uint32_t *argb, int w, int h) {
+    auto s = active.load();
+    if (!s)
+        return;
+    std::shared_ptr<Composite> next;
+    std::lock_guard lock(s->mutex);
+    if (s->stop)
+        return;
+    if (argb && w > 0 && h > 0) {
+        if (s->fake) {
+            next = std::make_shared<Composite>();
+            next->texture = {s->fake_texture_ids++};
+            next->w = w;
+            next->h = h;
+        } else if ((next = s->composite(w, h, gpu::Format::BGRA8)))
+            s->device->upload(next->texture, {0, 0, w, h}, argb, w * 4);
+    }
+    s->gdi_overlay = std::move(next);
+    s->wake.notify_one();
+}
+bool host_present_has_gdi_overlay() {
+    auto s = active.load();
+    if (!s)
+        return false;
+    std::lock_guard lock(s->mutex);
+    return s->gdi_overlay != nullptr;
 }
 
 extern "C" void host_present_seal_window() {

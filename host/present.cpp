@@ -277,6 +277,14 @@ void host_d7_shown(int w, int h) {
     host_page_overlay(nullptr, w, h, 32, w * 4, nullptr);
     host_present_seal_window();
 }
+// The display layers (runtime/display_seam.h): a presenter on a GPU composes
+// the GDI overlay over every frame itself, so the CPU never reads a frame back.
+extern "C" int host_display_overlay_supported() {
+    return host_present_gpu_ready() ? 1 : 0;
+}
+extern "C" void host_display_present_overlay(const uint32_t *argb, int w, int h) {
+    host_present_set_gdi_overlay(argb, w, h);
+}
 extern "C" void host_display_present_window(const uint32_t *argb, int w, int h) {
     if (!argb || w <= 0 || h <= 0)
         return;

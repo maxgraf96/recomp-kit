@@ -975,7 +975,7 @@ void D3D7Renderer::Impl::present(uint32_t id, const HostD7Rect &r, int mode_w, i
             std::vector<uint32_t> px(size_t(w) * size_t(h));
             commit();
             if (dev->readback(region, {0, 0, w, h}, px.data(), w * 4))
-                host_display_present_window(px.data(), w, h);
+                display_present_frame(px.data(), w, h);
         }
         dev->destroy(region);
         return;
@@ -987,7 +987,7 @@ void D3D7Renderer::Impl::present(uint32_t id, const HostD7Rect &r, int mode_w, i
     }
     std::vector<uint32_t> px(size_t(w) * size_t(h));
     if (readback(id, 0, r, px.data(), w * 4))
-        host_display_present_window(px.data(), w, h);
+        display_present_frame(px.data(), w, h);
 }
 
 // ===========================================================================

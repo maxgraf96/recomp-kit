@@ -70,6 +70,9 @@ struct Frame {
     std::shared_ptr<Composite> composed;
     // The settings page texture behind input.settings_page, if any.
     std::shared_ptr<Composite> settings_page;
+    // The GDI overlay behind input.gdi_overlay, if any: the one the frame was
+    // composed with, kept until the frame retires.
+    std::shared_ptr<Composite> gdi_overlay;
 };
 struct Message {
     void *surface = nullptr;

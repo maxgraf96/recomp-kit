@@ -174,6 +174,12 @@ struct DisplayState {
     uint32_t w = 0, h = 0, bpp = 0, refresh = 0;
     bool mode_set = false;
     uint32_t coop = 0, hwnd = 0, focus_hwnd = 0;
+    // The live primary surface (its root's id), 0 when there is none.
+    uint32_t primary = 0;
+    // FlipToGDISurface was called and no Flip has happened since: the last
+    // presented frame stays on screen under the program's windows.
+    bool gdi_showing = false;
+    uint32_t flips_to_gdi = 0;
 };
 DisplayState &display_state();
 // Primary and back buffers report the display mode's format.
