@@ -331,6 +331,50 @@ static void windowed_present(bool) {
     call_method(dd, Release, {});
 }
 
+// A fullscreen program owns the screen: a small Blt onto its primary (a
+// loading screen's spinner, a cursor) changes part of the frame, and the frame
+// shown is the whole primary - never the blitted rectangle on its own.
+static void fullscreen_partial_present(bool) {
+    cpu_reset();
+    const uint32_t dd = create_dd();
+    CHECK_EQ(call_method(dd, DD_SetCooperativeLevel, {0x1000, 0x13}), 0);
+    CHECK_EQ(call_method(dd, DD_SetDisplayMode, {640, 480, 32, 0, 0}), 0);
+    SurfaceSpec ps;
+    ps.caps = d7::DDSCAPS_PRIMARYSURFACE;
+    const uint32_t primary = create_surface(dd, ps);
+    CHECK_EQ(fill(primary, 0x00102030u), 0);
+    const uint32_t icon = offscreen(dd, 32, 32, PF_X8R8G8B8);
+    CHECK_EQ(fill(icon, 0x00ff0000u), 0);
+    g_shown.clear();
+    const uint32_t to = rect(100, 50, 132, 82), from = rect(0, 0, 32, 32);
+    CHECK_EQ(call_method(primary, S_Blt, {to, icon, from, 0, 0}), 0);
+    CHECK_EQ(g_shown.size(), 1);
+    if (!g_shown.empty()) {
+        CHECK_EQ(g_shown[0].w, 640);
+        CHECK_EQ(g_shown[0].h, 480);
+        CHECK_EQ(g_shown[0].argb[0] & 0xffffff, 0x102030);
+        CHECK_EQ(g_shown[0].argb[60 * 640 + 110] & 0xffffff, 0xff0000);
+    }
+    // BltFast and a colour fill onto it are frames of the whole screen too.
+    g_shown.clear();
+    CHECK_EQ(call_method(primary, S_BltFast, {200, 100, icon, from, 0}), 0);
+    CHECK_EQ(fill(primary, 0x0000ff00u, 0, 0, 8, 8), 0);
+    CHECK_EQ(g_shown.size(), 2);
+    for (const auto &f : g_shown) {
+        CHECK_EQ(f.w, 640);
+        CHECK_EQ(f.h, 480);
+    }
+    if (g_shown.size() == 2) {
+        CHECK_EQ(g_shown[1].argb[110 * 640 + 210] & 0xffffff, 0xff0000);
+        CHECK_EQ(g_shown[1].argb[0] & 0xffffff, 0x00ff00);
+    }
+    heap_free(to);
+    heap_free(from);
+    call_method(icon, Release, {});
+    call_method(primary, Release, {});
+    call_method(dd, Release, {});
+}
+
 // A full mip chain: GetAttachedSurface(MIPMAP) walks level by level to 1x1.
 static void test_mip_chain() {
     cpu_reset();
@@ -874,6 +918,8 @@ int main() {
         {"cooperative level and mode", test_cooperative_level_and_mode},
         {"flip chain", [] { both_paths(flip_chain); }},
         {"windowed present", [] { both_paths(windowed_present); }},
+        {"a fullscreen Blt shows the whole primary",
+         [] { both_paths(fullscreen_partial_present); }},
         {"mip chain", test_mip_chain},
         {"depth buffers", test_depth_buffers},
         {"lock", test_lock},

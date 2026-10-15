@@ -664,6 +664,19 @@ void present_windowed(Surface *src, HostD7Rect r) {
     if (r.x0 < r.x1 && r.y0 < r.y1)
         present(src, r);
 }
+// A Blt onto the primary surface is a present, and what it shows depends on
+// who owns the screen. A windowed program's primary is the desktop, and what
+// it blits there is its window: the source rectangle (present_windowed). A
+// fullscreen program owns the screen, the primary is the frame, and a Blt
+// changes part of it - a loading screen's spinner, a cursor - so the frame is
+// the whole primary with that part updated, never the part on its own.
+void present_primary_blt(Surface *primary, Surface *src, const HostD7Rect &shown) {
+    if (g_display.coop & DDSCL_FULLSCREEN) {
+        present(primary, HostD7Rect{0, 0, int32_t(primary->width), int32_t(primary->height)});
+        return;
+    }
+    present_windowed(src, shown);
+}
 } // namespace
 
 // ===========================================================================
@@ -1285,8 +1298,11 @@ void S7_Blt(X86 *c) {
         } else {
             cpu_fill(d, r, value);
         }
+        // A fullscreen program's frame is the whole primary (present_primary_blt).
         if (d->caps & DDSCAPS_PRIMARYSURFACE)
-            present(d, r);
+            present(d, (g_display.coop & DDSCL_FULLSCREEN)
+                           ? HostD7Rect{0, 0, int32_t(d->width), int32_t(d->height)}
+                           : r);
         com_ret(c, DD_OK);
         return;
     }
@@ -1334,7 +1350,7 @@ void S7_Blt(X86 *c) {
     if (dr.x0 >= dr.x1 || dr.y0 >= dr.y1) {
         // Nothing of the window is on the desktop; it is still the frame.
         if (d->caps & DDSCAPS_PRIMARYSURFACE)
-            present_windowed(s, shown);
+            present_primary_blt(d, s, shown);
         com_ret(c, DD_OK);
         return;
     }
@@ -1383,7 +1399,7 @@ void S7_Blt(X86 *c) {
         cpu_blit(d, dr, s, sr, o);
     }
     if (d->caps & DDSCAPS_PRIMARYSURFACE)
-        present_windowed(s, shown);
+        present_primary_blt(d, s, shown);
     com_ret(c, DD_OK);
 }
 // BltFast(dwX, dwY, lpDDSrcSurface, lpSrcRect, dwTrans)
@@ -1431,7 +1447,7 @@ void S7_BltFast(X86 *c) {
         cpu_blit(d, dr, s, sr, o);
     }
     if (d->caps & DDSCAPS_PRIMARYSURFACE)
-        present_windowed(s, sr);
+        present_primary_blt(d, s, sr);
     com_ret(c, DD_OK);
 }
 
