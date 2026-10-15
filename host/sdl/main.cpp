@@ -1554,12 +1554,18 @@ std::mutex g_script_mutex;
 std::vector<uint32_t> g_script_frame, g_script_shown;
 int g_script_w = 0, g_script_h = 0;
 uint64_t g_script_fed_ms = 0;
+// Frames the script got that were no present of the program's: an overlay
+// change, a repeat. They count as frames for its waits, or a click in a lobby
+// that presents nothing would wait for frames forever.
+std::atomic<uint64_t> g_script_extra{0};
 void script_feed() {
     if (g_script_frame.empty())
         return;
     std::vector<uint32_t> out = g_script_frame;
     display_overlay_compose(out.data(), g_script_w, g_script_h);
     iscript::host_pixels(out.data(), g_script_w, g_script_h);
+    if (host_present_has_gdi_overlay())
+        ++g_script_extra;
     std::lock_guard<std::mutex> lock(g_script_mutex);
     g_script_shown = host_present_has_gdi_overlay() ? std::move(out) : std::vector<uint32_t>{};
     g_script_fed_ms = SDL_GetTicks();
@@ -1589,9 +1595,10 @@ void tick_script() {
         if (!g_script_shown.empty() && SDL_GetTicks() - g_script_fed_ms > 100) {
             g_script_fed_ms = SDL_GetTicks();
             iscript::host_pixels(g_script_shown.data(), g_script_w, g_script_h);
+            ++g_script_extra;
         }
     }
-    iscript::host_tick(g_script_sink, host_present_count());
+    iscript::host_tick(g_script_sink, host_present_count() + g_script_extra.load());
     if (was_running && !r->running()) {
         host_d7_set_frame_tap(nullptr);
         if (r->failed())
