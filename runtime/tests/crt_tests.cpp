@@ -1,4 +1,5 @@
-// crt_tests.cpp - the msvcrt.dll / msvcp60.dll HLE against synthetic guest
+// crt_tests.cpp - the msvcrt.dll / msvcp60.dll HLE, and the kernel32 code page
+// conversions the C runtime rests on, against synthetic guest
 // memory: every shim is called through its trampoline with cdecl or thiscall
 // arguments, as translated code would call it. No game files are needed.
 #include "../imports.h"
@@ -11,6 +12,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <string>
 #include <thread>
 #include <vector>
@@ -1701,6 +1703,271 @@ static int run_vectors(const char *in_path, const char *out_path) {
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Code pages: MultiByteToWideChar, WideCharToMultiByte, GetCPInfo and
+// IsValidCodePage against Windows 11's own answers
+// (runtime/tests/data/codepages_windows.tsv, tools/codepages).
+// ---------------------------------------------------------------------------
+static uint32_t k32_quiet(const char *name, const std::vector<uint32_t> &args) {
+    X86 *c = &g_cpu;
+    static std::map<std::string, uint32_t> tramps;
+    uint32_t &tramp = tramps[name];
+    if (!tramp)
+        tramp = imports_resolve("KERNEL32.dll", name);
+    uint32_t before = c->r[R_ESP], esp = before;
+    for (size_t i = args.size(); i-- > 0;) {
+        esp -= 4;
+        wr32(esp, args[i]);
+    }
+    esp -= 4;
+    wr32(esp, 0x00401234);
+    c->r[R_ESP] = esp;
+    imports_dispatch(c, tramp);
+    c->r[R_ESP] = before;
+    return c->r[R_EAX];
+}
+
+static std::vector<uint8_t> unhex(const std::string &s) {
+    std::vector<uint8_t> out;
+    for (size_t i = 0; i + 1 < s.size(); i += 2)
+        out.push_back((uint8_t)strtoul(s.substr(i, 2).c_str(), nullptr, 16));
+    return out;
+}
+
+static std::vector<std::string> split(const std::string &line, char sep) {
+    std::vector<std::string> out;
+    size_t start = 0;
+    for (;;) {
+        size_t at = line.find(sep, start);
+        out.push_back(line.substr(start, at == std::string::npos ? std::string::npos : at - start));
+        if (at == std::string::npos)
+            return out;
+        start = at + 1;
+    }
+}
+
+// One capture_win32 vector, run here as it ran there: the source in a buffer
+// of its own followed by eight 'A' guard bytes, a 64-unit destination filled
+// with 0xcc, lpUsedDefaultChar preset to 7 and the last error to 0xdead.
+// Returns the result line in the capture's format.
+static std::string replay_vector(const std::string &spec) {
+    std::vector<std::string> f = split(spec, ' ');
+    const bool m2w = f[0] == "m2w";
+    const uint32_t cp = (uint32_t)strtoul(f[1].c_str(), nullptr, 10);
+    const uint32_t flags = (uint32_t)strtoul(f[2].c_str(), nullptr, 16);
+    const bool null_src = f[3] == "-";
+    std::vector<uint8_t> src = null_src ? std::vector<uint8_t>() : unhex(f[3]);
+    const int a = atoi(f[4].c_str()), b = atoi(f[5].c_str());
+    uint32_t src_at = g_scratch_top;
+    memcpy(g_mem + src_at, src.data(), src.size());
+    memset(g_mem + src_at + src.size(), 0x41, 8);
+    g_scratch_top += ((uint32_t)src.size() + 8 + 15) & ~15u;
+    uint32_t out_at = gbuf(160);
+    char line[1024];
+    k32_quiet("SetLastError", {0xdead});
+    if (m2w) {
+        int r = (int)k32_quiet("MultiByteToWideChar", {cp, flags, null_src ? 0 : src_at,
+                                                       (uint32_t)a, b ? out_at : 0, (uint32_t)b});
+        uint32_t err = k32_quiet("GetLastError", {});
+        int show = std::min(b > r ? b : r, 64);
+        std::string units;
+        for (int i = 0; b && i < show; ++i) {
+            char u[8];
+            snprintf(u, sizeof u, "%s%04x", i ? " " : "", rd16(out_at + 2 * i));
+            units += u;
+        }
+        snprintf(line, sizeof line, "%d\t%x\t%s", r, err, units.c_str());
+    } else {
+        const bool null_def = f[6] == "-";
+        std::vector<uint8_t> def = null_def ? std::vector<uint8_t>() : unhex(f[6]);
+        def.resize(8, 0);
+        uint32_t def_at = gbuf(16);
+        memcpy(g_mem + def_at, def.data(), def.size());
+        const bool ask_used = f[7] == "1";
+        uint32_t used_at = gbuf(16);
+        wr32(used_at, 7);
+        int r = (int)k32_quiet("WideCharToMultiByte",
+                               {cp, flags, null_src ? 0 : src_at, (uint32_t)a, b ? out_at : 0,
+                                (uint32_t)b, null_def ? 0 : def_at, ask_used ? used_at : 0});
+        uint32_t err = k32_quiet("GetLastError", {});
+        int show = std::min(b > r ? b : r, 64);
+        std::string bytes;
+        for (int i = 0; b && i < show; ++i) {
+            char u[4];
+            snprintf(u, sizeof u, "%02x", rd8(out_at + i));
+            bytes += u;
+        }
+        snprintf(line, sizeof line, "%d\t%x\t%s\t%d", r, err, bytes.c_str(),
+                 ask_used ? (int)rd32(used_at) : -1);
+    }
+    return line;
+}
+
+static void test_codepages() {
+    printf("code pages\n");
+    reset_world();
+    FILE *f = fopen("runtime/tests/data/codepages_windows.tsv", "r");
+    if (!check(f != nullptr, "the Windows capture runtime/tests/data/codepages_windows.tsv opens"))
+        return;
+    // Where the runtime knowingly differs: UTF-7 is not converted.
+    auto divergent = [](const std::string &spec) {
+        return spec.find(" 65000 ") != std::string::npos;
+    };
+    struct TableKey {
+        uint32_t cp, flags;
+        bool operator<(const TableKey &o) const {
+            return cp < o.cp || (cp == o.cp && flags < o.flags);
+        }
+    };
+    // Every UTF-16 unit the capture lists per WideCharToMultiByte table; the
+    // rest are the default character.
+    std::map<TableKey, std::vector<bool>> listed;
+    std::map<TableKey, std::pair<int, int>> table_results; // mismatches, total
+    std::map<TableKey, std::string> first_mismatch;
+    int vectors = 0, vector_failures = 0, skipped = 0;
+    char buf[4096];
+    while (fgets(buf, sizeof buf, f)) {
+        std::string line(buf);
+        while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
+            line.pop_back();
+        std::vector<std::string> t = split(line, '\t');
+        if (t[0] == "vec") {
+            g_scratch_top = SCRATCH;
+            if (divergent(" " + t[1] + " ")) {
+                ++skipped;
+                continue;
+            }
+            std::string want = t[3];
+            for (size_t i = 4; i < t.size(); ++i)
+                want += "\t" + t[i];
+            std::string got = replay_vector(t[1]);
+            ++vectors;
+            if (got != want) {
+                ++vector_failures;
+                check(false, "%s: Windows %s, runtime %s", t[1].c_str(), want.c_str(), got.c_str());
+            }
+        } else if (t[0] == "cpinfo") {
+            uint32_t cp = (uint32_t)strtoul(t[1].c_str(), nullptr, 10);
+            g_scratch_top = SCRATCH;
+            uint32_t info = gbuf(32);
+            k32_quiet("SetLastError", {0xdead});
+            uint32_t r = k32_quiet("GetCPInfo", {cp, info});
+            uint32_t err = k32_quiet("GetLastError", {});
+            char got[128];
+            if (r) {
+                std::string lead;
+                for (int k = 0; k < 12; ++k) {
+                    char h[4];
+                    snprintf(h, sizeof h, "%02x", rd8(info + 6 + k));
+                    lead += h;
+                }
+                snprintf(got, sizeof got, "%u\t%x\t%u\t%02x%02x\t%s", r, err, rd32(info),
+                         rd8(info + 4), rd8(info + 5), lead.c_str());
+            } else {
+                snprintf(got, sizeof got, "0\t%x\t0\t0000\t", err);
+            }
+            std::string want = t[2] + "\t" + t[3] + "\t" + t[4] + "\t" + t[5] + "\t" + t[6];
+            check(want == got, "GetCPInfo(%u): Windows %s, runtime %s", cp, want.c_str(), got);
+        } else if (t[0] == "valid") {
+            uint32_t cp = (uint32_t)strtoul(t[1].c_str(), nullptr, 10);
+            if (cp == 65000) {
+                ++skipped;
+                continue;
+            }
+            uint32_t r = k32_quiet("IsValidCodePage", {cp});
+            check(r == (uint32_t)atoi(t[2].c_str()), "IsValidCodePage(%u) is %s", cp, t[2].c_str());
+        } else if (t[0] == "acp") {
+            check(k32_quiet("GetACP", {}) == (uint32_t)atoi(t[1].c_str()) &&
+                      k32_quiet("GetOEMCP", {}) == (uint32_t)atoi(t[3].c_str()),
+                  "GetACP %s, GetOEMCP %s", t[1].c_str(), t[3].c_str());
+        } else if (t[0] == "mb" || t[0] == "wc") {
+            TableKey key{(uint32_t)strtoul(t[1].c_str(), nullptr, 10),
+                         (uint32_t)strtoul(t[2].c_str(), nullptr, 16)};
+            const uint32_t value = (uint32_t)strtoul(t[3].c_str(), nullptr, 16);
+            g_scratch_top = SCRATCH;
+            uint32_t in = gbuf(16), out = gbuf(32), used = gbuf(16);
+            char got[128];
+            std::string want;
+            if (t[0] == "mb") {
+                key.flags |= 0x10000; // keep the two directions apart
+                wr8(in, (uint8_t)value);
+                k32_quiet("SetLastError", {0xdead});
+                int r = (int)k32_quiet("MultiByteToWideChar",
+                                       {key.cp, key.flags & 0xffff, in, 1, out, 8});
+                uint32_t err = k32_quiet("GetLastError", {});
+                std::string units;
+                for (int i = 0; i < r; ++i) {
+                    char u[8];
+                    snprintf(u, sizeof u, "%s%04x", i ? " " : "", rd16(out + 2 * i));
+                    units += u;
+                }
+                snprintf(got, sizeof got, "%d\t%x\t%s", r, err, units.c_str());
+                want = t[4] + "\t" + t[5] + "\t" + (t.size() > 6 ? t[6] : "");
+            } else {
+                std::vector<bool> &seen = listed[key];
+                seen.resize(0x10000);
+                seen[value] = true;
+                wr16(in, (uint16_t)value);
+                wr32(used, 7);
+                k32_quiet("SetLastError", {0xdead});
+                int r = (int)k32_quiet("WideCharToMultiByte",
+                                       {key.cp, key.flags, in, 1, out, 8, 0, used});
+                uint32_t err = k32_quiet("GetLastError", {});
+                std::string bytes;
+                for (int i = 0; i < r; ++i) {
+                    char h[4];
+                    snprintf(h, sizeof h, "%02x", rd8(out + i));
+                    bytes += h;
+                }
+                snprintf(got, sizeof got, "%d\t%x\t%s\t%d", r, err, bytes.c_str(), rd32(used));
+                want = t[4] + "\t" + t[5] + "\t" + t[6] + "\t" + t[7];
+            }
+            auto &tally = table_results[key];
+            ++tally.second;
+            if (want != got) {
+                if (!tally.first++)
+                    first_mismatch[key] = t[3] + ": Windows " + want + ", runtime " + got;
+            }
+        }
+    }
+    fclose(f);
+    // The units each WideCharToMultiByte table leaves out map to '?', used.
+    for (auto &entry : listed) {
+        auto &tally = table_results[entry.first];
+        g_scratch_top = SCRATCH;
+        uint32_t in = gbuf(16), out = gbuf(32), used = gbuf(16);
+        for (uint32_t u = 0; u < 0x10000; ++u) {
+            if (entry.second[u])
+                continue;
+            wr16(in, (uint16_t)u);
+            wr32(used, 7);
+            int r = (int)k32_quiet("WideCharToMultiByte",
+                                   {entry.first.cp, entry.first.flags, in, 1, out, 8, 0, used});
+            ++tally.second;
+            if (r != 1 || rd8(out) != '?' || rd32(used) != 1) {
+                if (!tally.first++) {
+                    char m[128];
+                    snprintf(m, sizeof m, "%04x: Windows 1 '?' used, runtime %d %02x used %u", u, r,
+                             rd8(out), rd32(used));
+                    first_mismatch[entry.first] = m;
+                }
+            }
+        }
+    }
+    for (auto &entry : table_results) {
+        const bool mb = entry.first.flags & 0x10000;
+        check(entry.second.first == 0, "%s table, code page %u, flags 0x%x: %d of %d differ%s%s",
+              mb ? "MultiByteToWideChar" : "WideCharToMultiByte", entry.first.cp,
+              entry.first.flags & 0xffff, entry.second.first, entry.second.second,
+              entry.second.first ? "; first " : "",
+              entry.second.first ? first_mismatch[entry.first].c_str() : "");
+    }
+    check(vectors > 200 && vector_failures == 0,
+          "%d of %d Windows vectors agree (%d UTF-7 skipped)", vectors - vector_failures, vectors,
+          skipped);
+    check(table_results.size() == 36, "%zu code page tables replayed", table_results.size());
+}
+
 int main(int argc, char **argv) {
     if (argc == 4 && !strcmp(argv[1], "--vectors"))
         return run_vectors(argv[2], argv[3]);
@@ -1717,6 +1984,7 @@ int main(int argc, char **argv) {
     test_time();
     test_cxx();
     test_registration();
+    test_codepages();
     printf("%d checks, %d failures\n", g_checks, g_failures);
     mem_shutdown();
     return g_failures ? 1 : 0;

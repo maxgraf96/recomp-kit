@@ -13,6 +13,22 @@
   `--no-default-config` and keeps `SDKROOT`, `CPATH` and the like out of the
   compiler's environment, so no SDK is looked up and a bundle is the same
   whoever builds it.
+
+- Convert text between code pages as Windows does (`runtime/codepages.cpp`).
+  `MultiByteToWideChar` and `WideCharToMultiByte` honour the code page
+  instead of zero-extending bytes: code page 1252 (`CP_ACP`) maps
+  0x80..0x9f to the euro sign, curly quotes, dashes and the rest, and back;
+  characters it lacks take Windows' best-fit mapping (Ā to A, ∞ to 8) or the
+  default character, with `lpDefaultChar`, `lpUsedDefaultChar`,
+  `WC_NO_BEST_FIT_CHARS`, `WC_COMPOSITECHECK` and its companions,
+  `MB_COMPOSITE`, `MB_USEGLYPHCHARS` and `MB_ERR_INVALID_CHARS`. Code pages
+  437 (`CP_OEMCP`), 850, 10000 (`CP_MACCP`), 20127 and 28591 have their own
+  tables, UTF-8 decodes with Windows' replacement characters and `CP_SYMBOL`
+  maps to U+F0xx. A short buffer is filled before the call fails with
+  `ERROR_INSUFFICIENT_BUFFER`, as there; `GetCPInfo` and `IsValidCodePage`
+  answer per code page. The tables and 226 edge cases were measured on
+  Windows 11 (`tools/codepages`), and `crt_tests` replays all of them.
+
 - Play DirectMusic for a game that opts in (`[runtime] dmusic` in game.toml):
   the DirectX 6.1/7 loader, performance, port, segment, segment state, style
   and composer interfaces (`dx/dmusic.cpp`) over GothicKit/dmusic, vendored

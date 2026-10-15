@@ -17,6 +17,7 @@
 #include "win32.h"
 #include "native_seam.h"
 #include "loader.h"
+#include "codepages.h"
 
 #include <errno.h>
 #include "../platform/os.h"
@@ -3876,58 +3877,93 @@ void k_GetOEMCP(X86 *c) {
     set_eax(c, 437);
 }
 
+// GetCPInfo: MaxCharSize, the default character '?' and no lead bytes for
+// every single-byte code page; 4 for UTF-8, 5 for UTF-7. CP_SYMBOL, UTF-16
+// and unknown code pages fail with ERROR_INVALID_PARAMETER, as on Windows.
 void k_GetCPInfo(X86 *c) {
+    uint32_t size = codepages::max_char_size(arg(c, 0));
     uint32_t p = arg(c, 1);
-    if (p) {
-        memset(g_mem + p, 0, 20);
-        wr32(p, 1);      // MaxCharSize
-        wr8(p + 4, '?'); // DefaultChar
+    if (!size || !p || !gm_valid(p, 20)) {
+        set_last_error(87);
+        set_eax(c, 0);
+        return;
     }
+    memset(g_mem + p, 0, 20);
+    wr32(p, size);   // MaxCharSize
+    wr8(p + 4, '?'); // DefaultChar
     set_eax(c, 1);
 }
 
+// The length of a guest string argument: `len` itself, or for -1 the units up
+// to and including the terminator. A length below -1 is, as on Windows, an
+// enormous unsigned one: what is readable from `a`.
+static size_t string_extent(uint32_t a, int32_t len, uint32_t unit) {
+    const size_t readable = (mem_readable_end(a) - a) / unit;
+    if (len >= 0)
+        return std::min<size_t>(size_t(len), readable);
+    if (len < -1)
+        return readable;
+    for (size_t i = 0; i < readable; ++i)
+        if ((unit == 1 ? rd8(a + uint32_t(i)) : rd16(a + 2 * uint32_t(i))) == 0)
+            return i + 1;
+    return readable;
+}
+
+// MultiByteToWideChar and WideCharToMultiByte: codepages.cpp has the rules;
+// these check the arguments as Windows does, copy the guest strings and
+// write back what the conversion put in the buffer, also before failing
+// with ERROR_INSUFFICIENT_BUFFER.
 void k_MultiByteToWideChar(X86 *c) {
-    uint32_t src = arg(c, 2);
-    int32_t srclen = (int32_t)arg(c, 3);
-    uint32_t dst = arg(c, 4);
-    int32_t dstlen = (int32_t)arg(c, 5);
-    std::string s =
-        srclen < 0 ? gm_str(src) : std::string((const char *)(g_mem + src), (size_t)srclen);
-    uint32_t need = (uint32_t)s.size() + (srclen < 0 ? 1 : 0);
-    if (dstlen == 0 || !dst) {
-        set_eax(c, need);
+    const uint32_t cp = arg(c, 0), flags = arg(c, 1), src = arg(c, 2), dst = arg(c, 4);
+    const int32_t srclen = (int32_t)arg(c, 3), dstlen = (int32_t)arg(c, 5);
+    if (!src || srclen == 0 || dstlen < 0 || (dstlen > 0 && (!dst || dst == src))) {
+        set_last_error(87);
+        set_eax(c, 0);
         return;
     }
-    uint32_t n = need < (uint32_t)dstlen ? need : (uint32_t)dstlen;
-    for (uint32_t i = 0; i < n; ++i)
-        wr16(dst + 2 * i, (uint16_t)(uint8_t)(i < s.size() ? s[i] : 0));
+    const size_t n = string_extent(src, srclen, 1);
+    size_t cap =
+        dstlen > 0 ? std::min<size_t>(size_t(dstlen), (mem_readable_end(dst) - dst) / 2) : 0;
+    std::vector<uint16_t> out(cap);
+    codepages::Conversion r =
+        codepages::mb_to_wide(cp, flags, g_mem + src, n, cap ? out.data() : nullptr, cap);
+    for (size_t i = 0; i < r.written && i < cap; ++i)
+        wr16(dst + 2 * uint32_t(i), out[i]);
+    if (!r.result && r.error)
+        set_last_error(r.error);
     if (recomp_env("TRACE_FILES") && srclen > 256)
-        LOGW("file: MultiByteToWideChar cp=%u srclen=%d dstlen=%d -> %u", arg(c, 0), srclen, dstlen,
-             n);
-    set_eax(c, n);
+        LOGW("file: MultiByteToWideChar cp=%u srclen=%d dstlen=%d -> %d", cp, srclen, dstlen,
+             r.result);
+    set_eax(c, uint32_t(r.result));
 }
 
 void k_WideCharToMultiByte(X86 *c) {
-    uint32_t src = arg(c, 2);
-    int32_t srclen = (int32_t)arg(c, 3);
-    uint32_t dst = arg(c, 4);
-    int32_t dstlen = (int32_t)arg(c, 5);
-    std::string s;
-    for (int32_t i = 0; srclen < 0 || i < srclen; ++i) {
-        uint16_t w = rd16(src + 2 * i);
-        if (srclen < 0 && !w)
-            break;
-        s.push_back((char)(w < 256 ? w : '?'));
-    }
-    uint32_t need = (uint32_t)s.size() + (srclen < 0 ? 1 : 0);
-    if (dstlen == 0 || !dst) {
-        set_eax(c, need);
+    const uint32_t cp = arg(c, 0), flags = arg(c, 1), src = arg(c, 2), dst = arg(c, 4);
+    const int32_t srclen = (int32_t)arg(c, 3), dstlen = (int32_t)arg(c, 5);
+    const uint32_t default_char = arg(c, 6), used = arg(c, 7);
+    if (!src || srclen == 0 || dstlen < 0 || (dstlen > 0 && (!dst || dst == src))) {
+        set_last_error(87);
+        set_eax(c, 0);
         return;
     }
-    uint32_t n = need < (uint32_t)dstlen ? need : (uint32_t)dstlen;
-    for (uint32_t i = 0; i < n; ++i)
-        wr8(dst + i, (uint8_t)(i < s.size() ? s[i] : 0));
-    set_eax(c, n);
+    size_t cap = dstlen > 0 ? std::min<size_t>(size_t(dstlen), mem_readable_end(dst) - dst) : 0;
+    size_t n = string_extent(src, srclen, 2);
+    if (srclen < -1) // every unit gives at least one byte: enough to fill the buffer
+        n = std::min(n, cap ? 2 * cap + 2 : size_t(0x10000));
+    std::vector<uint16_t> in(n);
+    for (size_t i = 0; i < n; ++i)
+        in[i] = rd16(src + 2 * uint32_t(i));
+    std::vector<uint8_t> out(cap);
+    const uint8_t *def = default_char && gm_valid(default_char, 1) ? g_mem + default_char : nullptr;
+    codepages::Conversion r = codepages::wide_to_mb(
+        cp, flags, in.data(), n, cap ? out.data() : nullptr, cap, def, used != 0);
+    for (size_t i = 0; i < r.written && i < cap; ++i)
+        wr8(dst + uint32_t(i), out[i]);
+    if (r.used_default_set && used && gm_valid(used, 4))
+        wr32(used, r.used_default ? 1 : 0);
+    if (!r.result && r.error)
+        set_last_error(r.error);
+    set_eax(c, uint32_t(r.result));
 }
 
 // CT_CTYPE1 flags for the ASCII range, enough for the CRT's isctype tables.
@@ -4122,12 +4158,10 @@ void k_GetEnvironmentVariableA(X86 *c) {
 void k_GetUserDefaultLCID(X86 *c) {
     set_eax(c, 0x0409);
 }
+// The code pages converted by their own tables, and UTF-8. Windows says no
+// to CP_ACP and the other aliases, and to UTF-16 (1200).
 void k_IsValidCodePage(X86 *c) {
-    uint32_t cp = arg(c, 0);
-    set_eax(
-        c, (cp == 0 || cp == 1 || cp == 437 || cp == 850 || cp == 1200 || cp == 1252 || cp == 65001)
-               ? 1
-               : 0);
+    set_eax(c, codepages::is_valid(arg(c, 0)) ? 1 : 0);
 }
 void k_IsValidLocale(X86 *c) {
     uint32_t lcid = arg(c, 0);

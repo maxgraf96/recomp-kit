@@ -3,7 +3,7 @@
 set(POP_RUNTIME_SOURCES
   memory.cpp loader.cpp imports.cpp import_argc.cpp cpu.cpp thunks.cpp seh.cpp profile.cpp kernel32.cpp kernel32_wide.cpp
   resources.cpp oleaut32.cpp mods_seam.cpp user32.cpp user32_wide.cpp user32_vcl.cpp user32_static.cpp user32_activation.cpp user32_ansi.cpp
-  misc.cpp misc_dlls.cpp winsock.cpp iphlpapi.cpp net_adapters.cpp comctl32.cpp gdi32.cpp gdi32_draw.cpp gdi32_text.cpp gdi32_truetype.cpp gdi32_fontdb.cpp msimg32.cpp
+  misc.cpp misc_dlls.cpp winsock.cpp iphlpapi.cpp net_adapters.cpp comctl32.cpp codepages.cpp gdi32.cpp gdi32_draw.cpp gdi32_text.cpp gdi32_truetype.cpp gdi32_fontdb.cpp msimg32.cpp
   media_foundation.cpp layout.cpp interp.cpp discovery.cpp dispatch.cpp
   msvcrt.cpp msvcrt_heap.cpp msvcrt_locale.cpp msvcrt_string.cpp msvcrt_format.cpp msvcrt_stdio.cpp
   msvcrt_math.cpp msvcrt_float.cpp msvcrt_time.cpp msvcp60.cpp msvc_eh.cpp
@@ -149,6 +149,12 @@ pop_optimize(crt_tests 1)
 pop_test_binary(crt_tests)
 add_test(NAME crt_tests COMMAND crt_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(crt_tests PROPERTIES LABELS nogame TIMEOUT 120)
+# codepage_tables.h is gen_tables.py's output for the committed Windows
+# capture (tools/codepages), which crt_tests also replays in full.
+add_test(NAME codepage_tables_current
+  COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/tools/codepages/gen_tables.py --check
+  WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(codepage_tables_current PROPERTIES LABELS nogame)
 
 endif()
 

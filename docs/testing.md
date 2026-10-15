@@ -40,6 +40,13 @@ DirectInput's foreground and exclusive semantics, its 256-record buffer,
 granularity and object info. `gdi_tests` pins GDI's text-measuring rules on a
 generated font that carries VDMX and hdmx tables (`make_gdi_font.py`), and the
 installed Windows faces where the machine has them.
+`crt_tests` also replays a Windows 11 capture of the code page conversions
+(`runtime/tests/data/codepages_windows.tsv`, written by
+`tools/codepages/capture_win32.c` from `tools/codepages/vectors.txt`): every
+byte and UTF-16 unit of the six single-byte tables and each edge case, return
+value, last error and buffer contents included. `codepage_tables_current`
+checks that `runtime/codepage_tables.h` is `tools/codepages/gen_tables.py`'s
+output for that capture.
 `gdi_metrics_reference` compares the runtime's text metrics with a Windows
 96-dpi screen DC's once those are committed as
 `runtime/tests/data/gdi_metrics_windows.jsonl`: capture them with
