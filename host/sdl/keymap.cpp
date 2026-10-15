@@ -124,6 +124,13 @@ uint16_t host_keycode_from_scancode(int sdl_scancode) {
     return 0xffff;
 }
 
+int host_scancode_from_keycode(uint16_t keycode) {
+    for (const Row &row : kRows)
+        if (row.key == keycode)
+            return int(row.scancode);
+    return 0;
+}
+
 uint32_t host_modifier_flags_from_sdl(uint32_t mod) {
     // The device-dependent side bits input.cpp's kModifierSides diff, and the
     // generic per-modifier bits the NSEvent layout carried beside them.

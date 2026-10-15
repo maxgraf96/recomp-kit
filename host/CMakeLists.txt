@@ -255,6 +255,7 @@ if(TARGET recomp_gen)
             ${HOST}/page_overlay.cpp
             ${POP_PRESENT_SOURCES}
             ${HOST}/input.cpp ${HOST}/input_gate.cpp ${HOST}/input_touch.cpp ${POP_AUDIO_SOURCES}
+            ${HOST}/input_script.cpp ${HOST}/input_script_host.cpp
     LIBS ${POP_CORE_LIBS}
     FRAMEWORKS ${FW_METAL})
   pop_link_sdl(recomp_app)

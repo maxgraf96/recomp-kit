@@ -10,6 +10,9 @@
 // The host key code for an SDL scancode, or 0xffff for a key the host has no
 // row for. (0 is a real key: the A key.)
 uint16_t host_keycode_from_scancode(int sdl_scancode);
+// The other way: the SDL scancode of a host key code, or 0 (SDL_SCANCODE_UNKNOWN)
+// when no row has it. Scripted input names keys and sends their scancodes.
+int host_scancode_from_keycode(uint16_t keycode);
 // The host's modifier flags (the layout input.h's host_modifier_* read: left
 // and right sides as separate bits, plus caps lock) from an SDL_Keymod.
 uint32_t host_modifier_flags_from_sdl(uint32_t sdl_keymod);

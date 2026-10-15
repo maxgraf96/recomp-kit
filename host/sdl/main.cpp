@@ -31,7 +31,9 @@
 #include "../gpu/gpu_factory.h"
 #include "../input.h"
 #include "../input_gate.h"
+#include "../input_script_host.h"
 #include "../input_touch.h"
+#include "../d3d7_render.h"
 #include "../controls/controls_host.h"
 #include "../../mods/controls_settings.h"
 #include "../controls/gamepad_sdl.h"
@@ -1407,8 +1409,113 @@ controls::Screen controls_screen() {
 }
 
 // The housekeeping every turn does once the events are in.
+// ---------------------------------------------------------------------------
+// Scripted input (RECOMP_INPUT_SCRIPT; host/input_script.h). A script's
+// actions become SDL events pushed onto the queue this file drains, so they
+// take every step a real device's events take: decoding, the queue, the
+// relative or window-position mouse path, capture and the gate. Its frames
+// come from the Direct3D 7 renderer's tap.
+// ---------------------------------------------------------------------------
+class SdlScriptSink : public iscript::Sink {
+  public:
+    void motion(int32_t dx, int32_t dy) override {
+        float x = 0, y = 0;
+        SDL_GetMouseState(&x, &y);
+        push_motion(x + float(dx), y + float(dy), float(dx), float(dy));
+    }
+    void place(int32_t gx, int32_t gy) override {
+        // Client pixel -> window point, through the game rectangle.
+        const PointRect r = game_rect_points();
+        const double mw = g_mode_w > 0 ? g_mode_w : 640, mh = g_mode_h > 0 ? g_mode_h : 480;
+        const float x = float(r.x + (gx + 0.5) * r.w / mw), y = float(r.y + (gy + 0.5) * r.h / mh);
+        float cx = 0, cy = 0;
+        SDL_GetMouseState(&cx, &cy);
+        push_motion(x, y, x - cx, y - cy);
+        x_ = x;
+        y_ = y;
+        placed_ = true;
+    }
+    void button(int button, bool down) override {
+        SDL_Event e{};
+        e.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+        e.button.windowID = g_window ? SDL_GetWindowID(g_window) : 0;
+        e.button.which = 0;
+        e.button.button = uint8_t(button == 1   ? SDL_BUTTON_RIGHT
+                                  : button == 2 ? SDL_BUTTON_MIDDLE
+                                                : SDL_BUTTON_LEFT);
+        e.button.down = down;
+        e.button.clicks = 1;
+        // Where a person's click would be: the placed point, or the middle of
+        // the window (inside it, which is all the relative path asks).
+        int bw = 0, bh = 0;
+        if (g_window)
+            SDL_GetWindowSize(g_window, &bw, &bh);
+        e.button.x = placed_ ? x_ : float(bw) / 2;
+        e.button.y = placed_ ? y_ : float(bh) / 2;
+        SDL_PushEvent(&e);
+    }
+    void key(uint8_t dik, bool down) override {
+        const HostKeyMapping m = host_key_mapping_for_dik(dik);
+        const int sc = m.dik ? host_scancode_from_keycode(m.mac) : 0;
+        if (!sc) {
+            fprintf(stderr, "[script] no SDL key has DirectInput code %02x\n", dik);
+            return;
+        }
+        SDL_Event e{};
+        e.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+        e.key.windowID = g_window ? SDL_GetWindowID(g_window) : 0;
+        e.key.scancode = SDL_Scancode(sc);
+        e.key.key = SDL_GetKeyFromScancode(SDL_Scancode(sc), SDL_KMOD_NONE, false);
+        e.key.mod = SDL_KMOD_NONE;
+        e.key.down = down;
+        SDL_PushEvent(&e);
+    }
+    void close() override {
+        SDL_Event e{};
+        e.type = SDL_EVENT_QUIT;
+        SDL_PushEvent(&e);
+    }
+
+  private:
+    void push_motion(float x, float y, float dx, float dy) {
+        SDL_Event e{};
+        e.type = SDL_EVENT_MOUSE_MOTION;
+        e.motion.windowID = g_window ? SDL_GetWindowID(g_window) : 0;
+        e.motion.which = 0;
+        e.motion.x = x;
+        e.motion.y = y;
+        e.motion.xrel = dx;
+        e.motion.yrel = dy;
+        SDL_PushEvent(&e);
+    }
+    float x_ = 0, y_ = 0;
+    bool placed_ = false;
+};
+SdlScriptSink g_script_sink;
+bool g_script = false;
+
+void script_frame(const uint32_t *argb, int w, int h) {
+    iscript::host_pixels(argb, w, h);
+}
+
+// After the events of a pass: the script's next steps, whose events the next
+// pass delivers.
+void tick_script() {
+    if (!g_script)
+        return;
+    iscript::Runner *r = iscript::host_runner();
+    const bool was_running = r->running();
+    iscript::host_tick(g_script_sink, host_present_count());
+    if (was_running && !r->running()) {
+        host_d7_set_frame_tap(nullptr);
+        if (r->failed())
+            g_script_sink.close();
+    }
+}
+
 void after_events() {
     update_relative_mouse();
+    tick_script();
     {
         // Time-based gestures (a long press) fire from the clock, not an event,
         // and deferred clicks go out once the game's cursor has caught up and
@@ -1614,6 +1721,8 @@ void on_mode_change(int w, int h, int bpp) {
 void report(FILE *out, bool abnormal) {
     fprintf(out, "\n== windowed run ==\n");
     fprintf(out, "stopped:            %s\n", boot_stop_reason());
+    if (iscript::Runner *r = iscript::host_runner())
+        r->report(out);
     fprintf(out, "elapsed:            %.1fs\n", boot_elapsed());
     fprintf(out, "presented frames:   %u\n", host_present_count());
     // Per display mode, because a rate averaged over a whole run mixes the
@@ -2064,6 +2173,10 @@ int main(int argc, char **argv) {
     }
     printf(RECOMP_APP_NAME ": %s, entry %08x\n", loader_exe_path().c_str(), loader_entry_point());
     fflush(stdout);
+    // RECOMP_INPUT_SCRIPT: a script drives the game (host/input_script.h).
+    g_script = iscript::host_start_from_env();
+    if (g_script)
+        host_d7_set_frame_tap(script_frame);
 
     // The music's synth, built here and not later. midiOutOpen arrives on a
     // guest thread holding the cooperative scheduler baton, which stops
@@ -2098,7 +2211,8 @@ int main(int argc, char **argv) {
     // handlers after it: there its stream is destroyed through a freed mutex.
     host_audio_shutdown();
     SDL_Quit();
-    platform_ui_process_exit(0);
+    // A scripted run that did not get to the end of its script says so.
+    platform_ui_process_exit(g_script && !iscript::host_runner()->finished() ? 7 : 0);
     return 0;
 }
 

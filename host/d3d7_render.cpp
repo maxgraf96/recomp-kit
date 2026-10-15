@@ -891,6 +891,7 @@ namespace {
 std::mutex g_dump_lock;
 std::string g_dump_next;
 uint64_t g_present_serial = 0;
+std::atomic<void (*)(const uint32_t *, int, int)> g_frame_tap{nullptr};
 
 bool write_ppm(const std::string &path, const uint32_t *bgra, int w, int h) {
     FILE *f = fopen(path.c_str(), "wb");
@@ -933,6 +934,10 @@ std::string dump_path(uint64_t serial) {
 }
 } // namespace
 
+extern "C" void host_d7_set_frame_tap(void (*tap)(const uint32_t *, int, int)) {
+    g_frame_tap.store(tap);
+}
+
 void D3D7Renderer::Impl::present(uint32_t id, const HostD7Rect &r, int mode_w, int mode_h) {
     Res *t = find(id);
     if (!t || t->depth)
@@ -943,10 +948,15 @@ void D3D7Renderer::Impl::present(uint32_t id, const HostD7Rect &r, int mode_w, i
     ++stats.presents;
     const uint64_t serial = ++g_present_serial;
     const std::string dump = dump_path(serial);
-    if (!dump.empty()) {
+    const auto tap = g_frame_tap.load();
+    if (!dump.empty() || tap) {
         std::vector<uint32_t> px(size_t(w) * size_t(h));
-        if (readback(id, 0, r, px.data(), w * 4) && !write_ppm(dump, px.data(), w, h))
-            fprintf(stderr, "[d3d7] could not write %s\n", dump.c_str());
+        if (readback(id, 0, r, px.data(), w * 4)) {
+            if (!dump.empty() && !write_ppm(dump, px.data(), w, h))
+                fprintf(stderr, "[d3d7] could not write %s\n", dump.c_str());
+            if (tap)
+                tap(px.data(), w, h);
+        }
     }
     end_pass();
     gpu::Texture shown = t->texture;
