@@ -4615,6 +4615,47 @@ void copy_file_named(X86 *c, const std::string &source, const std::string &dest)
     set_eax(c, 1);
 }
 
+// NTFS keeps a directory's names in a B-tree ordered by their upper-case
+// form, and FindFirstFile/FindNextFile walk it in that order: a program that
+// enumerates "*.dll" meets the files alphabetically, case-insensitively, on
+// every Windows disk it was tested on. A host directory lists in its own order
+// (APFS: the hash order of its names), so the matches are put in NTFS's.
+// ASCII letters fold; other bytes compare as they are (UTF-8 keeps the code
+// points' order), where NTFS would also fold accented letters.
+namespace {
+bool ntfs_name_before(const std::string &a, const std::string &b) {
+    const size_t n = std::min(a.size(), b.size());
+    for (size_t i = 0; i < n; ++i) {
+        unsigned char x = (unsigned char)a[i], y = (unsigned char)b[i];
+        if (x >= 'a' && x <= 'z')
+            x = (unsigned char)(x - 'a' + 'A');
+        if (y >= 'a' && y <= 'z')
+            y = (unsigned char)(y - 'a' + 'A');
+        if (x != y)
+            return x < y;
+    }
+    return a.size() < b.size();
+}
+
+void sort_find_matches(HObj &o) {
+    std::vector<size_t> order(o.matches.size());
+    for (size_t i = 0; i < order.size(); ++i)
+        order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](size_t x, size_t y) {
+        return ntfs_name_before(o.matches[x], o.matches[y]);
+    });
+    std::vector<std::string> names, paths;
+    names.reserve(order.size());
+    paths.reserve(order.size());
+    for (size_t i : order) {
+        names.push_back(std::move(o.matches[i]));
+        paths.push_back(std::move(o.match_paths[i]));
+    }
+    o.matches = std::move(names);
+    o.match_paths = std::move(paths);
+}
+} // namespace
+
 void find_first_named(X86 *c, const std::string &pattern, bool wide) {
     uint32_t data = arg(c, 1);
 
@@ -4671,6 +4712,7 @@ void find_first_named(X86 *c, const std::string &pattern, bool wide) {
         set_eax(c, INVALID_HANDLE_VALUE_);
         return;
     }
+    sort_find_matches(o);
     fill_find_data(data, o.match_paths[0], o.matches[0], wide);
     o.find_pos = 1;
     set_eax(c, h);

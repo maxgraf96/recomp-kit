@@ -4064,8 +4064,14 @@ static int test_resolver(const char *relative, int op, char *out, size_t out_len
 static void test_lister(const char *dir, void (*emit)(void *, const char *, const char *),
                         void *ctx) {
     std::string host = g_seam_root + "/read/" + dir;
-    emit(ctx, "one.txt", (host + "/one.txt").c_str());
+    if (std::string(dir) == "order") {
+        // A host's own order (APFS lists in hash order), not Windows'.
+        for (const char *n : {"Zeta.txt", "beta2.txt", "_under.txt", "alpha.txt", "Beta.txt"})
+            emit(ctx, n, (host + "/" + n).c_str());
+        return;
+    }
     emit(ctx, "two.txt", (host + "/two.txt").c_str());
+    emit(ctx, "one.txt", (host + "/one.txt").c_str());
 }
 
 // Runs `fn` on a real guest thread and waits for it to end. The scheduler only
@@ -4255,6 +4261,22 @@ static void test_mod_seams(X86 *c) {
               gm_str(data + 44) == std::string("two.txt"),
           "the second match follows");
     call_import(c, "KERNEL32.dll", "FindClose", {h});
+    // NTFS order: by the names' upper-case form, whatever order the host
+    // lists them in ('_' sorts after the letters there, before them in
+    // lower case).
+    {
+        uint32_t all = put_str("order\\*.txt");
+        std::string seen;
+        uint32_t hf = call_import(c, "KERNEL32.dll", "FindFirstFileA", {all, data});
+        if (hf != 0xffffffffu) {
+            do
+                seen += gm_str(data + 44) + " ";
+            while (call_import(c, "KERNEL32.dll", "FindNextFileA", {hf, data}));
+            call_import(c, "KERNEL32.dll", "FindClose", {hf});
+        }
+        check(seen == "alpha.txt Beta.txt beta2.txt Zeta.txt _under.txt ",
+              "FindFirstFile/FindNextFile enumerate in NTFS's order (%s)", seen.c_str());
+    }
 
     win32_set_file_ops(nullptr, nullptr);
     check(win32_host_path("data\\shared.txt").empty() ||

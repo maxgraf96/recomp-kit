@@ -10,6 +10,10 @@
   ending the run; `timeout`, `hold` and `pointer_tolerance` there change the
   running script. The dump cap counts file names: a name dumped again
   replaces its file.
+- `FindFirstFile`/`FindNextFile` return their matches in NTFS's order (by the
+  names' upper-case form), whatever order the host directory lists them in:
+  a program that scans `*.dll` meets its plugins alphabetically, as on every
+  Windows disk (APFS lists in hash order).
 - Show a fullscreen DirectDraw 7 program's GDI windows over its last frame
   (`runtime/display_seam.h`), as a desktop compositor shows an owned popup -
   a game's lobby after `FlipToGDISurface` - instead of over black and
