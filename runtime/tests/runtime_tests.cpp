@@ -30,6 +30,8 @@
 #include <vector>
 
 static int g_checks = 0, g_failures = 0, g_skips = 0;
+// Imports the ABI test registers with an unknown argument count on purpose.
+static uint32_t g_abi_test_unknown = 0;
 static const char *g_section = "";
 
 static void section(const char *s) {
@@ -154,6 +156,7 @@ struct ExpectedSection {
 struct ExpectedImport {
     uint32_t slot;
     std::string dll, name;
+    uint32_t ordinal = 0; // imported by this ordinal; 0 when by name
 };
 struct ExpectedImage {
     uint32_t base = 0, size = 0, entry = 0;
@@ -181,8 +184,9 @@ static bool pefile_sections(ExpectedImage &out, std::string &err) {
         "[print('SECTION %s %x %x %x %x %x' % (s.Name.decode().rstrip(chr(0)), b+s.VirtualAddress, "
         "s.Misc_VirtualSize, s.SizeOfRawData, s.PointerToRawData, s.Characteristics)) for s in "
         "pe.sections];"
-        "[print('IMPORT %x %s %s' % (i.address, d.dll.decode(), "
-        "i.name.decode() if i.name else 'ord%d' % i.ordinal)) "
+        "[print('IMPORT %x %s %s %d' % (i.address, d.dll.decode(), "
+        "i.name.decode() if i.name else 'ord%d' % i.ordinal, "
+        "i.ordinal if i.import_by_ordinal else 0)) "
         "for d in getattr(pe, 'DIRECTORY_ENTRY_IMPORT', []) for i in d.imports]"
         "\" 2>/dev/null";
     const char *cmd = cmd_s.c_str();
@@ -204,8 +208,8 @@ static bool pefile_sections(ExpectedImage &out, std::string &err) {
         } else if (sscanf(line, "SECTION %511s %x %x %x %x %x", name, &va, &vsize, &raw, &offset,
                           &flags) == 6) {
             out.sections.push_back({name, va, vsize, raw, offset, flags});
-        } else if (sscanf(line, "IMPORT %x %255s %511s", &va, dll, name) == 3) {
-            out.imports.push_back({va, dll, name});
+        } else if (sscanf(line, "IMPORT %x %255s %511s %u", &va, dll, name, &raw) == 4) {
+            out.imports.push_back({va, dll, name, raw});
         } else {
             err = "unrecognized pefile record";
         }
@@ -217,6 +221,22 @@ static bool pefile_sections(ExpectedImage &out, std::string &err) {
         return false;
     }
     return true;
+}
+
+// Whether the main image carries a resource of this type (an integer ID at
+// the root of its resource directory). Not every game ships VS_VERSION_INFO.
+static bool image_has_resource_type(uint32_t type) {
+    const uint32_t image = loader_image_base(), opt = image + rd32(image + 0x3c) + 24;
+    const uint32_t root = rd32(opt + 112);
+    if (!root || !gm_valid(image + root, 16))
+        return false;
+    const uint32_t named = rd16(image + root + 12), ids = rd16(image + root + 14);
+    for (uint32_t i = named; i < named + ids; ++i) {
+        const uint32_t entry = image + root + 16 + 8 * i;
+        if (gm_valid(entry, 8) && rd32(entry) == type)
+            return true;
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -710,9 +730,16 @@ static void test_loader() {
                 check(read && memcmp(bytes, g_mem + va, n) == 0,
                       "code bytes at %08x in %s match the file", va, section.name.c_str());
             };
+            // Not every image flags its code: a protector can rewrite every
+            // section as read-write data (one game's executable is so), and
+            // the loader maps them regardless. Then the entry's section is the
+            // code sample.
+            bool flagged = false;
+            for (const auto &section : expect.sections)
+                flagged |= (section.flags & 0x20000000u) && section.raw;
             bool code = false, entry = false;
             for (const auto &section : expect.sections) {
-                if (!code && (section.flags & 0x20000000u) && section.raw) {
+                if (!code && flagged && (section.flags & 0x20000000u) && section.raw) {
                     spot_check(section.va, section, std::min(section.raw, 64u));
                     code = true;
                 }
@@ -721,6 +748,11 @@ static void test_loader() {
                     spot_check(va, section, 16);
                     entry = true;
                 }
+            }
+            if (!flagged) {
+                printf("  [note] no section is flagged executable; the entry's section stands "
+                       "in for the code sample\n");
+                code = entry;
             }
             check(code && entry, "section table locates executable bytes and the entry point");
             fclose(f);
@@ -745,16 +777,44 @@ static void test_loader() {
             ++g_skips;
         }
 
-        uint32_t data_slots = 0;
+        uint32_t data_slots = 0, module_slots = 0;
         bool iat_ok = true, imports_weanetr = false;
         for (const auto &import : expect.imports) {
             std::string dll = import.dll;
             std::transform(dll.begin(), dll.end(), dll.begin(),
                            [](unsigned char ch) { return char(std::tolower(ch)); });
             imports_weanetr |= dll == "weanetr.dll";
-            uint32_t data = imports_data_address(import.dll.c_str(), import.name.c_str());
-            uint32_t trampoline = imports_trampoline_for(import.dll.c_str(), import.name.c_str());
             uint32_t value = rd32(import.slot);
+            // An import from a module the loader mapped (a game's own DLLs)
+            // is bound to that module's export, code or data, not to a shim.
+            // pefile spells a DLL name it will not decode (one with spaces)
+            // '*invalid*'; the export the slot names is then found by address.
+            const LoaderModule *module = dll == "*invalid*" ? loader_module_containing(value)
+                                                            : loader_module_named(dll.c_str());
+            if (module && module->base != loader_image_base()) {
+                ++module_slots;
+                const bool bound =
+                    import.ordinal ? value == loader_module_export_ordinal(*module, import.ordinal)
+                                   : value == loader_module_export(*module, import.name.c_str());
+                iat_ok &= bound;
+                if (!bound)
+                    printf("  IAT mismatch at %08x for %s!%s (a mapped module's export)\n",
+                           import.slot, module->name.c_str(), import.name.c_str());
+                continue;
+            }
+            // An import by ordinal is bound by the ordinal's name, or by the
+            // documented export name the loader knows for it (Winsock's).
+            std::string name = import.name;
+            if (import.ordinal) {
+                const std::string ord = "ord" + std::to_string(import.ordinal);
+                if (imports_has_shim(import.dll.c_str(), ord.c_str()) ||
+                    !imports_ordinal_name(import.dll.c_str(), import.ordinal))
+                    name = ord;
+                else
+                    name = imports_ordinal_name(import.dll.c_str(), import.ordinal);
+            }
+            uint32_t data = imports_data_address(import.dll.c_str(), name.c_str());
+            uint32_t trampoline = imports_trampoline_for(import.dll.c_str(), name.c_str());
             if (data) {
                 ++data_slots;
                 iat_ok &= value == data && !imports_is_trampoline(value);
@@ -766,10 +826,34 @@ static void test_loader() {
                 printf("  IAT mismatch at %08x for %s!%s\n", import.slot, import.dll.c_str(),
                        import.name.c_str());
         }
-        check(iat_ok, "every PE import slot holds its symbol's trampoline or data storage");
-        check(loader_iat_data_imports() == data_slots,
-              "%u IAT slots hold data symbols (expected %u)", loader_iat_data_imports(),
-              data_slots);
+        check(iat_ok,
+              "every PE import slot holds its symbol's trampoline, data storage or "
+              "mapped export (%u from mapped modules)",
+              module_slots);
+        // The loader counts the data slots of every module it binds, the
+        // auxiliary DLLs' included.
+        uint32_t aux_data_slots = 0;
+        for (uint32_t i = 0; const LoaderModule *m = loader_module(i); ++i) {
+            if (m->base == loader_image_base())
+                continue;
+            uint32_t opt = m->base + rd32(m->base + 0x3c) + 24;
+            uint32_t imports = rd32(opt + 104);
+            for (uint32_t d = m->base + imports; imports && rd32(d + 12); d += 20) {
+                const std::string from = gm_str(m->base + rd32(d + 12), 260);
+                // The names are in the lookup table; the bound slots hold values.
+                if (!rd32(d) || loader_module_named(from.c_str()))
+                    continue;
+                for (uint32_t lookup = m->base + rd32(d); rd32(lookup); lookup += 4) {
+                    const uint32_t t = rd32(lookup);
+                    if (!(t & 0x80000000u) &&
+                        imports_data_address(from.c_str(), gm_str(m->base + t + 2, 260).c_str()))
+                        ++aux_data_slots;
+                }
+            }
+        }
+        check(loader_iat_data_imports() == data_slots + aux_data_slots,
+              "%u IAT slots hold data symbols (expected %u in the image, %u in its DLLs)",
+              loader_iat_data_imports(), data_slots, aux_data_slots);
 
         // imports_has_dll reports the shim registry, not which DLLs this PE
         // imports. Require both so another image cannot use unallocated data.
@@ -846,8 +930,15 @@ static void test_discovery_recorder() {
         if (!exec && !data)
             data = sec.va + 0x40;
     }
-    if (!check(code != 0, "the image has a code section"))
+    if (!code) {
+        // The image flags no section executable (a protector rewrote them
+        // all as data), so the recorder, which asks the translator's
+        // section-flag question, records nothing in it; such a game's
+        // translation comes from its function database instead.
+        printf("  [SKIP] the image flags no section executable\n");
+        ++g_skips;
         return;
+    }
 
     char dir[512];
     snprintf(dir, sizeof dir, "%s/recomp-discovery-XXXXXX", os_temp_dir());
@@ -3745,6 +3836,7 @@ static void test_startup_apis(X86 *c) {
     for (const char *name : {"_bad@3", "_bad@", "_bad@8x", "_bad@99999999999", "@fast@8"}) {
         uint32_t tramp = imports_alloc_trampoline("abi-test.dll", name, nullptr, ARGC_UNKNOWN);
         check(imports_argc(tramp) == ARGC_UNKNOWN, "reject ambiguous decoration: %s", name);
+        ++g_abi_test_unknown;
     }
     uint32_t cdecl = imports_alloc_trampoline("abi-test.dll", "_explicit@8", nullptr, ARGC_CDECL);
     check(imports_argc(cdecl) == ARGC_CDECL, "explicit signature overrides decorated spelling");
@@ -3856,8 +3948,9 @@ static void test_import_coverage(X86 *c) {
             uint32_t value = rd32(import.slot);
             if (imports_is_trampoline(value))
                 trampolines.insert(value);
-            else
-                data.insert(value);
+            else if (const LoaderModule *m = loader_module_containing(value);
+                     !m || m->base == loader_image_base())
+                data.insert(value); // a game DLL's export is neither
         }
         const std::set<std::string> delphi_dlls = {
             "oleaut32.dll", "advapi32.dll", "version.dll",  "comctl32.dll", "winspool.drv",
@@ -3910,8 +4003,10 @@ static void test_import_coverage(X86 *c) {
     uint32_t impl = 0, log_only = 0, unknown = 0;
     imports_coverage(&impl, &log_only, &unknown);
     check(impl + log_only == imports_count(), "%u implemented, %u logging-only", impl, log_only);
-    check(unknown == 0, "%u imports have an unknown argument count", unknown);
-    if (unknown) {
+    check(unknown == g_abi_test_unknown,
+          "%u imports have an unknown argument count (%u of them the ABI test's own)", unknown,
+          g_abi_test_unknown);
+    if (unknown != g_abi_test_unknown) {
         // Reuse the runtime's classification rather than duplicating its shim
         // registry in this test. Limit the diagnostic to the first 40 names.
         FILE *coverage = tmpfile();
@@ -5105,11 +5200,19 @@ static void test_kernel32_wide() {
           "WaitForMultipleObjectsEx uses the existing wait body");
     call_import(&c, "KERNEL32.dll", "CloseHandle", {event});
     section("kernel32 wide resources");
+    // The version resource is the image's own; a game without one skips the
+    // checks that read it (the synthetic fixture below covers the rest).
+    const bool has_version = image_has_resource_type(16);
+    if (!has_version) {
+        printf("  [SKIP] the image has no VS_VERSION_INFO resource\n");
+        ++g_skips;
+    }
     uint32_t r = call_import(&c, "KERNEL32.dll", "FindResourceW", {0, 1, 16});
-    check(r != 0, "FindResourceW(VS_VERSION_INFO)");
+    check(!has_version || r != 0, "FindResourceW(VS_VERSION_INFO)");
     uint32_t size = call_import(&c, "KERNEL32.dll", "SizeofResource", {0, r});
     uint32_t data = call_import(&c, "KERNEL32.dll", "LoadResource", {0, r});
-    check(size > 0x34 && data != 0 && gm_valid(data, size) && rd32(data + 40) == 0xfeef04bdu,
+    check(!has_version ||
+              (size > 0x34 && data != 0 && gm_valid(data, size) && rd32(data + 40) == 0xfeef04bdu),
           "the loaded resource is a VS_VERSIONINFO (size %u)", size);
 
     check(call_import(&c, "KERNEL32.dll", "LockResource", {data}) == data,
@@ -5118,19 +5221,19 @@ static void test_kernel32_wide() {
           "FreeResource leaves image-backed resources loaded");
     gm_put_wstr(s, "#16", 64);
     gm_put_wstr(s + 128, "#1", 64);
-    check(r && call_import(&c, "KERNEL32.dll", "FindResourceW",
-                           {loader_image_base(), s + 128, s}) == r,
+    check(!has_version || (r && call_import(&c, "KERNEL32.dll", "FindResourceW",
+                                            {loader_image_base(), s + 128, s}) == r),
           "resource integer strings resolve like IDs");
     check(call_import(&c, "KERNEL32.dll", "FindResourceW", {0, 0xffff, 16}) == 0,
           "missing resource returns zero");
     uint32_t resource_cb =
         imports_alloc_trampoline("test", "resource_enum", resource_enum_callback, 4);
     g_resource_names.clear();
-    check(call_import(&c, "KERNEL32.dll", "EnumResourceNamesW", {0, 16, resource_cb, 0x1234}) ==
-                  1 &&
-              std::find(g_resource_names.begin(), g_resource_names.end(), "#1") !=
-                  g_resource_names.end() &&
-              g_resource_type == 16 && g_resource_param == 0x1234,
+    check(!has_version || (call_import(&c, "KERNEL32.dll", "EnumResourceNamesW",
+                                       {0, 16, resource_cb, 0x1234}) == 1 &&
+                           std::find(g_resource_names.begin(), g_resource_names.end(), "#1") !=
+                               g_resource_names.end() &&
+                           g_resource_type == 16 && g_resource_param == 0x1234),
           "EnumResourceNamesW passes names, type and caller data to the guest");
     // Replace only guest-memory directory bytes temporarily, then restore them.
     // The real image stays pinned on disk; this fixture exercises names and
@@ -6531,7 +6634,8 @@ static void test_auxiliary_modules() {
         uint32_t nnames = rd32(dir + 24), names = rd32(dir + 32);
         for (uint32_t n = 0; n < nnames && n < 4; ++n) {
             std::string name = gm_str(m->base + rd32(m->base + names + 4 * n), 260);
-            gm_put_str(s + 256, name.c_str(), 128);
+            // The whole name: a C++ export's decoration runs past 128 characters.
+            gm_put_str(s + 256, name.c_str(), uint32_t(name.size() + 1));
             uint32_t a = call_import(&c, "KERNEL32.dll", "GetProcAddress", {h, s + 256});
             check(a >= m->base && a < m->base + m->size &&
                       a == loader_module_export(*m, name.c_str()),
@@ -6572,17 +6676,22 @@ static void test_delphi_dlls() {
                       {hk, s + 0x500, 0, 0, s + 0x700, s + 0x600}) == 0 &&
               gm_str(s + 0x700) == "value",
           "RegQueryValueExA reads what RegSetValueExW wrote");
-    // version.dll W over the image's own resource.
+    // version.dll W over the image's own resource, when it has one.
     gm_put_wstr(s, RECOMP_EXECUTABLE, 128);
-    uint32_t size = call_import(&c, "VERSION.dll", "GetFileVersionInfoSizeW", {s, 0});
-    check(size > 0, "GetFileVersionInfoSizeW = %u", size);
-    check(call_import(&c, "VERSION.dll", "GetFileVersionInfoW", {s, 0, size, s + 0x1000}) == 1,
-          "GetFileVersionInfoW");
-    gm_put_wstr(s + 0x800, "\\", 8);
-    check(call_import(&c, "VERSION.dll", "VerQueryValueW",
-                      {s + 0x1000, s + 0x800, s + 0x900, s + 0x904}) == 1 &&
-              rd32(rd32(s + 0x900)) == 0xfeef04bdu,
-          "VerQueryValueW(\\) finds VS_FIXEDFILEINFO");
+    if (image_has_resource_type(16)) {
+        uint32_t size = call_import(&c, "VERSION.dll", "GetFileVersionInfoSizeW", {s, 0});
+        check(size > 0, "GetFileVersionInfoSizeW = %u", size);
+        check(call_import(&c, "VERSION.dll", "GetFileVersionInfoW", {s, 0, size, s + 0x1000}) == 1,
+              "GetFileVersionInfoW");
+        gm_put_wstr(s + 0x800, "\\", 8);
+        check(call_import(&c, "VERSION.dll", "VerQueryValueW",
+                          {s + 0x1000, s + 0x800, s + 0x900, s + 0x904}) == 1 &&
+                  rd32(rd32(s + 0x900)) == 0xfeef04bdu,
+              "VerQueryValueW(\\) finds VS_FIXEDFILEINFO");
+    } else {
+        check(call_import(&c, "VERSION.dll", "GetFileVersionInfoSizeW", {s, 0}) == 0,
+              "GetFileVersionInfoSizeW = 0 for an image without VS_VERSION_INFO");
+    }
     // The rest answer as documented for a machine with nothing attached.
     wr32(s + 0xa00, 0);
     check(call_import(&c, "WINSPOOL.DRV", "EnumPrintersW", {2, 0, 2, 0, 0, s + 0xa04, s + 0xa00}) ==
