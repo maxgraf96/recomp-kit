@@ -17,6 +17,7 @@ nothing of it. lld signs arm64 output ad hoc.
 
 Nothing here needs the Xcode Command Line Tools: an LLVM clang and lld are
 enough (RECOMP_FREESTANDING_CC, RECOMP_LD64_LLD, or Homebrew's llvm and lld).
+The symbol check reads the Mach-O's own symbol table (no nm).
 An object is rebuilt only when its source, a header it read or the flags change.
 After linking, the bundle's undefined symbols are checked against what the
 host provides (FOREIGN_OK and the runtime's prefixes); anything else - a
@@ -30,6 +31,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import sys
 
@@ -109,8 +111,53 @@ def compile_one(cc, flags, flags_hash, source, obj):
     return True
 
 
+MH_MAGIC_64 = 0xfeedfacf
+LC_SYMTAB = 0x2
+N_STAB, N_TYPE, N_UNDF = 0xe0, 0x0e, 0x0
+
+
+def macho_undefined(path):
+    """The undefined symbols of a thin 64-bit Mach-O (an object or a bundle), as
+    `nm -u` lists them, read from its LC_SYMTAB: no nm is needed, and on a Mac
+    without the Command Line Tools /usr/bin/nm is only a stub that offers to
+    install them. None when path is not such a file."""
+    data = Path(path).read_bytes()
+    if len(data) < 32 or struct.unpack_from("<I", data, 0)[0] != MH_MAGIC_64:
+        return None
+    ncmds = struct.unpack_from("<I", data, 16)[0]
+    off = 32
+    for _ in range(ncmds):
+        if off + 8 > len(data):
+            return None
+        cmd, size = struct.unpack_from("<II", data, off)
+        if size < 8 or off + size > len(data):
+            return None
+        if cmd == LC_SYMTAB:
+            if size < 24:
+                return None
+            symoff, nsyms, stroff, strsize = struct.unpack_from("<IIII", data, off + 8)
+            if symoff + 16 * nsyms > len(data) or stroff + strsize > len(data):
+                return None
+            out = set()
+            for i in range(nsyms):
+                strx, ntype, _, _, value = struct.unpack_from("<IBBHQ", data, symoff + 16 * i)
+                # Not a debugging entry, undefined, and not a common symbol (value 0).
+                if ntype & N_STAB or ntype & N_TYPE != N_UNDF or value != 0:
+                    continue
+                start = stroff + strx
+                end = data.find(b"\0", start, stroff + strsize)
+                out.add(data[start:end if end >= 0 else stroff + strsize].decode("utf-8", "replace"))
+            return sorted(out)
+        off += size
+    return []
+
+
 def undefined_symbols(bundle, cc):
-    """The bundle's undefined symbols, via llvm-nm beside the compiler or nm."""
+    """The bundle's undefined symbols: read from the Mach-O itself, else via
+    llvm-nm beside the compiler or nm."""
+    found = macho_undefined(bundle)
+    if found is not None:
+        return found
     nm = Path(cc).with_name("llvm-nm")
     tool = str(nm) if nm.is_file() else (shutil.which("llvm-nm") or shutil.which("nm"))
     if tool is None:

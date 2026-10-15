@@ -64,6 +64,51 @@ def test_every_instruction_form_compiles_without_a_c_library(cc, tmp_path):
     assert "-nostdinc" in flags and "-ffreestanding" in flags
     subprocess.run([cc] + flags + ["-c", str(source), "-o", str(obj)], check=True)
     assert bundle.foreign(bundle.undefined_symbols(obj, cc)) == []
+    reference = llvm_nm_undefined(obj, cc)
+    if reference is not None:
+        assert bundle.macho_undefined(obj) == reference
+
+
+def llvm_nm_undefined(path, cc):
+    """llvm-nm -u's answer, the reference for bundle.macho_undefined, or None."""
+    nm = shutil.which("llvm-nm") or (os.path.join(os.path.dirname(cc), "llvm-nm")
+                                     if os.path.isfile(os.path.join(os.path.dirname(cc), "llvm-nm")) else None)
+    if nm is None:
+        return None
+    out = subprocess.check_output([nm, "-u", str(path)], text=True)
+    return sorted({line.split()[-1] for line in out.splitlines() if line.strip()})
+
+
+def macho(symbols):
+    """A minimal thin 64-bit Mach-O: a header, LC_SYMTAB and its tables.
+    symbols: (name, n_type, n_value)."""
+    strtab = b"\0"
+    entries = b""
+    for name, ntype, value in symbols:
+        entries += struct.pack("<IBBHQ", len(strtab), ntype, 0, 0, value)
+        strtab += name.encode() + b"\0"
+    symoff = 32 + 24
+    stroff = symoff + len(entries)
+    header = struct.pack("<IiiIIIII", 0xfeedfacf, 0x0100000c, 0, 1, 1, 24, 0, 0)
+    symtab = struct.pack("<IIIIII", 0x2, 24, symoff, len(symbols), stroff, len(strtab))
+    return header + symtab + entries + strtab
+
+
+def test_undefined_symbols_come_from_the_mach_o_without_nm(tmp_path):
+    """bundle.py lists a bundle's undefined symbols itself: on a Mac without the
+    Command Line Tools /usr/bin/nm is a stub that offers to install them."""
+    path = tmp_path / "x.o"
+    path.write_bytes(macho([("_recomp_call", 0x01, 0),        # undefined external
+                            ("_memcpy", 0x01, 0),
+                            ("_defined", 0x0f, 0x1000),       # N_SECT | N_EXT
+                            ("_common", 0x01, 16),            # a common symbol, not undefined
+                            ("_stab", 0x24, 0)]))             # N_FUN debugging entry
+    assert bundle.macho_undefined(path) == ["_memcpy", "_recomp_call"]
+    assert bundle.undefined_symbols(path, "/nonexistent/clang") == ["_memcpy", "_recomp_call"]
+    (tmp_path / "y.o").write_bytes(b"\x7fELF" + b"\0" * 60)
+    assert bundle.macho_undefined(tmp_path / "y.o") is None
+    (tmp_path / "z.o").write_bytes(macho([])[:40])                # truncated load commands
+    assert bundle.macho_undefined(tmp_path / "z.o") is None
 
 
 def test_the_policy_names_what_a_bundle_may_not_need():
@@ -147,6 +192,9 @@ def test_a_bundle_links_with_lld_alone_and_a_host_loads_it(tmp_path, monkeypatch
     assert path.is_file()
     undefined = (out / "main.undefined").read_text().split()
     assert bundle.foreign(undefined) == []
+    reference = llvm_nm_undefined(out / "main.bundle", cc)
+    if reference is not None:
+        assert undefined == reference
     assert "_recomp_module_register" in undefined
     if platform.system() != "Darwin":
         pytest.skip("loading a Mach-O bundle needs macOS")
