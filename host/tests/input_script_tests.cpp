@@ -405,8 +405,82 @@ static void test_dumps() {
     os_rmdir(dir);
 }
 
+// A game that draws its own cursor at the menu and hands the system pointer
+// to a window over it later: `pointer system` switches to absolute placement
+// from that step on, and a second `pointer` line switches back.
+static void test_pointer_switch() {
+    Script s;
+    std::string e;
+    CHECK(parse("pointer system\nmove 1 2\n", &s, &e));
+    CHECK(!s.has_pointer && s.steps.size() == 1);
+    CHECK(parse("pointer f32 [0x1000]+4 [0x1000]+8\nmove 1 2\npointer system\nmove 3 4\n"
+                "pointer i32 0x10 0x14\n",
+                &s, &e));
+    CHECK(s.has_pointer && s.pointer_float);
+    CHECK(s.steps.size() == 4 && s.steps[1].op == Op::Pointer && s.steps[1].pointer == 0 &&
+          s.steps[3].op == Op::Pointer && s.steps[3].pointer == 1 && s.steps[3].addr.base == 0x10 &&
+          s.steps[3].addr_y.base == 0x14);
+    CHECK(!parse("pointer screen\n", &s, &e));
+
+    Sim sim("pointer f32 [0x1000]+4 [0x1000]+8\nmove 100 700\npointer system\n"
+            "click 300 200\nmove 5 6\n");
+    sim.run(30000);
+    CHECK(sim.r.finished());
+    // The walk moved the game's cursor; after the switch, only placements.
+    CHECK(fabs(sim.game.x - 100) <= 2.5 && fabs(sim.game.y - 700) <= 2.5);
+    std::vector<std::string> placed;
+    for (const auto &ev : sim.game.events)
+        if (ev.rfind("place", 0) == 0)
+            placed.push_back(ev);
+    CHECK(placed.size() == 2 && placed[0] == "place 300 200" && placed[1] == "place 5 6");
+}
+
+// `type` sends the rest of its line a character at a time through the sink.
+struct Typist : FakeGame {
+    std::vector<std::pair<uint32_t, bool>> chars;
+    void character(uint32_t cp, bool down) override {
+        chars.push_back({cp, down});
+    }
+};
+static void test_type() {
+    Script s;
+    std::string e;
+    CHECK(parse("type hello mac  \n", &s, &e));
+    CHECK(s.steps.size() == 1 && s.steps[0].op == Op::Type && s.steps[0].text == "hello mac");
+    CHECK(!parse("type\n", &s, &e));
+
+    Runner r;
+    CHECK(r.load_text("type Hé!\nkey RETURN\n", &e));
+    Typist t;
+    uint32_t now = 1000;
+    for (int i = 0; i < 400 && r.running(); ++i, now += 10)
+        r.tick(t, now, uint64_t(i));
+    CHECK(r.finished());
+    const std::vector<std::pair<uint32_t, bool>> want = {{'H', true},   {'H', false}, {0xe9, true},
+                                                         {0xe9, false}, {'!', true},  {'!', false}};
+    CHECK(t.chars == want);
+    CHECK(!t.events.empty() && t.events.back() == "key 1c up"); // RETURN after the text
+
+    // A sink with no text path of its own presses the key a US layout makes
+    // the character with, and Shift around it when it needs one.
+    uint8_t dik = 0;
+    bool shift = false;
+    CHECK(key_for_character('a', &dik, &shift) && dik == 0x1e && !shift);
+    CHECK(key_for_character('A', &dik, &shift) && dik == 0x1e && shift);
+    CHECK(key_for_character('?', &dik, &shift) && dik == 0x35 && shift);
+    CHECK(key_for_character(' ', &dik, &shift) && dik == 0x39 && !shift);
+    CHECK(!key_for_character(0xe9, &dik, &shift));
+    FakeGame g;
+    g.character('A', true);
+    g.character('A', false);
+    const std::vector<std::string> keys = {"key 2a down", "key 1e down", "key 1e up", "key 2a up"};
+    CHECK(g.events == keys);
+}
+
 int main() {
     test_parse();
+    test_pointer_switch();
+    test_type();
     test_pointer_walk_and_click();
     test_click_lands_on_target();
     test_place_without_pointer();

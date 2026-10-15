@@ -151,6 +151,23 @@ void HeadlessSink::key(uint8_t dik, bool down) {
                               host_key_lparam(m, down, false, !down));
 }
 
+void HeadlessSink::character(uint32_t codepoint, bool down) {
+    uint8_t dik = 0;
+    bool shift = false;
+    key_for_character(codepoint, &dik, &shift);
+    const HostKeyMapping m = dik ? host_key_mapping_for_dik(dik) : HostKeyMapping{0, 0, 0};
+    if (shift && down)
+        key(0x2a /* LSHIFT */, true);
+    if (m.dik)
+        host_input_key(m.mac, down);
+    const uint32_t vk = m.vk ? m.vk : 0xe7 /* VK_PACKET */;
+    const uint32_t lparam =
+        m.dik ? host_key_lparam(m, down, false, !down) : (down ? 1u : 0xc0000001u);
+    host_post_key_text(down ? kKeyDown : kKeyUp, vk, lparam, down ? codepoint : 0);
+    if (shift && !down)
+        key(0x2a, false);
+}
+
 void HeadlessSink::close() {
     boot_request_close("input script");
 }

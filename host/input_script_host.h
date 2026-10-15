@@ -49,6 +49,11 @@ class HeadlessSink : public Sink {
     void place(int32_t x, int32_t y) override;
     void button(int button, bool down) override;
     void key(uint8_t dik, bool down) override;
+    // The key a US layout types it with (DirectInput sees it) and its key
+    // messages with the character behind them as WM_CHAR, in the window's
+    // code page (host_post_key_text); a character no key makes arrives as
+    // WM_KEYDOWN(VK_PACKET) + WM_CHAR, as injected Unicode does on Windows.
+    void character(uint32_t codepoint, bool down) override;
     void close() override;
 
   private:

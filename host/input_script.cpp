@@ -202,6 +202,57 @@ uint8_t dik_for_name(const char *name) {
     return 0;
 }
 
+bool key_for_character(uint32_t ch, uint8_t *dik, bool *shift) {
+    *dik = 0;
+    *shift = false;
+    if (ch >= 'a' && ch <= 'z') {
+        const char name[2] = {char(ch - 'a' + 'A'), 0};
+        *dik = dik_for_name(name);
+    } else if (ch >= 'A' && ch <= 'Z') {
+        const char name[2] = {char(ch), 0};
+        *dik = dik_for_name(name);
+        *shift = true;
+    } else if (ch >= '0' && ch <= '9') {
+        const char name[2] = {char(ch), 0};
+        *dik = dik_for_name(name);
+    } else {
+        // The rest of a US layout: each key's character, then its shifted one.
+        static const struct {
+            char plain, shifted;
+            uint8_t dik;
+        } kRow[] = {{' ', 0, 0x39},    {'\n', 0, 0x1c},  {'\t', 0, 0x0f},   {'-', '_', 0x0c},
+                    {'=', '+', 0x0d},  {'[', '{', 0x1a}, {']', '}', 0x1b},  {';', ':', 0x27},
+                    {'\'', '"', 0x28}, {'`', '~', 0x29}, {'\\', '|', 0x2b}, {',', '<', 0x33},
+                    {'.', '>', 0x34},  {'/', '?', 0x35}, {0, ')', 0x0b},    {0, '!', 0x02},
+                    {0, '@', 0x03},    {0, '#', 0x04},   {0, '$', 0x05},    {0, '%', 0x06},
+                    {0, '^', 0x07},    {0, '&', 0x08},   {0, '*', 0x09},    {0, '(', 0x0a}};
+        for (const auto &k : kRow) {
+            if (k.plain && ch == uint32_t(uint8_t(k.plain))) {
+                *dik = k.dik;
+                break;
+            }
+            if (k.shifted && ch == uint32_t(uint8_t(k.shifted))) {
+                *dik = k.dik;
+                *shift = true;
+                break;
+            }
+        }
+    }
+    return *dik != 0;
+}
+
+void Sink::character(uint32_t codepoint, bool down) {
+    uint8_t dik = 0;
+    bool shift = false;
+    if (!key_for_character(codepoint, &dik, &shift))
+        return;
+    if (shift && down)
+        key(0x2a /* LSHIFT */, true);
+    key(dik, down);
+    if (shift && !down)
+        key(0x2a, false);
+}
+
 uint32_t message_for_name(const char *name) {
     if (!name)
         return 0;
@@ -243,14 +294,26 @@ bool parse(const std::string &text, Script *out, std::string *error) {
             s.timeout_ms = uint32_t(a);
             continue;
         } else if (is("pointer")) {
-            if (w.size() != 4 ||
-                (!equal_nocase(w[1].c_str(), "i32") && !equal_nocase(w[1].c_str(), "f32")))
-                return fail("pointer needs i32|f32 XADDR YADDR");
-            if (!address(w[2], &s.pointer_x) || !address(w[3], &s.pointer_y))
-                return fail("pointer addresses are 0xADDR, [0xADDR]+OFFSET or 0xADDR+OFFSET");
-            s.pointer_float = equal_nocase(w[1].c_str(), "f32");
-            s.has_pointer = true;
-            continue;
+            if (w.size() == 2 && equal_nocase(w[1].c_str(), "system")) {
+                st.pointer = 0;
+            } else {
+                if (w.size() != 4 ||
+                    (!equal_nocase(w[1].c_str(), "i32") && !equal_nocase(w[1].c_str(), "f32")))
+                    return fail("pointer needs i32|f32 XADDR YADDR, or system");
+                if (!address(w[2], &st.addr) || !address(w[3], &st.addr_y))
+                    return fail("pointer addresses are 0xADDR, [0xADDR]+OFFSET or 0xADDR+OFFSET");
+                st.pointer = equal_nocase(w[1].c_str(), "f32") ? 2 : 1;
+            }
+            // Before any step it is how the script starts; after one, a step
+            // that switches the pointer there.
+            if (s.steps.empty()) {
+                s.has_pointer = st.pointer != 0;
+                s.pointer_float = st.pointer == 2;
+                s.pointer_x = st.addr;
+                s.pointer_y = st.addr_y;
+                continue;
+            }
+            st.op = Op::Pointer;
         } else if (is("pointer_tolerance")) {
             double t = 0;
             if (w.size() != 2 || !real(w[1], &t) || t < 0.5)
@@ -401,6 +464,14 @@ bool parse(const std::string &text, Script *out, std::string *error) {
             if (w.size() != 1)
                 return fail("quit takes nothing");
             st.op = Op::Quit;
+        } else if (is("type")) {
+            const size_t at = line.find_first_not_of(" \t", line.find(verb) + verb.size());
+            st.text = at == std::string::npos ? std::string() : line.substr(at);
+            while (!st.text.empty() && isspace((unsigned char)st.text.back()))
+                st.text.pop_back();
+            if (st.text.empty())
+                return fail("type needs text");
+            st.op = Op::Type;
         } else {
             return fail("unknown step '" + verb + "'");
         }
@@ -518,19 +589,51 @@ const char *op_name(Op op) {
         return "log";
     case Op::Quit:
         return "quit";
+    case Op::Pointer:
+        return "pointer";
+    case Op::Type:
+        return "type";
     }
     return "?";
 }
 
 bool is_action(Op op) {
     return op == Op::Move || op == Op::MoveBy || op == Op::Click || op == Op::Button ||
-           op == Op::Key;
+           op == Op::Key || op == Op::Type;
+}
+
+// The code points of UTF-8 text; a malformed byte stands for itself (Latin-1).
+std::vector<uint32_t> code_points(const std::string &text) {
+    std::vector<uint32_t> out;
+    for (size_t i = 0; i < text.size();) {
+        const uint8_t c = uint8_t(text[i]);
+        const int extra = c >= 0xf0 ? 3 : c >= 0xe0 ? 2 : c >= 0xc0 ? 1 : 0;
+        uint32_t cp = extra ? c & (0x3f >> extra) : c;
+        bool ok = true;
+        for (int k = 1; ok && k <= extra; ++k) {
+            if (i + size_t(k) >= text.size() || (uint8_t(text[i + k]) & 0xc0) != 0x80)
+                ok = false;
+            else
+                cp = cp << 6 | (uint8_t(text[i + k]) & 0x3f);
+        }
+        if (!ok) {
+            out.push_back(c);
+            ++i;
+            continue;
+        }
+        out.push_back(cp);
+        i += size_t(extra) + 1;
+    }
+    return out;
 }
 
 } // namespace
 
 struct Runner::Impl {
     Script script;
+    // The pointer in force: the script's at the start, then `pointer` steps'.
+    bool has_pointer = false, pointer_float = false;
+    Address pointer_x, pointer_y;
     bool loaded = false;
     std::string out_dir;
     uint32_t max_dumps = 64;
@@ -613,12 +716,12 @@ struct Runner::Impl {
         return reader(base + uint32_t(a.offset), out);
     }
     bool read_pointer(double *x, double *y) const {
-        if (!script.has_pointer)
+        if (!has_pointer)
             return false;
         uint32_t rx = 0, ry = 0;
-        if (!read_u32(script.pointer_x, &rx) || !read_u32(script.pointer_y, &ry))
+        if (!read_u32(pointer_x, &rx) || !read_u32(pointer_y, &ry))
             return false;
-        if (script.pointer_float) {
+        if (pointer_float) {
             float fx, fy;
             memcpy(&fx, &rx, 4);
             memcpy(&fy, &ry, 4);
@@ -785,8 +888,8 @@ struct Runner::Impl {
                 return true;
             }
             if (now - step_ms > st.ms)
-                failed(st, script.has_pointer ? "the pointer did not become readable"
-                                              : "the script names no pointer");
+                failed(st, has_pointer ? "the pointer did not become readable"
+                                       : "the script names no pointer");
             return false;
         }
         case Op::WaitSize: {
@@ -838,7 +941,7 @@ struct Runner::Impl {
         case Op::Move:
         case Op::Click: {
             if (phase == 0) {
-                if (script.has_pointer) {
+                if (has_pointer) {
                     const int r = walk_pointer(sink, st, now);
                     if (r <= 0)
                         return false;
@@ -950,6 +1053,38 @@ struct Runner::Impl {
         case Op::Quit:
             sink.close();
             return true;
+        case Op::Pointer:
+            has_pointer = st.pointer != 0;
+            pointer_float = st.pointer == 2;
+            pointer_x = st.addr;
+            pointer_y = st.addr_y;
+            move = Move{};
+            say("line %d: pointer %s", st.line,
+                has_pointer ? "read back from the game" : "system (absolute)");
+            return true;
+        case Op::Type: {
+            // A character down, 30 ms, up, 30 ms, the next: time alone paces
+            // it, because a window that only repaints on change presents no
+            // frames to count.
+            const std::vector<uint32_t> text = code_points(st.text);
+            const size_t index = size_t(phase / 2);
+            if (index >= text.size()) {
+                settle(now);
+                return true;
+            }
+            if (phase % 2 == 0) {
+                if (phase > 0 && now - phase_ms < 30)
+                    return false;
+                sink.character(text[index], true);
+            } else {
+                if (now - phase_ms < 30)
+                    return false;
+                sink.character(text[index], false);
+            }
+            ++phase;
+            phase_ms = now;
+            return false;
+        }
         }
         return true;
     }
@@ -963,6 +1098,10 @@ bool Runner::load_text(const std::string &text, std::string *error) {
     if (!parse(text, &s, error))
         return false;
     impl_->script = std::move(s);
+    impl_->has_pointer = impl_->script.has_pointer;
+    impl_->pointer_float = impl_->script.pointer_float;
+    impl_->pointer_x = impl_->script.pointer_x;
+    impl_->pointer_y = impl_->script.pointer_y;
     impl_->loaded = true;
     return true;
 }
@@ -1008,7 +1147,7 @@ void Runner::tick(Sink &sink, uint32_t now, uint64_t frames) {
         d.started = true;
         d.start_ms = now;
         d.say("%zu steps; timeout %u ms%s", d.script.steps.size(), d.script.timeout_ms,
-              d.script.has_pointer ? "; the game's pointer is read back" : "");
+              d.has_pointer ? "; the game's pointer is read back" : "");
     }
     if (now - d.start_ms > d.script.timeout_ms) {
         d.fail = true;
@@ -1041,7 +1180,7 @@ void Runner::tick(Sink &sink, uint32_t now, uint64_t frames) {
         if (!complete)
             return;
         if (st.op == Op::Move || st.op == Op::Click) {
-            if (d.script.has_pointer)
+            if (d.has_pointer)
                 d.say("line %d: %s (%d, %d): pointer at (%.1f, %.1f) after %d steps", st.line,
                       op_name(st.op), st.x, st.y, d.last_px, d.last_py, d.move.iterations);
             else

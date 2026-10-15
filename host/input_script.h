@@ -25,10 +25,18 @@
 // `pointer`, `move` places the pointer absolutely, which is what a game that
 // reads window messages sees.
 //
+// A game can do both: draw its own cursor in one place and hand the system
+// pointer to its windows in another (a menu, then a GDI lobby over it).
+// `pointer system` switches to absolute placement from that step on - display
+// pixels, delivered as host mouse events, so the window under the point gets
+// them (WindowFromPoint) - and a later `pointer i32|f32 ...` switches back.
+//
 // THE LANGUAGE (one step per line; `#` starts a comment)
 //
 //   timeout MS                    the whole script fails after MS (default 600000)
-//   pointer i32|f32 XADDR YADDR   the game's cursor, as above
+//   pointer i32|f32 XADDR YADDR   the game's cursor, as above (from this step on
+//                                 when it comes after another step)
+//   pointer system                absolute positions from here on, as above
 //   pointer_tolerance PX          how close `move` must get (default 2; a game
 //                                 whose gain is coarser is accepted within half
 //                                 its measured step)
@@ -56,6 +64,9 @@
 //   button left|right|middle down|up
 //   key NAME [down|up]            a DirectInput key name (ESCAPE, RETURN, A, F1,
 //                                 ...); without down/up: press and release
+//   type TEXT                     the rest of the line, a character at a time:
+//                                 the key a US layout makes it with (Shift
+//                                 included) and the character itself as text
 //   dump NAME                     the next presented frame as OUT/NAME.png
 //   mark                          the picture `wait change` compares against
 //                                 becomes the latest one now
@@ -94,6 +105,8 @@ enum class Op {
     Peek,
     Log,
     Quit,
+    Pointer,
+    Type,
 };
 
 // A guest address, optionally through one pointer: [base]+offset or base+offset.
@@ -116,8 +129,10 @@ struct Step {
     uint8_t dik = 0;        // key
     uint32_t color = 0;     // wait pixel: 0xRRGGBB
     int tol = 16;           // wait pixel: per channel
-    Address addr;           // peek
-    std::string text;       // dump name, log text, key name
+    Address addr;           // peek; pointer: x
+    Address addr_y;         // pointer: y
+    int pointer = 0;        // pointer: 0 system, 1 i32, 2 f32
+    std::string text;       // dump name, log text, key name, typed text (UTF-8)
 };
 
 struct Script {
@@ -134,6 +149,9 @@ struct Script {
 bool parse(const std::string &text, Script *out, std::string *error);
 // The DirectInput scan code a key name stands for, or 0.
 uint8_t dik_for_name(const char *name);
+// The key a US layout types `codepoint` with, and whether Shift is held for
+// it. False for a character no key of that layout makes.
+bool key_for_character(uint32_t codepoint, uint8_t *dik, bool *shift);
 // A window message's number from a WM_ name or a number, or 0.
 uint32_t message_for_name(const char *name);
 
@@ -148,6 +166,10 @@ class Sink {
     virtual void place(int32_t x, int32_t y) = 0;
     virtual void button(int button, bool down) = 0;
     virtual void key(uint8_t dik, bool down) = 0;
+    // A character typed (a Unicode code point). By default the key a US
+    // layout makes it with, Shift around it when it needs one; a host with a
+    // text path delivers the character itself as well.
+    virtual void character(uint32_t codepoint, bool down);
     // The game is asked to close (WM_CLOSE to its main window).
     virtual void close() = 0;
 };
