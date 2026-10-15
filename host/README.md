@@ -33,6 +33,8 @@ startup and never runs `WinMain`.
 | `gpu/fake/` | the CPU test double |
 | `sdl/keymap.cpp` | SDL scancodes and modifiers to the host's key codes |
 | `input.{h,cpp}` | host key codes to DirectInput scan codes, Win32 messages and `GetAsyncKeyState`, and waking the guest's input threads |
+| `input_script.{h,cpp}` | scripted input: the language, the runner, the closed-loop pointer, PNG frame dumps (miniz) |
+| `input_script_host.{h,cpp}` | scripted input in a boot host: guest-memory reader, the window-message observer, the input path of a host without a window |
 | `audio.h`, `audio/mixer.cpp` | `host_audio_play` on the software mixer, and the lock order that keeps it out of a deadlock |
 | `audio/sdl_sink.cpp`, `audio/midi_synth.cpp` | the output device through SDL; the music through TinySoundFont |
 | `Info.plist` | the app bundle's |
@@ -400,6 +402,40 @@ is how `audio stop re-entry` drives the same re-entrant path with no audio
 device: its `stop` fires the pending completion handler before returning, the
 way the framework does.
 
+## Scripted input
+
+`input_script.h` drives a running game the way a person at the keyboard and
+mouse would, with nobody there: a line-based script of actions (`move`,
+`moveby`, `click`, `button`, `key`, `dump NAME` to a PNG) and of waits on what
+the game does (`wait MS`, `wait frames N`, `wait message WM_X`, `wait change`
+against the picture before the last action or a `mark`, `wait still N`,
+`wait size W H`, `wait pixel X Y RRGGBB`, `wait pointer`), each wait with a `within` after which the
+script fails and says which line and why. The header has the whole language.
+
+Nothing reaches the guest by a side door. In the windowed app
+(`RECOMP_INPUT_SCRIPT=FILE`, `RECOMP_INPUT_SCRIPT_OUT=DIR`) each action is an
+SDL event pushed onto the queue `sdl/main.cpp` drains - relative counts for
+the relative-mouse path, window points for the window-position path,
+scancodes, `SDL_EVENT_QUIT` - and frames come from the Direct3D 7 renderer's
+tap. A headless boot host uses `HeadlessSink` (`input_script_host.cpp`), which
+does what the windowed host's handlers do with a real device's events:
+`input.cpp`'s DirectInput state, which wakes the guest's input threads, and
+the messages Windows would post (none while DirectInput holds the mouse
+exclusively).
+
+A game that holds its DirectInput mouse exclusively integrates relative
+motion into a cursor of its own, so an absolute position means nothing to it.
+`pointer f32 [ADDR]+4 [ADDR]+8` names where the game keeps that cursor, and
+`move`/`click` then walk it to the target closed-loop: relative counts at the
+gain measured from the last step, read back until within tolerance (or half
+the gain's step, for a game whose counts are coarser than a pixel). Nothing
+about the game's scaling, acceleration or motion history has to be known; a
+game that scales by the smallest count it has seen converges in two steps.
+
+Frame dumps are capped (64 a run by default): a dump directory that fills a
+disk is a dump directory nobody reads. `input_script_tests` runs the language
+against a simulated game.
+
 ## Tests
 
 ```
@@ -499,6 +535,9 @@ The windowed host reads `RECOMP_EXE` too, and adds:
 | `RECOMP_HOST_D3D_NOCULL` | ignore `D3DRENDERSTATE_CULLMODE` |
 | `RECOMP_HOST_NO_AUDIO` | never start the audio engine |
 | `RECOMP_D3D11_SOFTWARE` | draw every Direct3D 11 call in the software rasterizer |
+| `RECOMP_INPUT_SCRIPT` | run this input script (`input_script.h`); the exit status is 7 when it did not finish |
+| `RECOMP_INPUT_SCRIPT_OUT` | where its `dump`s go (default: the script's path without its extension, plus `-frames`) |
+| `RECOMP_PRESENT_ACK_TRACE` | a CSV of every drawable's submission, GPU completion, presentation, skip and timeout |
 
 `RECOMP_LOG`, `RECOMP_IMPORT_STATS`, `RECOMP_CREATETHREAD` and the rest are the
 runtime's, documented in `runtime/README.md`.

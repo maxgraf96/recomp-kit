@@ -14,6 +14,28 @@
   from the game, `RECOMP_DMUSIC_GM`, the system's GS collection on macOS or
   the bundled GeneralUser GS. `dmusic_render` measures a game's segments
   offline.
+
+- Drive a running game without a person: scripted input
+  (`host/input_script.h`). A script moves, clicks, presses keys and writes
+  PNG frames, and waits on time, presented frames, a window message, the
+  picture changing or settling, a pixel's colour, a display size or the
+  game's pointer; every wait can fail the run with the line and the reason.
+  A game that draws its own cursor from an exclusive DirectInput mouse
+  names where it keeps it and clicks walk it there closed-loop. The
+  windowed app runs one from `RECOMP_INPUT_SCRIPT` through SDL's own event
+  queue; a headless boot host through `HeadlessSink`. `input_script_tests`
+  covers it.
+
+- A thread's windows are destroyed when it ends, without their window
+  procedures, as on Windows; `GetMonitorInfoA`; every DirectDraw 7 mode is
+  enumerated at 60 Hz; and a fullscreen program's Blt, BltFast or colour fill
+  onto the primary shows the whole primary rather than the rectangle it
+  touched. The windowed presenter no longer reports a drawable the display
+  skipped (presentedTime 0, as at start-up) as a lost acknowledgement, and
+  its grace is never shorter than five 60 Hz refreshes. The loader reads
+  import and export names whole instead of cutting them at 260 characters,
+  where two long C++ decorations sharing a prefix bound to the same export.
+
 - Play a Miles 6 game's sound effects the way Miles 6.1a does. The 17
   `mss32` imports a mixer plugin needed and the kit lacked -
   `AIL_open_digital_driver`/`close_digital_driver`, `get_DirectSound_info`,
