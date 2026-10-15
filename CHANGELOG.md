@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Show a fullscreen DirectDraw 7 program's GDI windows over its last frame
+  (`runtime/display_seam.h`), as a desktop compositor shows an owned popup -
+  a game's lobby after `FlipToGDISurface` - instead of over black and
+  replaced by the next frame. The program's last frame is layer 0, the
+  visible top-level windows stacked above its window are layer 1; showing,
+  hiding, moving or destroying a window presents again, so a hidden window
+  leaves no pixels behind. The windowed app composes the overlay on the GPU
+  (one BGRA texture, uploaded only when it changes; no readback), a headless
+  host gets the blend on the CPU. `FlipToGDISurface` marks the GDI surface
+  showing until the next `Flip`.
+- Owned windows stay above their owners (topmost with a topmost owner), and
+  hiding the active one activates its owner. A window created after the host
+  reported the focus is not made focused silently, so it gets the
+  `WM_SETFOCUS` its activation owes it. `SetTimer(hwnd, 0, ...)` keeps id 0;
+  `DefWindowProc(WM_CLOSE)` no longer posts `WM_QUIT` while a top-level
+  window remains; `CS_DBLCLKS` classes get `WM_xBUTTONDBLCLK`; `WM_MOUSEWHEEL`
+  goes to the focus window with screen coordinates; `GWL_HWNDPARENT` sets a
+  top-level window's owner. Closing the app sends `WM_CLOSE` to the window on
+  top that the main window owns (a lobby, a dialog) before the main window.
+- Scripted input: `pointer system` (absolute positions routed by
+  `WindowFromPoint`, from that step on) and `type TEXT`; a script's frames
+  include the GDI windows over a DirectDraw frame.
+
 - Build the windowed app with no translation in it, for a game to give away
   (`tools/build.py --target player` → `build/player/<app>.app`, CMake target
   `recomp_player`, preset `macos-player`). It loads the bundles a first run

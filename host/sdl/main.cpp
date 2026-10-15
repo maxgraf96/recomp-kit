@@ -1546,9 +1546,36 @@ class SdlScriptSink : public iscript::Sink {
 SdlScriptSink g_script_sink;
 bool g_script = false;
 
-void script_frame(const uint32_t *argb, int w, int h) {
-    iscript::host_pixels(argb, w, h);
+// The script sees what the screen shows: the Direct3D 7 frame (the tap) with
+// the program's GDI windows over it (runtime/display_seam.h). Both arrive on
+// the guest thread. While an overlay is up and nothing new is presented (a
+// lobby repaints only on change), the last composite is repeated.
+std::mutex g_script_mutex;
+std::vector<uint32_t> g_script_frame, g_script_shown;
+int g_script_w = 0, g_script_h = 0;
+uint64_t g_script_fed_ms = 0;
+void script_feed() {
+    if (g_script_frame.empty())
+        return;
+    std::vector<uint32_t> out = g_script_frame;
+    display_overlay_compose(out.data(), g_script_w, g_script_h);
+    iscript::host_pixels(out.data(), g_script_w, g_script_h);
+    std::lock_guard<std::mutex> lock(g_script_mutex);
+    g_script_shown = host_present_has_gdi_overlay() ? std::move(out) : std::vector<uint32_t>{};
+    g_script_fed_ms = SDL_GetTicks();
 }
+void script_frame(const uint32_t *argb, int w, int h) {
+    g_script_frame.assign(argb, argb + size_t(w) * size_t(h));
+    g_script_w = w;
+    g_script_h = h;
+    script_feed();
+}
+} // namespace
+extern "C" void host_display_overlay_changed() {
+    if (g_script)
+        script_feed();
+}
+namespace {
 
 // After the events of a pass: the script's next steps, whose events the next
 // pass delivers.
@@ -1557,6 +1584,13 @@ void tick_script() {
         return;
     iscript::Runner *r = iscript::host_runner();
     const bool was_running = r->running();
+    {
+        std::lock_guard<std::mutex> lock(g_script_mutex);
+        if (!g_script_shown.empty() && SDL_GetTicks() - g_script_fed_ms > 100) {
+            g_script_fed_ms = SDL_GetTicks();
+            iscript::host_pixels(g_script_shown.data(), g_script_w, g_script_h);
+        }
+    }
     iscript::host_tick(g_script_sink, host_present_count());
     if (was_running && !r->running()) {
         host_d7_set_frame_tap(nullptr);

@@ -282,8 +282,11 @@ void host_d7_shown(int w, int h) {
 extern "C" int host_display_overlay_supported() {
     return host_present_gpu_ready() ? 1 : 0;
 }
+// The windowed host's scripted input looks at what the screen shows.
+extern "C" __attribute__((weak)) void host_display_overlay_changed() {}
 extern "C" void host_display_present_overlay(const uint32_t *argb, int w, int h) {
     host_present_set_gdi_overlay(argb, w, h);
+    host_display_overlay_changed();
 }
 extern "C" void host_display_present_window(const uint32_t *argb, int w, int h) {
     if (!argb || w <= 0 || h <= 0)

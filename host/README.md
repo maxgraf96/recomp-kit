@@ -24,7 +24,7 @@ startup and never runs `WinMain`.
 | `headless_main.cpp` | the frame-writing host and its caps |
 | `sdl/main.cpp` | the window, the SDL event pump and the lifetime |
 | `present.{h,cpp}` | `host_present`: 8-bit and 5-6-5 expansion, the letterbox, the drawable |
-| `present_thread.cpp`, `present_frame.h` | the presenter: sealed frames, the target pool, the swapchain worker |
+| `present_thread.cpp`, `present_frame.h` | the presenter: sealed frames, the target pool, the swapchain worker; the GDI overlay texture composed over every frame (`host_present_set_gdi_overlay`) |
 | `compositor.{h,cpp}`, `performance_overlay.{h,cpp}` | world, UI and overlays composed onto the drawable; the FPS overlay |
 | `d3d_render.{h,cpp}` | the renderer behind `host_d3d_draw`, over `gpu/gpu.h` |
 | `gpu2d.cpp` | the Direct3D 11 hardware path: GPU copies of the shim's textures and render targets, the rectangles drawn into them, and the render target handed to the presenter |
@@ -432,6 +432,22 @@ gain measured from the last step, read back until within tolerance (or half
 the gain's step, for a game whose counts are coarser than a pixel). Nothing
 about the game's scaling, acceleration or motion history has to be known; a
 game that scales by the smallest count it has seen converges in two steps.
+
+A game can hand the system pointer to its own windows in between - a GDI
+lobby over a fullscreen frame, with the DirectInput mouse made non-exclusive.
+`pointer system` switches the script to absolute positions from that step on,
+delivered as host mouse events, so the window under the point gets them
+(`WindowFromPoint`), and a later `pointer f32 ...` switches back. `type TEXT`
+types the rest of its line: the key a US layout makes each character with
+(Shift included) and, in a boot host, the character itself as `WM_CHAR` in
+the window's code page (`VK_PACKET` + `WM_CHAR` for one no key makes).
+
+The frames a script sees are the screen's: in a boot host, every present,
+with the program's GDI windows composed over a DirectDraw 7 frame
+(`runtime/display_seam.h`) and repeated a few times a second while the
+program presents nothing (call `boot_present_windows` from the tick); in the
+windowed app, the Direct3D 7 tap's frames with the GDI overlay composed over
+them.
 
 Frame dumps are capped (64 a run by default): a dump directory that fills a
 disk is a dump directory nobody reads. `input_script_tests` runs the language
