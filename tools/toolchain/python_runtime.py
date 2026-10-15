@@ -23,7 +23,8 @@ The result is relocatable: it runs from any path, read-only ones included
 
 -I ignores PYTHON* variables, the user's site-packages and the script's
 directory; -B writes no bytecode beside anything it imports (the shipped
-.pyc files are read, never rewritten).
+.pyc files are read, never rewritten). A sitecustomize.py makes the second
+the default, for tools that start the interpreter with -I alone.
 """
 
 import argparse
@@ -55,6 +56,17 @@ TRIM = (
 )
 # Inside installed wheels: the C API headers capstone ships for C users.
 WHEEL_TRIM = ("capstone/include",)
+
+# site-packages/sitecustomize.py: an app's interpreter never writes bytecode,
+# even when a tool starts it without -B (-I ignores PYTHONDONTWRITEBYTECODE,
+# but still runs sitecustomize).
+SITECUSTOMIZE = '''"""This Python is part of a signed app: it never writes bytecode beside what it
+imports (recomp-kit tools/toolchain/python_runtime.py). The shipped .pyc files
+are read as they are."""
+import sys
+
+sys.dont_write_bytecode = True
+'''
 
 
 def short_version(version):
@@ -109,15 +121,21 @@ def install_wheel(wheel, site_packages):
         (site_packages / dist_info / "INSTALLER").write_text("recomp-kit\n")
 
 
-def compile_bytecode(python, *trees):
-    """Precompile `trees` as unchecked-hash .pyc with the staged interpreter itself."""
-    subprocess.run([str(python), "-I", "-m", "compileall", "-q", "-j", "0",
-                    "--invalidation-mode", "unchecked-hash"] + [str(t) for t in trees], check=True)
+def compile_bytecode(python, root, *trees):
+    """Precompile `trees` as unchecked-hash .pyc with the staged interpreter itself.
+
+    The file names compiled in are relative to `root`'s parent ("python/lib/..."),
+    not this machine's paths, so the files are the same wherever it was staged;
+    an import replaces them with the real path anyway."""
+    # -B: the interpreter's own start-up imports must not leave timestamp .pyc behind.
+    subprocess.run([str(python), "-I", "-B", "-m", "compileall", "-q", "-f", "-j", "0",
+                    "--invalidation-mode", "unchecked-hash", "-s", str(root), "-p", root.name]
+                   + [str(t) for t in trees], check=True)
 
 
 SELF_TEST = r"""
 import importlib.metadata as md, sys, tomllib, capstone, pefile
-assert sys.flags.isolated and sys.dont_write_bytecode, sys.flags
+assert sys.flags.isolated and sys.dont_write_bytecode, (sys.flags, sys.dont_write_bytecode)
 pins = dict(arg.split("=", 1) for arg in sys.argv[1:])
 for name, version in pins.items():
     assert md.version(name) == version, (name, md.version(name), version)
@@ -129,10 +147,13 @@ print("python %s, capstone %s, pefile %s" % (sys.version.split()[0], md.version(
 
 
 def self_test(python, wheels):
-    """The staged interpreter imports the pinned packages and decodes x86."""
+    """The staged interpreter imports the pinned packages and decodes x86, with
+    -B and without it (sitecustomize then keeps it from writing bytecode)."""
     args = ["%s=%s" % (w["name"], w["version"]) for w in wheels]
-    out = subprocess.run([str(python), "-I", "-B", "-c", SELF_TEST] + args, check=True,
-                         capture_output=True, text=True).stdout.strip()
+    out = ""
+    for flags in (["-I", "-B"], ["-I"]):
+        out = subprocess.run([str(python)] + flags + ["-c", SELF_TEST] + args, check=True,
+                             capture_output=True, text=True).stdout.strip()
     return out
 
 
@@ -146,12 +167,13 @@ def stage(cache, out, strip=True, sign=True):
     for wheel_pin in pins["wheels"]:
         install_wheel(fetch.fetch(wheel_pin, cache), site_packages)
     remove(site_packages, WHEEL_TRIM, pin["version"])
+    (site_packages / "sitecustomize.py").write_text(SITECUSTOMIZE)
     if strip:
         macho_files.strip_local_symbols(out)
     if sign:
         macho_files.sign_ad_hoc(out)
     python = out / "bin" / "python3"
-    compile_bytecode(python, out / "lib")
+    compile_bytecode(python, out, out / "lib")
     print("python_runtime: %s" % self_test(python, pins["wheels"]), flush=True)
     return python
 

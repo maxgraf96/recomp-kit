@@ -19,9 +19,11 @@ Every text is read from where that component's own release puts it: the
 pinned LLVM source archive, the staged Python runtime and wheels, the kit's
 third_party/ directory, or a pinned download (URL and SHA-256 below). Nothing
 is paraphrased: a component whose terms ask for its notice gets the notice.
+A game repository adds what its own app carries with --extra (load_extra).
 """
 
 import argparse
+import json
 from pathlib import Path
 import sys
 import tarfile
@@ -45,6 +47,7 @@ def url(path, sha256):
 #   ("kit", path)             a file of this kit
 #   ("url", url, sha256)      a pinned download
 #   ("sdist", pin, member)    a member of a pinned source archive
+#   ("file", path)            a file a game repository names (load_extra)
 COMPONENTS = [
     # -- the toolchain ------------------------------------------------------
     dict(key="llvm", group="toolchain", title="LLVM 23.1.3: clang, lld and LLVM",
@@ -216,6 +219,8 @@ class Sources(object):
             pin = {"url": source[1], "sha256": source[2],
                    "file": "notice-" + source[1][len(RAW):].replace("/", "_")}
             return fetch.fetch(pin, self.cache).read_text(encoding="utf-8")
+        if kind == "file":
+            return Path(source[1]).read_text(encoding="utf-8")
         if kind == "sdist":
             archive_path = fetch.fetch(SDISTS[source[1]], self.cache)
             with tarfile.open(archive_path) as archive:
@@ -225,6 +230,24 @@ class Sources(object):
 
 def selected(groups):
     return [c for c in COMPONENTS if c["group"] in groups]
+
+
+def load_extra(path):
+    """A game repository's own shipped components, from a JSON list like COMPONENTS
+    ({"title", "licence", "source", "shipped", "note"?, "texts": [file, ...]});
+    each text is a path relative to the JSON file."""
+    path = Path(path)
+    extra = []
+    for c in json.loads(path.read_text()):
+        missing = {"title", "licence", "source", "shipped", "texts"} - set(c)
+        if missing:
+            raise SystemExit("notices: %s: a component lacks %s" % (path, ", ".join(sorted(missing))))
+        texts = [("file", str((path.parent / t).resolve())) for t in c["texts"]]
+        for kind, file in texts:
+            if not Path(file).is_file():
+                raise SystemExit("notices: %s names %s, which does not exist" % (path, file))
+        extra.append(dict(c, key=c.get("key", c["title"]), group="extra", texts=texts))
+    return extra
 
 
 def render(components, sources, title):
@@ -247,13 +270,16 @@ def render(components, sources, title):
             label = source[1] if source[0] != "url" else source[1][len(RAW):]
             if source[0] == "sdist":
                 label = source[2]
+            if source[0] == "file":
+                label = Path(source[1]).name           # not this machine's path
             out += ["", thin, label, thin, sources.text(source).rstrip("\n")]
         out.append("")
     return "\n".join(out) + "\n"
 
 
-def write(out, cache, python_dir, groups=("toolchain", "host"), title="THIRD-PARTY NOTICES"):
-    text = render(selected(groups), Sources(cache, python_dir), title)
+def write(out, cache, python_dir, groups=("toolchain", "host"), title="THIRD-PARTY NOTICES", extra=()):
+    components = selected(groups) + [c for path in extra for c in load_extra(path)]
+    text = render(components, Sources(cache, python_dir), title)
     Path(out).write_text(text, encoding="utf-8")
     return out
 
@@ -264,9 +290,11 @@ def main(argv=None):
     parser.add_argument("--python", type=Path, help="the staged python/ directory")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--no-host", action="store_true", help="only the toolchain's components")
+    parser.add_argument("--extra", type=Path, action="append", default=[],
+                        help="a JSON list of further components the app ships (load_extra)")
     args = parser.parse_args(argv)
     groups = ("toolchain",) if args.no_host else ("toolchain", "host")
-    write(args.out, args.cache, args.python, groups)
+    write(args.out, args.cache, args.python, groups, extra=args.extra)
     print("notices: %s" % args.out)
     return 0
 

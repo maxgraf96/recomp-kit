@@ -197,6 +197,23 @@ def test_the_notices_file_carries_every_text(tmp_path):
     assert (ROOT / "third_party/lua/LICENSE").read_text().strip() in text
 
 
+def test_a_game_adds_its_own_components_to_the_notices(tmp_path):
+    (tmp_path / "licenses").mkdir()
+    (tmp_path / "licenses/tool-LICENSE.txt").write_text("Tool licence text\n")
+    spec = tmp_path / "extra.json"
+    spec.write_text(json.dumps([{"title": "tool 1.0", "licence": "Zlib", "source": "https://example.org/tool",
+                                 "shipped": "Contents/Resources/bin/tool",
+                                 "texts": ["licenses/tool-LICENSE.txt"]}]))
+    extra = notices.load_extra(spec)
+    assert extra[0]["group"] == "extra" and extra[0]["texts"][0][0] == "file"
+    text = notices.render(extra, notices.Sources(tmp_path, None), "NOTICES")
+    assert "1. tool 1.0" in text and "Tool licence text" in text and str(tmp_path) not in text
+    spec.write_text(json.dumps([{"title": "tool", "licence": "Zlib", "source": "x", "shipped": "y",
+                                 "texts": ["licenses/missing.txt"]}]))
+    with pytest.raises(SystemExit, match="does not exist"):
+        notices.load_extra(spec)
+
+
 def test_the_pgo_corpus_is_deterministic_and_translator_shaped(tmp_path):
     pytest.importorskip("unicorn")                     # the synthetic cases' module imports it
     import pgo
@@ -253,6 +270,28 @@ def test_the_staged_tree_is_what_its_manifest_says(staged):
     assert record["schema"] == "recomp-toolchain/1"
     assert stage.manifest(staged) == record["files"]
     assert (staged / "llvm/bin/clang").resolve() == (staged / "llvm/bin/llvm").resolve()
+
+
+def test_the_staged_clang_looks_for_no_sdk(staged, tmp_path):
+    """No SDK default and no configuration file: with nothing in the environment
+    the driver plans no sysroot, SDK version or SDKSettings.json read."""
+    clang = staged / "llvm/bin/clang"
+    flags = bundle.compile_flags(str(clang), tmp_path, tmp_path, ["GUEST_SIZE=0x10000000u"], "13.0")
+    (tmp_path / "probe.c").write_text("int probe(void) { return 0; }\n")
+    plan = subprocess.run([str(clang), "-###"] + flags[1:] + ["-c", str(tmp_path / "probe.c")],
+                          env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True, check=True).stderr
+    for word in ("-isysroot", "-target-sdk-version", "SDKSettings", "CommandLineTools", "Xcode"):
+        assert word not in plan, word
+
+
+def test_the_staged_python_writes_no_bytecode_even_without_dash_b(staged, tmp_path):
+    """A tool that starts the interpreter with -I alone still writes no __pycache__."""
+    (tmp_path / "imported_module.py").write_text("VALUE = 42\n")
+    code = "import sys; sys.path.insert(0, %r); import imported_module; print(imported_module.VALUE)" % str(tmp_path)
+    out = subprocess.run([str(staged / "python/bin/python3"), "-I", "-c", code], env={"PATH": "/usr/bin:/bin"},
+                         check=True, capture_output=True, text=True).stdout
+    assert out.strip() == "42"
+    assert not (tmp_path / "__pycache__").exists()
 
 
 def snapshot(root):

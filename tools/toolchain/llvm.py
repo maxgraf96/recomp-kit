@@ -145,7 +145,8 @@ def probe_resource_headers(clang, scratch):
                      "int recomp_probe(void) { return 0; }\n")
     defines = ["GUEST_IMAGE_BASE=0x00400000u", "GUEST_HEAP_BASE=0x01000000u", "GUEST_SIZE=0x10000000u"]
     flags = bundle.compile_flags(str(clang), scratch, scratch, defines, DEPLOYMENT_TARGET)
-    subprocess.run([str(clang)] + flags + ["-MD", "-MF", str(dep), "-c", str(probe), "-o", str(obj)], check=True)
+    subprocess.run([str(clang)] + flags + ["-MD", "-MF", str(dep), "-c", str(probe), "-o", str(obj)], check=True,
+                   env=bundle.tool_env())
     include = (resource / "include").resolve()
     used = set()
     for word in dep.read_text().replace("\\\n", " ").split(":", 1)[1].split():

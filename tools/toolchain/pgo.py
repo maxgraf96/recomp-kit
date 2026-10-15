@@ -115,7 +115,8 @@ def train(clang, lld, sources, objdir, jobs):
 
     def one(source):
         obj = objdir / (source.stem + ".o")
-        subprocess.run([str(clang)] + flags + ["-c", str(source), "-o", str(obj)], check=True)
+        subprocess.run([str(clang)] + flags + ["-c", str(source), "-o", str(obj)], check=True,
+                       env=bundle.tool_env())
         return obj
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
@@ -123,7 +124,7 @@ def train(clang, lld, sources, objdir, jobs):
     target = objdir / "corpus.bundle"
     subprocess.run([str(lld), "-arch", "arm64", "-platform_version", "macos", MIN_MACOS, MIN_MACOS,
                     "-bundle", "-undefined", "dynamic_lookup", "-o", str(target)] + [str(o) for o in objects],
-                   check=True)
+                   check=True, env=bundle.tool_env())
     return target
 
 

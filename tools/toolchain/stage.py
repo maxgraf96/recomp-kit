@@ -3,6 +3,7 @@
 
     tools/toolchain/stage.py --out DIR [--cache DIR] [--work DIR] [--jobs N] [--nice N]
                              [--profile FILE] [--no-pgo] [--keep-build] [--no-host-notices]
+                             [--notices-extra JSON ...]
 
 Everything comes from pinned upstream artifacts (pins.json), verified by
 SHA-256, and is built, trimmed, stripped and signed ad hoc on this Mac (the
@@ -113,7 +114,8 @@ def check_links(out):
             raise SystemExit("stage: %s loads %s, which is neither macOS's nor staged" % (path, name))
 
 
-def stage(out, cache, work, jobs, nice, use_pgo=True, profile=None, keep_build=False, host_notices=True):
+def stage(out, cache, work, jobs, nice, use_pgo=True, profile=None, keep_build=False, host_notices=True,
+          notices_extra=()):
     started = time.time()
     out = out.resolve()
     if out.exists():
@@ -129,7 +131,7 @@ def stage(out, cache, work, jobs, nice, use_pgo=True, profile=None, keep_build=F
         shutil.rmtree(build_dir)
     log("notices")
     groups = ("toolchain", "host") if host_notices else ("toolchain",)
-    notices.write(out / "THIRD_PARTY_NOTICES.txt", cache, out / "python", groups)
+    notices.write(out / "THIRD_PARTY_NOTICES.txt", cache, out / "python", groups, extra=notices_extra)
     macho_files.verify_signatures(out)
     check_links(out)
     pins = fetch.load_pins()
@@ -161,10 +163,13 @@ def main(argv=None):
     parser.add_argument("--keep-build", action="store_true")
     parser.add_argument("--no-host-notices", action="store_true",
                         help="notices for the toolchain only, not the macOS host app")
+    parser.add_argument("--notices-extra", type=Path, action="append", default=[],
+                        help="a JSON list of the game's own shipped components (notices.load_extra)")
     args = parser.parse_args(argv)
     stage(args.out, args.cache.resolve(), (args.work or args.cache / "work").resolve(), args.jobs, args.nice,
           use_pgo=not args.no_pgo, profile=args.profile.resolve() if args.profile else None,
-          keep_build=args.keep_build, host_notices=not args.no_host_notices)
+          keep_build=args.keep_build, host_notices=not args.no_host_notices,
+          notices_extra=[p.resolve() for p in args.notices_extra])
     return 0
 
 
