@@ -11,6 +11,8 @@
 #include "../msvcrt_internal.h"
 #include "../../platform/os.h"
 #include <algorithm>
+#include <cmath>
+#include <functional>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -405,7 +407,7 @@ static void test_text() {
     memset(g_mem + s, 0, 92);
     wr32(s, uint32_t(-32));
     wr32(s + 16, 700);
-    gm_put_wstr(s + 28, "recomp", 32);
+    gm_put_wstr(s + 28, "Terminal", 32); // a raster face: the bitmap cells
     uint32_t font = call_import(&c, "GDI32.dll", "CreateFontIndirectW", {s});
     check(font != 0, "CreateFontIndirectW");
     call_import(&c, "GDI32.dll", "SelectObject", {dc, font});
@@ -1107,8 +1109,9 @@ static void test_memory_truetype_font() {
 // registers it - the VCL's default font does exactly that - gets the bundled
 // Open Sans: its proportional advances, and the semibold at weight 600 or
 // more. At a 100-pixel em (2048 units) Open Sans 'i' is 518 units, 25 px, and
-// 'W' 1896, 93; the semibold's are 571 and 1937, 28 and 95. A fixed-pitch or
-// unknown face keeps the 8x16 cells, six times over at this height.
+// 'W' 1896, 93; the semibold's are 571 and 1937, 28 and 95. A fixed-pitch face
+// keeps the 8x16 cells, six times over at this height; an unknown one is the
+// sans GDI's mapper would give it, unless its pitch asks for fixed.
 static void test_windows_face_substitute() {
     X86 c;
     loader_init_context(&c);
@@ -1116,10 +1119,11 @@ static void test_windows_face_substitute() {
     uint32_t hwnd = make_test_window(&c, s, 256, 128);
     uint32_t dc = call_import(&c, "USER32.dll", "GetDC", {hwnd});
     gm_put_wstr(s + 0x200, "iW", 8);
-    auto width = [&](const char *face, uint32_t weight) {
+    auto width = [&](const char *face, uint32_t weight, uint8_t pitch_family = 0) {
         memset(g_mem + s + 0x100, 0, 92);
         wr32(s + 0x100, uint32_t(-100));
         wr32(s + 0x100 + 16, weight);
+        wr8(s + 0x100 + 27, pitch_family);
         gm_put_wstr(s + 0x100 + 28, face, 32);
         uint32_t font = call_import(&c, "GDI32.dll", "CreateFontIndirectW", {s + 0x100});
         uint32_t old = call_import(&c, "GDI32.dll", "SelectObject", {dc, font});
@@ -1135,7 +1139,11 @@ static void test_windows_face_substitute() {
           "the face name is matched without case, and weight 0 is regular (%u)", w);
     check((w = width("Tahoma", 700)) == 123, "a bold request takes the semibold (%u)", w);
     check((w = width("Courier New", 400)) == 96, "a fixed-pitch face keeps the 8x16 cells (%u)", w);
-    check((w = width("RecompUnknown", 400)) == 96, "an unknown face keeps the 8x16 cells (%u)", w);
+    check((w = width("RecompUnknown", 400)) == 118,
+          "an unknown face is drawn with the bundled sans, never the cells (%u)", w);
+    check((w = width("TimesRoman", 700)) == 123, "TimesRoman too, as Windows 11 maps it (%u)", w);
+    check((w = width("RecompUnknown", 400, 0x31 /* FIXED_PITCH | FF_MODERN */)) == 96,
+          "an unknown fixed-pitch face keeps the cells (%u)", w);
     call_import(&c, "USER32.dll", "ReleaseDC", {hwnd, dc});
     call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
 }
@@ -1244,9 +1252,11 @@ static void test_gdi_metrics() {
           m.ascent);
     with(font_a(&c, s, 40, 400, "WinMetricTest"));
     m = metrics_a(&c, dc, s + 0x100);
-    check(m.height == 41 && m.ascent == 33 && m.descent == 8,
-          "+40: past VDMX, em = MulDiv(2048, 40, 2288) = 36 (%d %d %d)", m.height, m.ascent,
-          m.descent);
+    check(m.height == 40 && m.ascent == 32 && m.descent == 8 && m.internal == 4,
+          "+40: past VDMX, em = MulDiv(2048, 40, 2288) = 36, and the cell (40) split by the "
+          "Windows ascent, MulDiv(1854, 40, 2288) = 32, as Windows 11 measures Tahoma "
+          "(%d %d %d %d)",
+          m.height, m.ascent, m.descent, m.internal);
 
     // GetObjectA answers a LOGFONTA.
     const uint32_t font = font_a(&c, s, -12, 700, "WinMetricTest");
@@ -1481,7 +1491,10 @@ static void test_system_fonts() {
     };
     // The family name chooses a face, the weight the nearest one in it.
     TextMetricA m = realize(-12, 700, "MetricFamilyNotRegistered", 0);
-    check(m.height == 16 && m.weight == 700, "an unknown face keeps the 8x16 cells (%d)", m.height);
+    check(m.height == 17 && m.ascent == 13,
+          "an unknown face with no Arial installed to map it to is the bundled sans, not the "
+          "8x16 cells (%d %d)",
+          m.height, m.ascent);
     // The memory font registered by test_gdi_metrics shares the family name
     // and would win a family match, so ask by the bold face's full name.
     m = realize(-12, 400, "WinMetricTest Bold", 0);
@@ -1537,6 +1550,30 @@ static void test_installed_windows_faces() {
         TextMetricA m = metrics_a(&c, dc, s + 0x100);
         check(m.height == k.want_height && m.ascent == k.want_ascent && m.descent == k.want_descent,
               "%s %d: %d %d %d", k.face, k.height, m.height, m.ascent, m.descent);
+    }
+    // A toolkit's Tahoma at 10, 11, 12, 16 and 24 points (MulDiv(pt, 96, 72)),
+    // as Windows 11 reports them: Tahoma's only VDMX group is for all glyphs,
+    // not the Windows ANSI subset, so its Windows ascent and descent decide.
+    struct {
+        int32_t height;
+        uint32_t weight, italic;
+        int32_t want_height, want_ascent, want_descent, want_internal, want_ave;
+    } tahoma[] = {
+        {-13, 400, 0, 16, 13, 3, 3, 6},  {-13, 700, 0, 16, 13, 3, 3, 7},
+        {-13, 400, 1, 16, 13, 3, 3, 6},  {-15, 700, 0, 18, 15, 3, 3, 8},
+        {-16, 700, 0, 19, 16, 3, 3, 8},  {-21, 700, 0, 25, 21, 4, 4, 11},
+        {-32, 700, 0, 39, 32, 7, 7, 16},
+    };
+    for (const auto &k : tahoma) {
+        call_import(&c, "GDI32.dll", "SelectObject",
+                    {dc, font_a(&c, s, k.height, k.weight, "Tahoma", k.italic)});
+        TextMetricA m = metrics_a(&c, dc, s + 0x100);
+        check(m.height == k.want_height && m.ascent == k.want_ascent &&
+                  m.descent == k.want_descent && m.internal == k.want_internal &&
+                  m.ave == k.want_ave,
+              "Tahoma %d/%u%s: %d %d %d %d %d, Windows 11 %d %d %d %d %d", k.height, k.weight,
+              k.italic ? " italic" : "", m.height, m.ascent, m.descent, m.internal, m.ave,
+              k.want_height, k.want_ascent, k.want_descent, k.want_internal, k.want_ave);
     }
     // Bold comes from the installed bold face, not a simulation.
     check(gdi::truetype_system_face("Arial", 700, false, &synth_bold, &synth_italic) && !synth_bold,
@@ -1649,6 +1686,283 @@ static int capture_metrics(const char *cases, const char *out_path) {
     return g_failures ? 1 : 0;
 }
 
+// ---------------------------------------------------------------------------
+// Arc, Chord, Pie, ArcTo and AngleArc against a reference raster written here
+// from GDI's documented rules: the ellipse inscribed in the rectangle (right
+// and bottom edges excluded, pixels taken at their centres, the outline being
+// the inside pixels with a 4-neighbour outside, as Ellipse draws it); the arc
+// runs counterclockwise on the screen (AD_COUNTERCLOCKWISE) from the ray
+// through the start point to the ray through the end point, or clockwise
+// after SetArcDirection(AD_CLOCKWISE), the same point twice being the whole
+// ellipse; Chord closes it with the line between the arc's ends and fills
+// the part on the arc's side, Pie closes it with the two radii and fills the
+// wedge.
+// ---------------------------------------------------------------------------
+namespace {
+struct RefEllipse {
+    double cx, cy, rx, ry;
+    RefEllipse(int l, int t, int r, int b)
+        : cx((l + r) / 2.0), cy((t + b) / 2.0), rx((r - l) / 2.0), ry((b - t) / 2.0) {}
+    bool inside(int x, int y) const {
+        const double u = (x + 0.5 - cx) / rx, v = (y + 0.5 - cy) / ry;
+        return u * u + v * v <= 1.0;
+    }
+    bool outline(int x, int y) const {
+        return inside(x, y) &&
+               !(inside(x - 1, y) && inside(x + 1, y) && inside(x, y - 1) && inside(x, y + 1));
+    }
+    double angle(double x, double y) const {
+        return std::atan2(cy - y, x - cx);
+    } // y up
+    // From angle a counterclockwise to angle b, a whole turn when they agree.
+    static bool between(double v, double a, double b) {
+        const double turn = 2 * 3.14159265358979323846;
+        double sweep = std::fmod(b - a, turn), d = std::fmod(v - a, turn);
+        if (sweep <= 0)
+            sweep += turn;
+        if (d < 0)
+            d += turn;
+        return d <= sweep;
+    }
+    std::pair<double, double> on_ray(double a) const {
+        const double dx = std::cos(a), dy = -std::sin(a);
+        const double t = 1 / std::sqrt(dx * dx / (rx * rx) + dy * dy / (ry * ry));
+        return {cx + t * dx, cy + t * dy};
+    }
+};
+
+struct Canvas {
+    X86 *c;
+    uint32_t dc = 0, bits = 0;
+    int w = 64, h = 48;
+    void clear() {
+        for (int i = 0; i < w * h; ++i)
+            wr32(bits + 4 * uint32_t(i), 0xffffffffu);
+    }
+    uint32_t at(int x, int y) const {
+        return rd32(bits + 4 * uint32_t(y * w + x)) & 0xffffff;
+    }
+};
+
+Canvas make_canvas(X86 *c, uint32_t s) {
+    Canvas k{c};
+    k.dc = call_import(c, "GDI32.dll", "CreateCompatibleDC", {0});
+    memset(g_mem + s, 0, 40);
+    wr32(s, 40);
+    wr32(s + 4, uint32_t(k.w));
+    wr32(s + 8, uint32_t(-k.h)); // top-down
+    wr16(s + 12, 1);
+    wr16(s + 14, 32);
+    uint32_t dib = call_import(c, "GDI32.dll", "CreateDIBSection", {k.dc, s, 0, s + 64, 0, 0});
+    k.bits = rd32(s + 64);
+    call_import(c, "GDI32.dll", "SelectObject", {k.dc, dib});
+    k.clear();
+    return k;
+}
+
+// Pixels where the canvas differs from `want` (colour or white).
+int differences(const Canvas &k, const std::function<uint32_t(int, int)> &want,
+                std::string *first) {
+    int n = 0;
+    for (int y = 0; y < k.h; ++y)
+        for (int x = 0; x < k.w; ++x)
+            if (k.at(x, y) != want(x, y) && n++ == 0 && first) {
+                char buf[96];
+                snprintf(buf, sizeof buf, "(%d,%d) is %06x, want %06x", x, y, k.at(x, y),
+                         want(x, y));
+                *first = buf;
+            }
+    return n;
+}
+} // namespace
+
+static void test_arcs() {
+    X86 c;
+    loader_init_context(&c);
+    const uint32_t s = 0x00305000;
+    Canvas k = make_canvas(&c, s);
+    auto gdi = [&](const char *name, const std::vector<uint32_t> &args) {
+        return call_import(&c, "GDI32.dll", name, args);
+    };
+    const uint32_t red = gdi("CreatePen", {0, 1, 0x0000ff}); // COLORREF: red
+    const uint32_t null_pen = gdi("GetStockObject", {8});
+    const uint32_t null_brush = gdi("GetStockObject", {5});
+    const uint32_t blue = gdi("CreateSolidBrush", {0xff0000});
+    gdi("SelectObject", {k.dc, red});
+    gdi("SelectObject", {k.dc, null_brush});
+    const int L = 4, T = 4, R = 60, B = 44;
+    const RefEllipse e(L, T, R, B);
+    std::string first;
+    const uint32_t white = 0xffffff, redpx = 0xff0000, bluepx = 0x0000ff;
+    auto ray = [&](int x, int y) { return e.angle(x + 0.5, y + 0.5); };
+
+    // Arc: counterclockwise from the right (60, 24) to the top (32, 4): the
+    // upper right quarter of the outline and nothing else.
+    check(gdi("Arc", {k.dc, L, T, R, B, 60, 24, 32, 4}) == 1, "Arc");
+    const double a0 = ray(60, 24), a1 = ray(32, 4);
+    int diff = differences(
+        k,
+        [&](int x, int y) {
+            return e.outline(x, y) && RefEllipse::between(e.angle(x + .5, y + .5), a0, a1) ? redpx
+                                                                                           : white;
+        },
+        &first);
+    check(diff == 0, "Arc draws the counterclockwise quarter of the ellipse's outline (%d off: %s)",
+          diff, first.c_str());
+
+    // Clockwise, the same two points: the other three quarters.
+    k.clear();
+    check(gdi("GetArcDirection", {k.dc}) == 1, "AD_COUNTERCLOCKWISE by default");
+    check(gdi("SetArcDirection", {k.dc, 2}) == 1, "SetArcDirection returns the old direction");
+    check(gdi("SetArcDirection", {k.dc, 3}) == 0, "and refuses a bad one");
+    gdi("Arc", {k.dc, L, T, R, B, 60, 24, 32, 4});
+    diff = differences(
+        k,
+        [&](int x, int y) {
+            return e.outline(x, y) && RefEllipse::between(e.angle(x + .5, y + .5), a1, a0) ? redpx
+                                                                                           : white;
+        },
+        &first);
+    check(diff == 0, "AD_CLOCKWISE draws the rest (%d off: %s)", diff, first.c_str());
+    gdi("SetArcDirection", {k.dc, 1});
+
+    // The same point twice is the whole ellipse: Ellipse's outline exactly.
+    k.clear();
+    gdi("Arc", {k.dc, L, T, R, B, 10, 10, 10, 10});
+    diff = differences(k, [&](int x, int y) { return e.outline(x, y) ? redpx : white; }, &first);
+    check(diff == 0, "a repeated point draws the whole outline (%d off: %s)", diff, first.c_str());
+    k.clear();
+    gdi("Ellipse", {k.dc, L, T, R, B});
+    diff = differences(k, [&](int x, int y) { return e.outline(x, y) ? redpx : white; }, &first);
+    check(diff == 0, "which is Ellipse's (%d off: %s)", diff, first.c_str());
+
+    // Pie and Chord fills, with no pen: from the right (60, 24) counterclockwise
+    // to the lower left (8, 40), a little over half the ellipse.
+    gdi("SelectObject", {k.dc, null_pen});
+    gdi("SelectObject", {k.dc, blue});
+    const double p0 = ray(60, 24), p1 = ray(8, 40);
+    k.clear();
+    check(gdi("Pie", {k.dc, L, T, R, B, 60, 24, 8, 40}) == 1, "Pie");
+    diff = differences(
+        k,
+        [&](int x, int y) {
+            return e.inside(x, y) && RefEllipse::between(e.angle(x + .5, y + .5), p0, p1) ? bluepx
+                                                                                          : white;
+        },
+        &first);
+    check(diff == 0, "Pie fills the wedge (%d off: %s)", diff, first.c_str());
+    k.clear();
+    check(gdi("Chord", {k.dc, L, T, R, B, 60, 24, 8, 40}) == 1, "Chord");
+    const auto cs = e.on_ray(p0), ce = e.on_ray(p1);
+    double sweep = std::fmod(p1 - p0, 2 * 3.14159265358979323846);
+    if (sweep <= 0)
+        sweep += 2 * 3.14159265358979323846;
+    const auto cm = e.on_ray(p0 + sweep / 2);
+    auto side = [&](double x, double y) {
+        return (ce.first - cs.first) * (y - cs.second) - (ce.second - cs.second) * (x - cs.first);
+    };
+    diff = differences(
+        k,
+        [&](int x, int y) {
+            const double sd = side(x + .5, y + .5);
+            return e.inside(x, y) && (sd == 0 || (sd > 0) == (side(cm.first, cm.second) > 0))
+                       ? bluepx
+                       : white;
+        },
+        &first);
+    check(diff == 0, "Chord fills the arc's side of the chord (%d off: %s)", diff, first.c_str());
+
+    // With the pen: Pie's radii meet at the centre, Chord's chord joins the
+    // arc's ends, and both outlines lie on the ellipse.
+    gdi("SelectObject", {k.dc, red});
+    k.clear();
+    gdi("Pie", {k.dc, L, T, R, B, 60, 24, 32, 4});
+    check(k.at(32, 24) == redpx && k.at(46, 24) == redpx && k.at(32, 14) == redpx,
+          "Pie's radii run from the centre to both ends");
+    check(k.at(40, 18) == bluepx && k.at(20, 30) == white, "and the wedge alone is filled");
+    k.clear();
+    gdi("Chord", {k.dc, L, T, R, B, 60, 24, 32, 4});
+    const auto c0 = e.on_ray(ray(60, 24)), c1 = e.on_ray(ray(32, 4));
+    const int mx = int(std::floor((c0.first + c1.first) / 2)),
+              my = int(std::floor((c0.second + c1.second) / 2));
+    bool chord_line = false;
+    for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx)
+            chord_line = chord_line || k.at(mx + dx, my + dy) == redpx;
+    check(chord_line, "Chord's line passes the middle of the chord");
+    check(k.at(32, 24) == white, "and the centre stays outside it");
+
+    // ArcTo: a line from the current position to the arc's start, the arc, and
+    // the current position at its end. AngleArc too, by angles.
+    gdi("SelectObject", {k.dc, null_brush});
+    k.clear();
+    gdi("MoveToEx", {k.dc, 0, 24, 0});
+    check(gdi("ArcTo", {k.dc, L, T, R, B, 4, 24, 32, 44}) == 1, "ArcTo");
+    check(k.at(1, 24) == redpx, "ArcTo's line from the current position");
+    check(gdi("MoveToEx", {k.dc, 0, 0, s + 0x200}) == 1, "MoveToEx");
+    const auto end = e.on_ray(ray(32, 44));
+    check(int32_t(rd32(s + 0x200)) == int(std::floor(end.first)) &&
+              int32_t(rd32(s + 0x204)) == std::min(B - 1, int(std::floor(end.second))),
+          "ArcTo leaves the current position at the arc's end (%d,%d)", int32_t(rd32(s + 0x200)),
+          int32_t(rd32(s + 0x204)));
+    k.clear();
+    gdi("MoveToEx", {k.dc, 32, 24, 0});
+    float start = 0, turn = 90;
+    uint32_t start_bits, turn_bits;
+    memcpy(&start_bits, &start, 4);
+    memcpy(&turn_bits, &turn, 4);
+    check(gdi("AngleArc", {k.dc, 32, 24, 10, start_bits, turn_bits}) == 1, "AngleArc");
+    gdi("MoveToEx", {k.dc, 0, 0, s + 0x200});
+    check(int32_t(rd32(s + 0x200)) == 32 && int32_t(rd32(s + 0x204)) == 14,
+          "AngleArc ends a quarter turn up (%d,%d)", int32_t(rd32(s + 0x200)),
+          int32_t(rd32(s + 0x204)));
+    check(k.at(36, 24) == redpx && k.at(39, 17) == redpx && k.at(25, 31) == white,
+          "the line to the start, and the upper right quarter of the circle only");
+
+    gdi("SelectObject", {k.dc, null_pen});
+    gdi("DeleteObject", {red});
+    gdi("DeleteObject", {blue});
+    gdi("DeleteDC", {k.dc});
+}
+
+// A program that makes a pen and a brush per colour change and deletes the
+// old ones, as a toolkit setting its colour per draw does: hundreds of
+// thousands of handles later the object table is the size it started.
+static void test_pen_brush_churn() {
+    X86 c;
+    loader_init_context(&c);
+    auto gdi = [&](const char *name, const std::vector<uint32_t> &args) {
+        return call_import(&c, "GDI32.dll", name, args);
+    };
+    const uint32_t dc = gdi("CreateCompatibleDC", {0});
+    const size_t before = gdi::objects().size();
+    uint32_t pen = gdi("CreatePen", {0, 0, 0}), brush = gdi("CreateSolidBrush", {0});
+    const uint32_t old_pen = gdi("SelectObject", {dc, pen}),
+                   old_brush = gdi("SelectObject", {dc, brush});
+    const uint32_t first_pen = pen;
+    bool ok = true;
+    for (uint32_t i = 1; i <= 200000 && ok; ++i) {
+        const uint32_t colour = i * 2654435761u & 0xffffff;
+        const uint32_t new_brush = gdi("CreateSolidBrush", {colour}),
+                       new_pen = gdi("CreatePen", {0, 0, colour});
+        ok = new_brush && new_pen && gdi("SelectObject", {dc, new_brush}) == brush &&
+             gdi("SelectObject", {dc, new_pen}) == pen && gdi("DeleteObject", {brush}) &&
+             gdi("DeleteObject", {pen});
+        brush = new_brush;
+        pen = new_pen;
+    }
+    check(ok, "200000 colour changes: create, select, delete");
+    check(gdi::objects().size() == before + 2,
+          "the object table holds the two in use (%zu, was %zu)", gdi::objects().size(), before);
+    check(gdi::objects().count(first_pen) == 0, "a deleted pen is gone");
+    gdi("SelectObject", {dc, old_pen});
+    gdi("SelectObject", {dc, old_brush});
+    gdi("DeleteObject", {pen});
+    gdi("DeleteObject", {brush});
+    check(gdi::objects().size() == before, "and none once those go too");
+    gdi("DeleteDC", {dc});
+}
+
 int main(int argc, char **argv) {
     if (argc == 4 && strcmp(argv[1], "--capture") == 0) {
         mem_init();
@@ -1670,6 +1984,8 @@ int main(int argc, char **argv) {
     }
     if (argc < 2 || strcmp(argv[1], "model") != 0) {
         test_drawing();
+        test_arcs();
+        test_pen_brush_churn();
         test_mono_conversion();
         test_layered_window();
         test_msimg32();

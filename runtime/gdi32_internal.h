@@ -23,6 +23,7 @@ struct DcState {
     uint32_t text_color = 0, bk_color = 0xffffff;
     int bk_mode = 2, rop2 = 13, stretch_mode = 1;
     uint32_t text_align = 0; // TA_LEFT | TA_TOP | TA_NOUPDATECP
+    int arc_direction = 1;   // AD_COUNTERCLOCKWISE; 2 is AD_CLOCKWISE
     int32_t pos_x = 0, pos_y = 0;
     bool clipped = false;
     std::vector<Rect> clip;

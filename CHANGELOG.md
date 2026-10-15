@@ -29,6 +29,24 @@
   compiler's environment, so no SDK is looked up and a bundle is the same
   whoever builds it.
 
+- Draw `Arc`, `Chord` and `Pie` as elliptical arcs, as GDI defines them:
+  the part of `Ellipse`'s outline between the rays through the two points,
+  counterclockwise unless `SetArcDirection(AD_CLOCKWISE)` (new, with
+  `GetArcDirection`), the same point twice being the whole ellipse; `Chord`
+  fills the arc's side of its chord, `Pie` the wedge; `ArcTo` and
+  `AngleArc` move the current position to the arc's end. Text metrics
+  follow a Windows 11 capture: a VDMX table counts only through its Windows
+  ANSI group (Tahoma's taller VDMX records no longer apply, so its line
+  heights at 15 pixels and up match Windows), and a cell height is the
+  TEXTMETRIC height, split by the Windows ascent. An unknown face name falls
+  back by pitch, family and character set to an installed Arial, Times New
+  Roman, Courier New, Comic Sans MS or Symbol, as Windows' mapper does
+  ("TimesRoman" is Arial there), and with none installed to Open Sans
+  rather than the 8x16 cells. `gdi_tests` holds arcs, chords and pies to a
+  reference raster written from GDI's rules and a toolkit's 200,000 pen and
+  brush changes to a flat object table; `gdi_metrics_windows11` holds the
+  line metrics of 169 font requests to Windows 11's.
+
 - Show the cursor a program chooses on the platform's pointer whenever the
   pointer is not relative: stock cursors (`LoadCursor(NULL, IDC_*)`) as the
   system's I-beam, hand, resize arrows and the rest; a program's own

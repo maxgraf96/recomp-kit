@@ -49,6 +49,18 @@ class CompareTests(unittest.TestCase):
         self.assertTrue(compare.compare_case(row(), row(extents=ext))[0])
         self.assertTrue(compare.compare_case(row(), row(realized="Open Sans"))[0])
 
+    def test_only_and_skipped_characters(self):
+        tm = list(row()["tm"])
+        tm[6] = 30  # maximum width: another version of the face
+        far = [4] * 224
+        far[0x7f - 0x20] = 9
+        self.assertTrue(compare.compare_case(row(), row(tm=tm, widths=far))[0])
+        self.assertEqual(compare.compare_case(row(), row(tm=tm, widths=far),
+                                              only={"height", "ascent", "widths"},
+                                              skip_chars={0x7f})[0], [])
+        tm[1] = 13
+        self.assertTrue(compare.compare_case(row(), row(tm=tm), only={"ascent"})[0])
+
     def test_files_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "a.jsonl"

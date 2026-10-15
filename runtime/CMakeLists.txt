@@ -132,6 +132,19 @@ if(APPLE AND EXISTS ${POP_GDI_WINDOWS_METRICS})
     WORKING_DIRECTORY ${POP_ROOT})
   set_tests_properties(gdi_metrics_reference PROPERTIES LABELS nogame)
 endif()
+# The line metrics and face choice against a Windows 11 capture of the faces
+# macOS also installs (tools/gdi_metrics/cases_windows11.txt says what is
+# held and why), on macOS only.
+if(APPLE)
+  add_test(NAME gdi_metrics_windows11
+    COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/tools/gdi_metrics/compare.py
+            ${POP_ROOT}/runtime/tests/data/gdi_metrics_windows11.jsonl
+            --gdi-tests $<TARGET_FILE:gdi_tests>
+            --cases ${POP_ROOT}/tools/gdi_metrics/cases_windows11.txt
+            --only face,height,ascent,descent,external,weight,italic,pitch_family,charset
+    WORKING_DIRECTORY ${POP_ROOT})
+  set_tests_properties(gdi_metrics_windows11 PROPERTIES LABELS nogame)
+endif()
 # Winsock (WSOCK32, WS2_32), the IP helper API and Netbios through the guest
 # ABI, on real sockets on the loopback interface and on fake interface lists.
 add_executable(winsock_tests tests/winsock_tests.cpp tests/stub_recomp_call.cpp)

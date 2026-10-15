@@ -17,6 +17,13 @@ font Arial Bold;-10,-12,-14,-16,-18;400;0
 font Arial Black;-12,-16;400;0
 font Tahoma;-8,-9,-10,-11,-12,-13,-14,-15,-16,-18,-20,-24;400,700;0
 font Tahoma;11,13,16;400,700;0
+# A toolkit that sizes its fonts in points at a fixed 96 dpi (MulDiv(pt, 96,
+# 72)): 10, 11, 12, 16 and 24 points, and 9-point Arial.
+font Tahoma;-13,-15,-16,-21,-32;400,700;0
+font Tahoma;-13;400;1
+font Arial;-12;400,700;0
+# A name no Windows installs, which the font mapper resolves.
+font TimesRoman;-13,-16;400,700;0
 font Verdana;-9,-10,-11,-12,-13,-14,-16,-18;400,700;0
 font Times New Roman;-9,-10,-11,-12,-13,-14,-15,-16,-18,-20,-24,-28;400,700;0
 font Times New Roman;-12,-16;400;1

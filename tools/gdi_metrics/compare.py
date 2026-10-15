@@ -27,6 +27,12 @@ The tolerances say what a game's layout can live with:
 
 Exit status 0 when every font is within them, 1 otherwise; the report lists
 each font that is not and, with -v, every difference.
+
+--only FIELD,... holds just those parts against Windows: TEXTMETRIC field
+names (height, ascent, ...), "face", "widths" and "extents". It is how a
+capture of faces whose installed copies are another version than Windows'
+(their bounding boxes, and so tmMaxCharWidth, differ) still guards the rest.
+--skip-chars HEX,... leaves those characters' widths out.
 """
 import argparse
 import json
@@ -56,12 +62,16 @@ def load(path):
     return cases
 
 
-def compare_case(win, mac):
-    """The differences beyond tolerance, and the ones within it, as text."""
+def compare_case(win, mac, only=None, skip_chars=()):
+    """The differences beyond tolerance, and the ones within it, as text.
+    `only`, when given, is the set of parts to compare (see --only)."""
     bad, notes = [], []
-    if win["realized"].lower() != mac["realized"].lower():
+    wanted = (lambda part: True) if only is None else (lambda part: part in only)
+    if wanted("face") and win["realized"].lower() != mac["realized"].lower():
         bad.append("face %r, Windows %r" % (mac["realized"], win["realized"]))
     for i, name in enumerate(TM_FIELDS):
+        if not wanted(name):
+            continue
         w, m = win["tm"][i], mac["tm"][i]
         if w == m:
             continue
@@ -71,8 +81,10 @@ def compare_case(win, mac):
             notes.append("%s %d, Windows %d" % (name, m, w))
             continue
         bad.append("%s %d, Windows %d" % (name, m, w))
-    widths = list(zip(win["widths"], mac["widths"]))
-    off = [(0x20 + i, w, m) for i, (w, m) in enumerate(widths) if w != m]
+    widths = [(w, m) for i, (w, m) in enumerate(zip(win["widths"], mac["widths"]))
+              if 0x20 + i not in skip_chars] if wanted("widths") else []
+    chars = [0x20 + i for i in range(len(win["widths"])) if 0x20 + i not in skip_chars]
+    off = [(chars[i], w, m) for i, (w, m) in enumerate(widths) if w != m]
     far = [d for d in off if abs(d[1] - d[2]) > 1]
     if far:
         bad.append("widths more than 1 pixel off: " +
@@ -81,7 +93,7 @@ def compare_case(win, mac):
         bad.append("%d of %d widths differ" % (len(off), len(widths)))
     elif off:
         notes.append("%d widths differ by 1" % len(off))
-    extents = list(zip(win["extents"], mac["extents"]))
+    extents = list(zip(win["extents"], mac["extents"])) if wanted("extents") else []
     inexact = 0
     for i, ((wx, wy), (mx, my)) in enumerate(extents):
         if wy != my:
@@ -104,8 +116,12 @@ def main():
     parser.add_argument("runtime", nargs="?")
     parser.add_argument("--gdi-tests", help="run this gdi_tests binary's capture")
     parser.add_argument("--cases", default=os.path.join(os.path.dirname(__file__), "cases.txt"))
+    parser.add_argument("--only", help="compare just these parts (comma-separated)")
+    parser.add_argument("--skip-chars", default="", help="hex character codes to leave out")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
+    only = set(args.only.split(",")) if args.only else None
+    skip_chars = {int(c, 16) for c in args.skip_chars.split(",") if c}
     runtime = args.runtime
     if not runtime:
         if not args.gdi_tests:
@@ -120,7 +136,7 @@ def main():
     for key in sorted(win):
         if key not in mac:
             continue
-        bad, notes = compare_case(win[key], mac[key])
+        bad, notes = compare_case(win[key], mac[key], only, skip_chars)
         label = "%s %d weight %d%s" % (key[0], key[1], key[2], " italic" if key[3] else "")
         if bad:
             failed += 1

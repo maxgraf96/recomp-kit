@@ -88,6 +88,33 @@ installed copies of Windows faces (macOS has Arial, Tahoma, Times New Roman,
 Courier New, Verdana and more, with the same tables), chosen as GDI's mapper
 chooses; without it a Windows interface face is drawn with the bundled Open
 Sans. `tools/gdi_metrics` holds the comparison with a Windows screen DC.
+A VDMX table counts only through its group for the Windows ANSI subset
+(bCharSet 1), and a cell (positive) height is the TEXTMETRIC height, split
+by the Windows ascent: that is what a Windows 11 capture of Tahoma, Arial,
+Verdana, Times New Roman, Courier New and Microsoft Sans Serif says
+(`runtime/tests/data/gdi_metrics_windows11.jsonl`, 169 requests).
+
+**Which faces exist.** The kit bundles Open Sans 1.101 Regular and Semibold
+(Apache 2.0, `third_party/fonts/opensans`) and the 8x16 cells drawn from the
+settings page's own 6x8 glyphs; nothing else, and no Microsoft font file is
+ever in the repository or an app. With `[runtime] system_fonts`
+(`RECOMP_SYSTEM_FONTS=0/1`) GDI reads the user's installed fonts in place
+from `~/Library/Fonts`, `/Library/Fonts`, `/System/Library/Fonts/Supplemental`
+and `/System/Library/Fonts` (on Linux `~/.fonts`, `~/.local/share/fonts`,
+`/usr/local/share/fonts`, `/usr/share/fonts`). macOS 15 has, as Windows
+names them: Arial (four styles, plus Black and Narrow), Tahoma (regular and
+bold), Verdana, Times New Roman, Courier New, Georgia and Trebuchet MS (four
+styles each), Comic Sans MS (two), Impact, Microsoft Sans Serif, Wingdings,
+Webdings and Andale Mono. It has no Segoe UI, Calibri, Consolas, Lucida
+Console, Palatino Linotype or raster faces (MS Sans Serif, System). Some are
+older versions than Windows 11's (Tahoma 5.01 against 7.05): the line
+metrics and nearly every advance agree, the bounding box and so
+tmMaxCharWidth do not. A face nothing provides falls back as GDI's mapper
+does: by pitch, family and character set to Arial, Times New Roman, Courier
+New, Comic Sans MS or Symbol (Windows 11 gives an unknown DEFAULT_PITCH name
+such as "TimesRoman" Arial); with no such face installed, an unknown
+proportional name is drawn with Open Sans, and only stock fonts, fixed-pitch
+and raster or symbol requests keep the 8x16 cells.
 
 ## Address space
 

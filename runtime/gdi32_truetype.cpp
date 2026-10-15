@@ -249,6 +249,10 @@ int32_t mul_div(int64_t a, int64_t b, int64_t c) {
 // The VDMX record GDI uses for a 1:1 device: for a negative LOGFONT height
 // the record of that ppem; for a positive (cell) height the largest ppem whose
 // yMax - yMin does not exceed it. False when the font has no such record.
+// Only a group for the Windows ANSI subset (bCharSet 1) counts: Windows 11
+// measures Tahoma, whose only group is for all glyphs (bCharSet 0), from its
+// Windows ascent and descent alone, and Arial, whose groups are ANSI, by them
+// (tools/gdi_metrics: 164 of 164 heights, ascents and descents agree).
 bool vdmx_lookup(const TrueTypeFace *f, int32_t lf_height, int32_t *ppem, int32_t *y_max,
                  int32_t *y_min) {
     if (!f->vdmx)
@@ -258,7 +262,10 @@ bool vdmx_lookup(const TrueTypeFace *f, int32_t lf_height, int32_t *ppem, int32_
     uint32_t group = 0;
     for (uint16_t i = 0; i < ratios; ++i) {
         const uint32_t r = base + 6 + 4 * i;
-        const uint8_t x = f->info.data[r + 1], y0 = f->info.data[r + 2], y1 = f->info.data[r + 3];
+        const uint8_t charset = f->info.data[r], x = f->info.data[r + 1], y0 = f->info.data[r + 2],
+                      y1 = f->info.data[r + 3];
+        if (charset != 1)
+            continue;
         // The ratio a 96x96-dpi device has, x:y = 1:1, or the catch-all 0:0:0.
         if ((x == 0 && y0 == 0 && y1 == 0) || (y0 <= x && y1 >= x)) {
             group = base + u16(f, base + 6 + 4 * ratios + 2 * i);
@@ -362,6 +369,9 @@ GdiFont truetype_realize(const TrueTypeFace *f, const GdiLogFont &lf, bool synth
     const int32_t height = lf.height ? lf.height : 16;
     int32_t ppem = 0, y_max = 0, y_min = 0;
     const bool vdmx = vdmx_lookup(f, height, &ppem, &y_max, &y_min);
+    // A cell height with no VDMX record: the em part of the cell, rounded.
+    // (Windows 11 agrees for 18 of 21 Tahoma cell heights; at 20, 26 and 32 it
+    // takes one pixel less, by a rule not yet known.)
     if (!vdmx)
         ppem = height < 0 ? -height : mul_div(upem, height, win_ascent + win_descent);
     ppem = std::max<int32_t>(1, ppem);
@@ -383,6 +393,11 @@ GdiFont truetype_realize(const TrueTypeFace *f, const GdiLogFont &lf, bool synth
         out.ascent = y_max;
         out.descent = -y_min;
         out.internal = out.ascent + out.descent - ppem;
+    } else if (height > 0) {
+        // A cell height is the TEXTMETRIC height, split by the Windows ascent.
+        out.ascent = mul_div(win_ascent, height, win_ascent + win_descent);
+        out.descent = height - out.ascent;
+        out.internal = height - ppem;
     } else {
         out.ascent = to_pixels(win_ascent, ys);
         out.descent = to_pixels(win_descent, ys);

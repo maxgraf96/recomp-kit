@@ -41,6 +41,11 @@ DirectInput's foreground and exclusive semantics, its 256-record buffer,
 granularity and object info. `gdi_tests` pins GDI's text-measuring rules on a
 generated font that carries VDMX and hdmx tables (`make_gdi_font.py`), and the
 installed Windows faces where the machine has them.
+`gdi_metrics_windows11` (macOS) holds the faces macOS installs to a Windows
+11 capture of the same requests (`tools/gdi_metrics/cases_windows11.txt`
+says which parts and why), and `gdi_tests` checks arcs, chords and pies
+against a reference raster written from GDI's rules, and a toolkit's pen and
+brush churn against the object table.
 `crt_tests` also replays a Windows 11 capture of the code page conversions
 (`runtime/tests/data/codepages_windows.tsv`, written by
 `tools/codepages/capture_win32.c` from `tools/codepages/vectors.txt`): every

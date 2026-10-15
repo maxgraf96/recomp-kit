@@ -236,6 +236,122 @@ void line_to(X86 *c) {
     dc->pos_y = y;
     set_eax(c, 1);
 }
+// The ellipse Ellipse, Arc, Chord and Pie share: the one inscribed in the
+// rectangle with its right and bottom edges excluded, as Rectangle's. A pixel
+// is inside when its centre is, and on the outline when it is inside with a
+// 4-neighbour outside, so an arc's pixels are exactly the matching part of
+// the ellipse's outline.
+struct EllipseShape {
+    double rx, ry, cx, cy;
+    explicit EllipseShape(Rect r)
+        : rx((double(r.r) - r.l) / 2), ry((double(r.b) - r.t) / 2), cx(r.l + rx), cy(r.t + ry) {}
+    bool inside(int64_t x, int64_t y) const {
+        double a = (x + .5 - cx) / rx, b = (y + .5 - cy) / ry;
+        return a * a + b * b <= 1;
+    }
+    bool outline(int64_t x, int64_t y) const {
+        return inside(x, y) &&
+               (!inside(x - 1, y) || !inside(x + 1, y) || !inside(x, y - 1) || !inside(x, y + 1));
+    }
+    // A point's angle about the centre, counterclockwise on the screen from
+    // the positive x axis (y grows downwards).
+    double angle(double x, double y) const {
+        return std::atan2(cy - y, x - cx);
+    }
+    // Where the ray from the centre at `a` meets the ellipse, in continuous
+    // coordinates.
+    std::pair<double, double> at(double a) const {
+        double dx = std::cos(a), dy = -std::sin(a);
+        double t = 1 / std::sqrt((dx / rx) * (dx / rx) + (dy / ry) * (dy / ry));
+        return {cx + t * dx, cy + t * dy};
+    }
+};
+constexpr double kTurn = 6.283185307179586;
+// The part of a turn an arc covers: from `start`, `sweep` radians
+// counterclockwise, a whole turn when its two rays coincide.
+struct ArcRange {
+    double start = 0, sweep = kTurn;
+    bool contains(double a) const {
+        double d = std::fmod(a - start, kTurn);
+        if (d < 0)
+            d += kTurn;
+        return d <= sweep;
+    }
+};
+// Arc, ArcTo, Chord and Pie name the arc by two points: it runs from the ray
+// through the first to the ray through the second (each point taken at its
+// pixel centre), counterclockwise unless SetArcDirection(AD_CLOCKWISE) says
+// otherwise; the same point twice is the whole ellipse.
+ArcRange arc_between(const EllipseShape &e, int32_t xs, int32_t ys, int32_t xe, int32_t ye,
+                     bool clockwise) {
+    double a = e.angle(xs + .5, ys + .5), b = e.angle(xe + .5, ye + .5);
+    if (xs == xe && ys == ye)
+        return {a, kTurn};
+    if (clockwise)
+        std::swap(a, b);
+    double sweep = std::fmod(b - a, kTurn);
+    if (sweep <= 0)
+        sweep += kTurn;
+    return {a, sweep};
+}
+// The pixel a point on the ellipse falls in, kept inside the rectangle.
+std::pair<int32_t, int32_t> ellipse_pixel(Rect r, std::pair<double, double> p) {
+    return {int32_t(std::clamp<double>(std::floor(p.first), r.l, double(r.r) - 1)),
+            int32_t(std::clamp<double>(std::floor(p.second), r.t, double(r.b) - 1))};
+}
+enum class ArcFigure { Open, Chord, Pie };
+// Draws the arc `range` of the ellipse in r: the outline's pixels in range
+// with the pen; for a chord or a pie the region it closes, filled with the
+// brush, and its straight edges (the chord, or the two radii). `from` and
+// `to` receive the arc's end pixels in drawing order.
+void draw_arc(uint32_t hdc, Rect r, ArcRange range, bool clockwise, ArcFigure figure,
+              std::pair<int32_t, int32_t> *from, std::pair<int32_t, int32_t> *to) {
+    auto *dc = dc_of(hdc);
+    *from = *to = {r.l, r.t};
+    if (!dc || !nonempty(r))
+        return;
+    const EllipseShape e(r);
+    const auto start = e.at(range.start), end = e.at(range.start + range.sweep);
+    const auto mid = e.at(range.start + range.sweep / 2);
+    *from = ellipse_pixel(r, clockwise ? end : start);
+    *to = ellipse_pixel(r, clockwise ? start : end);
+    uint32_t fill = 0;
+    const bool filled = figure != ArcFigure::Open && brush_color(dc->brush, &fill);
+    auto pen = objects().find(dc->pen);
+    const bool stroked = pen != objects().end() && pen->second.style != 5;
+    // The chord's side of a pixel: the side of the secant the arc lies on.
+    const double sx = end.first - start.first, sy = end.second - start.second;
+    const double mid_side = sx * (mid.second - start.second) - sy * (mid.first - start.first);
+    const bool whole = range.sweep >= kTurn;
+    const Rect clip = intersection(r, clip_box(hdc));
+    for (int64_t y = clip.t; y < clip.b; ++y)
+        for (int64_t x = clip.l; x < clip.r; ++x) {
+            if (!e.inside(x, y))
+                continue;
+            const bool in_range = range.contains(e.angle(x + .5, y + .5));
+            if (filled) {
+                bool in_region = whole || in_range;
+                if (!whole && figure == ArcFigure::Chord) {
+                    const double side = sx * (y + .5 - start.second) - sy * (x + .5 - start.first);
+                    in_region = side == 0 || (side > 0) == (mid_side > 0);
+                }
+                if (in_region)
+                    write_pixel(hdc, x, y, fill);
+            }
+            if (stroked && in_range && e.outline(x, y))
+                pen_pixel(hdc, x, y, argb(pen->second.color));
+        }
+    if (whole)
+        return;
+    const auto a = ellipse_pixel(r, start), b = ellipse_pixel(r, end);
+    if (figure == ArcFigure::Chord) {
+        line(hdc, b.first, b.second, a.first, a.second);
+    } else if (figure == ArcFigure::Pie) {
+        const int32_t px = int32_t(std::floor(e.cx)), py = int32_t(std::floor(e.cy));
+        line(hdc, b.first, b.second, px, py);
+        line(hdc, px, py, a.first, a.second);
+    }
+}
 void box(X86 *c, bool ellipse = false) {
     uint32_t hdc = arg(c, 0);
     auto *dc = dc_of(hdc);
@@ -268,21 +384,14 @@ void box(X86 *c, bool ellipse = false) {
         line(hdc, r.r - 1, r.b - 1, r.l, r.b - 1);
         line(hdc, r.l, r.b - 1, r.l, r.t);
     } else {
-        double rx = (double(r.r) - r.l) / 2, ry = (double(r.b) - r.t) / 2, cx = r.l + rx,
-               cy = r.t + ry;
-        auto inside = [&](double x, double y) {
-            double a = (x + .5 - cx) / rx, b = (y + .5 - cy) / ry;
-            return a * a + b * b <= 1;
-        };
+        const EllipseShape e(r);
         auto pen = objects().find(dc->pen);
         for (int64_t y = clip.t; y < clip.b; ++y)
             for (int64_t x = clip.l; x < clip.r; ++x)
-                if (inside(x, y)) {
+                if (e.inside(x, y)) {
                     if (filled)
                         write_pixel(hdc, x, y, p);
-                    if (pen != objects().end() && pen->second.style != 5 &&
-                        (!inside(x - 1, y) || !inside(x + 1, y) || !inside(x, y - 1) ||
-                         !inside(x, y + 1)))
+                    if (pen != objects().end() && pen->second.style != 5 && e.outline(x, y))
                         pen_pixel(hdc, x, y, argb(pen->second.color));
                 }
     }
@@ -343,59 +452,98 @@ void polygon(X86 *c) {
 void polyto(X86 *c) {
     points(c, false, true);
 }
-void arc(X86 *c, bool to, bool pie) {
-    uint32_t dc = arg(c, 0);
-    auto *d = dc_of(dc);
+// Arc, ArcTo, Chord and Pie: (hdc, left, top, right, bottom, xStart, yStart,
+// xEnd, yEnd). ArcTo also draws a line from the current position to the
+// arc's start and moves the current position to its end.
+void arc(X86 *c, bool to, ArcFigure figure) {
+    uint32_t hdc = arg(c, 0);
+    auto *d = dc_of(hdc);
     if (!d) {
         set_eax(c, 0);
         return;
     }
-    if (to)
-        line(dc, d->pos_x, d->pos_y, si(c, 5), si(c, 6));
-    line(dc, si(c, 5), si(c, 6), si(c, 7), si(c, 8));
-    if (pie) {
-        int32_t x = int32_t((int64_t(si(c, 1)) + si(c, 3)) / 2),
-                y = int32_t((int64_t(si(c, 2)) + si(c, 4)) / 2);
-        line(dc, si(c, 7), si(c, 8), x, y);
-        line(dc, x, y, si(c, 5), si(c, 6));
+    const Rect r = rectangle(c);
+    const bool clockwise = d->arc_direction == 2;
+    const ArcRange range =
+        arc_between(EllipseShape(r), si(c, 5), si(c, 6), si(c, 7), si(c, 8), clockwise);
+    std::pair<int32_t, int32_t> from, to_px;
+    if (to && nonempty(r)) {
+        // A line to where the arc starts.
+        from = ellipse_pixel(
+            r, EllipseShape(r).at(clockwise ? range.start + range.sweep : range.start));
+        line(hdc, d->pos_x, d->pos_y, from.first, from.second);
     }
-    if (to) {
-        d->pos_x = si(c, 7);
-        d->pos_y = si(c, 8);
+    draw_arc(hdc, r, range, clockwise, figure, &from, &to_px);
+    if (to && dc_of(hdc)) {
+        dc_of(hdc)->pos_x = to_px.first;
+        dc_of(hdc)->pos_y = to_px.second;
     }
     set_eax(c, 1);
 }
 void arc_simple(X86 *c) {
-    arc(c, false, false);
+    arc(c, false, ArcFigure::Open);
 }
 void arc_to(X86 *c) {
-    arc(c, true, false);
+    arc(c, true, ArcFigure::Open);
+}
+void chord(X86 *c) {
+    arc(c, false, ArcFigure::Chord);
 }
 void pie(X86 *c) {
-    arc(c, false, true);
+    arc(c, false, ArcFigure::Pie);
 }
+// AngleArc(hdc, x, y, radius, start, sweep): a line from the current position
+// to the circle's point at `start` degrees, then the arc through `sweep`
+// degrees (counterclockwise when positive, whatever SetArcDirection says);
+// the current position ends at the arc's end.
 void angle_arc(X86 *c) {
     auto *d = dc_of(arg(c, 0));
     float start, sweep;
     uint32_t a = arg(c, 4), b = arg(c, 5);
     memcpy(&start, &a, 4);
     memcpy(&sweep, &b, 4);
-    if (!d || !std::isfinite(start) || !std::isfinite(sweep) || arg(c, 3) > INT_MAX) {
+    if (!d || !std::isfinite(start) || !std::isfinite(sweep) || arg(c, 3) > INT_MAX / 2) {
         set_eax(c, 0);
         return;
     }
-    auto point = [&](double angle) {
-        double rad = angle * 3.141592653589793 / 180;
-        return std::pair<int32_t, int32_t>{
-            int32_t(std::clamp<double>(si(c, 1) + arg(c, 3) * std::cos(rad), INT_MIN, INT_MAX)),
-            int32_t(std::clamp<double>(si(c, 2) - arg(c, 3) * std::sin(rad), INT_MIN, INT_MAX))};
-    };
-    auto p = point(start), q = point(double(start) + sweep);
+    const int64_t x = si(c, 1), y = si(c, 2), radius = arg(c, 3);
+    const Rect r{int32_t(std::clamp<int64_t>(x - radius, INT_MIN, INT_MAX)),
+                 int32_t(std::clamp<int64_t>(y - radius, INT_MIN, INT_MAX)),
+                 int32_t(std::clamp<int64_t>(x + radius + 1, INT_MIN, INT_MAX)),
+                 int32_t(std::clamp<int64_t>(y + radius + 1, INT_MIN, INT_MAX))};
+    const double deg = kTurn / 360;
+    ArcRange range{double(start) * deg, std::fabs(double(sweep)) * deg};
+    if (sweep < 0)
+        range.start += double(sweep) * deg;
+    range.sweep = std::min(range.sweep, kTurn);
+    const bool clockwise = sweep < 0;
+    const auto p = ellipse_pixel(r, EllipseShape(r).at(double(start) * deg));
     line(arg(c, 0), d->pos_x, d->pos_y, p.first, p.second);
-    line(arg(c, 0), p.first, p.second, q.first, q.second);
-    d->pos_x = q.first;
-    d->pos_y = q.second;
+    std::pair<int32_t, int32_t> from, to = p;
+    if (range.sweep > 0)
+        draw_arc(arg(c, 0), r, range, clockwise, ArcFigure::Open, &from, &to);
+    if (auto *dd = dc_of(arg(c, 0))) {
+        dd->pos_x = to.first;
+        dd->pos_y = to.second;
+    }
     set_eax(c, 1);
+}
+// SetArcDirection(hdc, AD_COUNTERCLOCKWISE 1 | AD_CLOCKWISE 2): the previous
+// direction, or 0 for a bad one. GetArcDirection reads it.
+void set_arc_direction(X86 *c) {
+    auto *d = dc_of(arg(c, 0));
+    const uint32_t dir = arg(c, 1);
+    if (!d || (dir != 1 && dir != 2)) {
+        set_last_error(87);
+        set_eax(c, 0);
+        return;
+    }
+    set_eax(c, uint32_t(d->arc_direction));
+    d->arc_direction = int(dir);
+}
+void get_arc_direction(X86 *c) {
+    auto *d = dc_of(arg(c, 0));
+    set_eax(c, d ? uint32_t(d->arc_direction) : 0);
 }
 void flood(X86 *c) {
     uint32_t dc = arg(c, 0), color = 0, initial;
@@ -651,8 +799,10 @@ void register_draw() {
                                        G("Arc", 9, arc_simple),
                                        G("ArcTo", 9, arc_to),
                                        G("AngleArc", 6, angle_arc),
-                                       G("Chord", 9, arc_simple),
+                                       G("Chord", 9, chord),
                                        G("Pie", 9, pie),
+                                       G("SetArcDirection", 2, set_arc_direction),
+                                       G("GetArcDirection", 1, get_arc_direction),
                                        G("PolyBezier", 3, polyline),
                                        G("PolyBezierTo", 3, polyto),
                                        G("ExtFloodFill", 5, flood),

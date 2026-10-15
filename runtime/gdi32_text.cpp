@@ -215,15 +215,41 @@ struct Pen {
     }
 };
 
-// The face a family-less request gets: what GDI's mapper picks from the pitch
-// and family bits alone.
-std::string default_face(uint8_t pitch_family) {
+// The face a family-less request gets, and a face no installation has: what
+// GDI's mapper picks from the pitch and family bits and the character set
+// alone.
+bool fixed_pitch(uint8_t pitch_family) {
+    return (pitch_family & 3) == 1 /* FIXED_PITCH */ ||
+           (pitch_family & 0xf0) == 0x30 /* FF_MODERN */;
+}
+std::string default_face(uint8_t pitch_family, uint8_t charset = 0) {
     const uint8_t family = pitch_family & 0xf0;
-    if ((pitch_family & 3) == 1 /* FIXED_PITCH */ || family == 0x30 /* FF_MODERN */)
+    if (charset == 2 /* SYMBOL_CHARSET */)
+        return "Symbol";
+    if (fixed_pitch(pitch_family))
         return "Courier New";
     if (family == 0x10 /* FF_ROMAN */)
         return "Times New Roman";
+    if (family == 0x40 /* FF_SCRIPT */)
+        return "Comic Sans MS";
     return "Arial";
+}
+// The faces every Windows has whose stand-in, when no TrueType copy is
+// installed, stays the 8x16 cells: serif, fixed-pitch, symbol and the raster
+// system faces. Any other name GDI does not know is an unknown face.
+bool known_non_sans_face(const std::string &family) {
+    static const char *const known[] = {
+        "times new roman", "courier new", "courier",        "georgia",  "palatino linotype",
+        "book antiqua",    "garamond",    "lucida console", "consolas", "symbol",
+        "wingdings",       "webdings",    "system",         "fixedsys", "terminal",
+        "small fonts",     "modern",      "roman",          "script",   "ms serif",
+        "tms rmn",         "times",       "marlett",
+    };
+    std::string key = family;
+    for (char &ch : key)
+        if (ch >= 'A' && ch <= 'Z')
+            ch = char(ch - 'A' + 'a');
+    return std::find(std::begin(known), std::end(known), key) != std::end(known);
 }
 
 Pen pen_of(uint32_t hdc) {
@@ -248,10 +274,20 @@ Pen pen_of(uint32_t hdc) {
     const bool stock = family.empty() && height == 0;
     const TrueTypeFace *face = family.empty() ? nullptr : truetype_find(family);
     bool synth_bold = false, synth_italic = false;
+    const uint8_t pitch_family = object->logfont[27], charset = object->logfont[23];
     if (!face && !stock && truetype_system_fonts_enabled()) {
-        const std::string want = family.empty() ? default_face(object->logfont[27]) : family;
+        const std::string want = family.empty() ? default_face(pitch_family, charset) : family;
         face = truetype_system_face(want, weight, italic, &synth_bold, &synth_italic);
-        if (face)
+        if (!face && !family.empty() && charset != 255 /* OEM_CHARSET */) {
+            // A face no installation has: GDI's mapper falls back on the face
+            // the pitch, family and character set name (Arial for most).
+            const std::string fallback = default_face(pitch_family, charset);
+            face = truetype_system_face(fallback, weight, italic, &synth_bold, &synth_italic);
+            if (face)
+                log_once(("gdi-font-mapped:" + family).c_str(),
+                         "gdi: no installed face is \"%s\"; GDI's mapper gives it \"%s\"",
+                         family.c_str(), truetype_family_name(face).c_str());
+        } else if (face)
             log_once(("gdi-system-font:" + want).c_str(),
                      "gdi: \"%s\" is drawn with the installed \"%s\"", want.c_str(),
                      truetype_family_name(face).c_str());
@@ -264,6 +300,17 @@ Pen pen_of(uint32_t hdc) {
             log_once(("gdi-font:" + family).c_str(),
                      "gdi: \"%s\" is a Windows font the program did not register; drawing it "
                      "with the bundled Open Sans",
+                     family.c_str());
+    }
+    if (!face && !family.empty() && !known_non_sans_face(family) && !fixed_pitch(pitch_family) &&
+        charset != 255 && charset != 2) {
+        // A name nothing knows, with no installed face to map it to: the
+        // bundled sans rather than the 8x16 cells, as GDI never draws an
+        // unknown name with a raster font.
+        face = truetype_windows_substitute("arial", weight);
+        if (face)
+            log_once(("gdi-font-unknown:" + family).c_str(),
+                     "gdi: no face is \"%s\"; drawing it with the bundled Open Sans",
                      family.c_str());
     }
     if (face) {
