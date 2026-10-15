@@ -97,6 +97,10 @@ translator's authority and translating a module at another base;
 `test_freestanding.py` compiles the instruction vocabulary with no C library,
 links a translation into a bundle with `ld64.lld` and loads it into a stand-in
 host (it needs an LLVM clang and lld, and says so when they are missing).
+`tools/tests/test_toolchain.py` covers the
+bundled first-run toolchain (`tools/toolchain/`) without building it; with
+`RECOMP_STAGED_TOOLCHAIN=<dir>` it also runs a staged one from a read-only copy
+and builds a bundle with it alone.
 `test_translate_msvc_eh.py` covers MSVC exception frames: which frames get a
 checkpoint, the funclets and continuations their tables name, and `_setjmp3`
 call sites.

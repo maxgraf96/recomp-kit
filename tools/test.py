@@ -40,6 +40,7 @@ PORTABLE_TESTS = [
     "tools/recomp/tests/test_translate_noreturn.py",
     "tools/recomp/tests/test_translate_rebase.py",
     "tools/recomp/tests/test_function_db.py", "tools/recomp/tests/test_freestanding.py",
+    "tools/tests/test_toolchain.py",
     "tools/recomp/tests/test_x87_conformance.py",
     "tools/recomp/tests/test_x87_fma.py",
     "tools/gdi_metrics/test_compare.py",

@@ -16,6 +16,14 @@ third_party/lua/LICENSE and the notices in its source files.
 Ghidra, Capstone, pefile, Unicorn, NumPy and Pillow are external development
 tools with their own licenses, not game dependencies at runtime.
 
+An app that translates on the player's machine bundles a first-run toolchain
+(tools/toolchain/): clang and lld built from the LLVM source release (Apache
+License 2.0 with LLVM Exceptions), CPython from python-build-standalone (PSF
+License, with the libraries that build links in), Capstone (BSD 3-clause) and
+pefile (MIT). None of it is included here; tools/toolchain/stage.py fetches
+each by pinned SHA-256, and tools/toolchain/notices.py writes the complete
+licence texts of the toolchain and of everything below into the app.
+
 TinySoundFont (third_party/tsf/tsf.h) is Copyright (C) 2017-2023 Bernhard Schelling,
 licensed under the MIT License; see third_party/tsf/LICENSE. It renders a game's
 own SoundFont, which is not included.
@@ -66,6 +74,13 @@ with it.
 
 SDL3 is fetched at build time from https://github.com/libsdl-org/SDL at a pinned
 release tag and linked statically; it is licensed under the zlib License.
+
+glslang is fetched at build time from https://github.com/KhronosGroup/glslang
+at a pinned release tag and linked statically on every platform that renders
+Direct3D 9 on Vulkan, where it compiles the renderer's GLSL to SPIR-V. Its
+LICENSE.txt combines the BSD 3-clause, BSD 2-clause, MIT and Apache 2.0
+licenses; the GNU GPL 3 text it also carries, with Bison's exception, covers a
+Bison grammar glslang no longer uses.
 
 FFmpeg 7.1.1 is Copyright (c) 2000-2025 the FFmpeg developers, licensed under
 the GNU Lesser General Public License version 2.1 or later. With RECOMP_VIDEO
