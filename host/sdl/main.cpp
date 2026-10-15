@@ -156,6 +156,11 @@ void post(uint32_t msg, uint32_t wparam, uint32_t lparam) {
                                        int16_t(lparam >> 16));
         return;
     }
+    if (msg == WM_MOUSEWHEEL_) { // to the focus window, with a screen position
+        host_post_client_mouse_wheel(host_main_window(), wparam, int16_t(lparam),
+                                     int16_t(lparam >> 16));
+        return;
+    }
     uint32_t hwnd = host_main_window();
     if (hwnd)
         host_post_message(hwnd, msg, wparam, lparam);

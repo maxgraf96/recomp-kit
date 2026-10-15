@@ -32,6 +32,12 @@ double g_t0 = 0.0;
 bool g_activated = false;
 bool g_close_posted = false;
 double g_close_time = 0.0;
+// The window the close went to, when it was not the main window: once that
+// window has closed, or stopped being the one on top, and the main window is
+// still there, the main window is asked too - a lobby that answers WM_CLOSE by
+// returning to the menu must not keep a quitting host waiting.
+uint32_t g_close_hwnd = 0;
+bool g_close_followed = false;
 bool g_forced_stop = false;
 const char *g_stop_reason = "guest returned from its entry point";
 std::string g_boot_error; // boot_load's own reason; empty means the loader's
@@ -219,6 +225,13 @@ uint32_t g_last_tick_ms = 0xffffffffu;
 void boot_tick() {
     if (g_opt.tick)
         g_opt.tick();
+
+    if (g_close_posted && !g_close_followed && g_close_hwnd && g_close_hwnd != host_main_window() &&
+        host_main_window() && win32_close_target() == host_main_window() &&
+        now_seconds() - g_close_time > 0.5) {
+        g_close_followed = true;
+        host_post_message(host_main_window(), 0x0010 /* WM_CLOSE */, 0, 0);
+    }
 
     // Registry mutations made off a guest thread are queued, and this is one
     // of the two places they are applied - the other is the scheduler's own
@@ -730,10 +743,13 @@ void boot_request_close(const char *reason) {
     if (reason)
         g_stop_reason = reason;
     // The caller says why in its own words; boot only delivers the message,
-    // which is the one thing closing a real window does.
-    uint32_t hwnd = host_main_window();
+    // which is the one thing closing a real window does - to the window the
+    // player sees on top when it is the main window's own (a lobby, a
+    // dialog), as Alt+F4 would, and never past it to the window it covers.
+    uint32_t hwnd = win32_close_target();
     if (hwnd)
         host_post_message(hwnd, 0x0010 /* WM_CLOSE */, 0, 0);
+    g_close_hwnd = hwnd;
 }
 
 void boot_print_exit_code(FILE *out) {

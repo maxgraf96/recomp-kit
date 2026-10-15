@@ -165,6 +165,9 @@ void ensure_system_classes();
 // or is being destroyed.
 void activation_window_shown(X86 *c, uint32_t hwnd, bool activate);
 void activation_window_destroyed(uint32_t hwnd);
+// A visible top-level window was hidden: if it was active, the activation
+// goes to its owner or the next visible top-level window of the program.
+void activation_window_hidden(X86 *c, uint32_t hwnd);
 // SetFocus's body: WM_KILLFOCUS to the window losing the focus, WM_SETFOCUS
 // to the one gaining it. Returns the window that had it.
 uint32_t change_focus(X86 *c, uint32_t hwnd);

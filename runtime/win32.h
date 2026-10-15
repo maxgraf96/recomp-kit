@@ -358,6 +358,10 @@ void host_post_message(uint32_t hwnd, uint32_t msg, uint32_t wparam, uint32_t lp
 void host_post_mouse_message(uint32_t msg, uint32_t mk, int32_t x, int32_t y);
 // The same routed event, starting in a specific window's client pixels.
 void host_post_client_mouse_message(uint32_t hwnd, uint32_t msg, uint32_t mk, int32_t x, int32_t y);
+// WM_MOUSEWHEEL (delta << 16 | key state) to the focus window, with the
+// pointer's screen position; the second takes a window's client pixels.
+void host_post_mouse_wheel(uint32_t wparam, int32_t x, int32_t y);
+void host_post_client_mouse_wheel(uint32_t hwnd, uint32_t wparam, int32_t x, int32_t y);
 // Post a keyboard message to the window that has the focus, which is where
 // Windows sends one. Not the same as host_main_window: in a VCL application
 // that is the invisible application window.
@@ -381,7 +385,11 @@ void host_post_text(const uint16_t *units, size_t count);
 // input method delivers on its own (host_post_text), or never (a dead key):
 // the key is marked translated, so TranslateMessage adds nothing to it.
 constexpr uint32_t HOST_KEY_TEXT_FOLLOWS = 0xffffffffu;
-uint32_t host_main_window();              // first created top-level HWND, or 0
+uint32_t host_main_window(); // first created top-level HWND, or 0
+// Where closing the application's window sends WM_CLOSE: the main window, or
+// the window of the main window's own that is shown and active over it (a
+// lobby, a dialog), which is what Alt+F4 would close on Windows.
+uint32_t win32_close_target();
 uint32_t host_window_proc(uint32_t hwnd); // guest WNDPROC address, or 0
 bool host_window_rect(uint32_t hwnd, int32_t *x, int32_t *y, int32_t *w, int32_t *h);
 void host_set_client_size(uint32_t hwnd, int32_t w, int32_t h);

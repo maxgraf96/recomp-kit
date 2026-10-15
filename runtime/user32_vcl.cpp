@@ -2,11 +2,13 @@
 // name runtime-owned state; callbacks always re-enter through guest_call.
 #include "codepages.h"
 #include "user32_internal.h"
+#include "display_seam.h"
 #include "memory.h"
 #include "win32.h"
 #include "gdi_image.h"
 #include "msvcrt_internal.h"
 #include <algorithm>
+#include <cstdlib>
 #include <set>
 #include <vector>
 #include <cstring>
@@ -23,6 +25,20 @@ struct MouseInput {
 };
 std::deque<MouseInput> mouse_input;
 bool routing_mouse = false;
+// The press a second one may make a double click of: its window, button
+// message, time and screen point.
+struct Press {
+    uint32_t hwnd = 0, message = 0, time = 0;
+    int32_t x = 0, y = 0;
+    bool armed = false;
+} last_press;
+// GetDoubleClickTime and SM_CXDOUBLECLK x SM_CYDOUBLECLK, as user32 reports them.
+constexpr uint32_t kDoubleClickMs = 500;
+constexpr int32_t kDoubleClickHalf = 2;
+bool wants_double_clicks(const Window *w) {
+    auto ci = w ? classes().find(w->cls) : classes().end();
+    return ci != classes().end() && (ci->second.style & 0x0008u /* CS_DBLCLKS */);
+}
 struct Timer {
     uint32_t hwnd, id, interval, due, callback, thread;
 };
@@ -32,6 +48,16 @@ std::set<uint32_t> destroying;
 } // namespace
 void window_created(uint32_t hwnd) {
     z_order.push_back(hwnd);
+    // A host that never reports the application's focus gets no activation
+    // messages, so the first window stands in as active and focused. Once a
+    // host has reported it, activation and focus come with their messages
+    // (user32_activation.cpp): a window made focused here would never get the
+    // WM_SETFOCUS it is owed when it is activated - DefWindowProc finds the
+    // focus already there - and a toolkit that tracks its focus from those
+    // messages (a popup list opens only in the focused window) never learns
+    // it has it.
+    if (win32_app_focus_reported())
+        return;
     if (!active)
         active = hwnd;
     if (!focus)
@@ -65,6 +91,27 @@ uint32_t change_focus(X86 *c, uint32_t hwnd) {
         host_dispatch_to_wndproc(c, hwnd, 0x0007 /* WM_SETFOCUS */, old, 0);
     return old;
 }
+namespace {
+// A top-level window's owner, when it is a window that exists; 0 otherwise.
+uint32_t live_owner(const Window *w) {
+    return w && !w->parent && w->owner && w->owner != w->hwnd && find_window(w->owner) ? w->owner
+                                                                                       : 0;
+}
+// Topmost, or owned (at any depth) by a topmost window: Windows makes the
+// windows a topmost window owns topmost too.
+bool effectively_topmost(const Window *w) {
+    for (size_t hops = 0; w && hops <= windows().size(); ++hops) {
+        if (w->exstyle & 8)
+            return true;
+        w = find_window(live_owner(w));
+    }
+    return false;
+}
+} // namespace
+// Top-level windows keep two rules of Windows' stacking: topmost windows above
+// the rest, and an owned window always above its owner - whatever raised the
+// owner since, a click on it or an activation. An owned window found below its
+// owner moves to just above it; one raised past its owner stays where it is.
 std::vector<uint32_t> window_z_order(uint32_t parent) {
     std::vector<uint32_t> result;
     for (uint32_t hwnd : z_order) {
@@ -72,10 +119,31 @@ std::vector<uint32_t> window_z_order(uint32_t parent) {
         if (w && w->parent == parent)
             result.push_back(hwnd);
     }
-    if (!parent)
+    if (!parent) {
         std::stable_sort(result.begin(), result.end(), [](uint32_t a, uint32_t b) {
-            return (find_window(a)->exstyle & 8) < (find_window(b)->exstyle & 8);
+            return effectively_topmost(find_window(a)) < effectively_topmost(find_window(b));
         });
+        // Bounded: each pass moves owned windows above owners that are lower,
+        // and an ownership chain is no longer than the window list.
+        for (size_t pass = 0; pass <= result.size(); ++pass) {
+            bool moved = false;
+            for (size_t i = 0; i < result.size(); ++i) {
+                const uint32_t owner = live_owner(find_window(result[i]));
+                if (!owner)
+                    continue;
+                const auto at = std::find(result.begin(), result.end(), owner);
+                if (at == result.end() || size_t(at - result.begin()) < i)
+                    continue;
+                const uint32_t owned = result[i];
+                result.erase(result.begin() + i);
+                result.insert(std::find(result.begin(), result.end(), owner) + 1, owned);
+                moved = true;
+                break;
+            }
+            if (!moved)
+                break;
+        }
+    }
     return result;
 }
 void reorder_window(uint32_t hwnd, uint32_t after) {
@@ -98,6 +166,7 @@ void reorder_window(uint32_t hwnd, uint32_t after) {
         z_order.insert(std::find(z_order.begin(), z_order.end(), after), hwnd);
     else
         z_order.push_back(hwnd);
+    display_layers_changed();
 }
 // Descend only through an eligible parent. A hidden/disabled modal owner and
 // its children cannot intercept input; an owned popup remains a top-level peer.
@@ -177,14 +246,28 @@ void pump_mouse_input(X86 *c) {
         if (!find_window(hwnd))
             return;
     }
+    // A second press of the same button on the same window, soon enough and
+    // close enough to the first, is a double click for a window whose class
+    // asks for them (CS_DBLCLKS): WM_xBUTTONDBLCLK in place of the press. The
+    // press after it starts over.
+    uint32_t message = input.message;
+    if (press) {
+        const Press &p = last_press;
+        if (p.armed && p.hwnd == hwnd && p.message == message &&
+            input.time - p.time <= kDoubleClickMs && std::abs(input.x - p.x) <= kDoubleClickHalf &&
+            std::abs(input.y - p.y) <= kDoubleClickHalf && wants_double_clicks(find_window(hwnd))) {
+            message += 2; // 0x201 -> 0x203, 0x204 -> 0x206, 0x207 -> 0x209
+            last_press.armed = false;
+        } else
+            last_press = {hwnd, message, input.time, input.x, input.y, true};
+    }
     int32_t x, y;
     client_origin(hwnd, &x, &y);
     uint32_t lp = (uint32_t(uint16_t(int64_t(input.y) - y)) << 16) | uint16_t(int64_t(input.x) - x);
     LOGV("host mouse %04x screen=(%d,%d) -> hwnd=%08x client=(%d,%d) mk=%x", input.message, input.x,
          input.y, hwnd, int16_t(lp), int16_t(lp >> 16), input.mk);
     queue_for_thread(window_thread(hwnd))
-        .push_back(
-            {hwnd, input.message, input.mk, lp, input.time, uint32_t(input.x), uint32_t(input.y)});
+        .push_back({hwnd, message, input.mk, lp, input.time, uint32_t(input.x), uint32_t(input.y)});
 }
 // Queue each expired timer at most once. Signed subtraction handles DWORD
 // clock wrap; no host thread mutates guest memory or invokes a callback here.
@@ -230,6 +313,7 @@ bool destroy_window(X86 *c, uint32_t hwnd, uint32_t ended_thread) {
     forget_window_services(hwnd);
     gdi_destroy_window(hwnd);
     windows().erase(hwnd);
+    display_layers_changed();
     z_order.erase(std::remove(z_order.begin(), z_order.end(), hwnd), z_order.end());
     win32_forget_scrollbars(hwnd);
     for (auto i = timers.begin(); i != timers.end();)
@@ -328,7 +412,10 @@ void set_timer(X86 *c) {
         set_eax(c, 0);
         return;
     }
-    if (!id || (!hwnd && !timers.count({0, id}))) {
+    // A window's timer is the window's and the id it was given, 0 included:
+    // KillTimer(hwnd, 0) must find it again. Only a timer with no window
+    // takes a fresh id from the system when it does not name one it has.
+    if (!hwnd && (!id || !timers.count({0, id}))) {
         while (timers.count({hwnd, next_timer}))
             ++next_timer;
         id = next_timer++;
@@ -376,6 +463,7 @@ void set_parent(X86 *c) {
     }
     uint32_t old = w->parent;
     w->parent = parent == desktop_handle ? 0 : parent;
+    display_layers_changed();
     set_eax(c, old);
 }
 void child_of(X86 *c) {
@@ -1649,4 +1737,25 @@ void host_post_client_mouse_message(uint32_t hwnd, uint32_t msg, uint32_t mk, in
     user32::client_origin(hwnd, &origin_x, &origin_y);
     host_post_mouse_message(msg, mk, int32_t(uint32_t(x) + uint32_t(origin_x)),
                             int32_t(uint32_t(y) + uint32_t(origin_y)));
+}
+
+// WM_MOUSEWHEEL goes to the window with the focus, wherever the pointer is,
+// and carries the pointer's SCREEN position (unlike every other mouse
+// message). `wparam` is the delta in its high word and the key state in its
+// low word; the modifiers are added as for the other mouse messages.
+void host_post_mouse_wheel(uint32_t wparam, int32_t x, int32_t y) {
+    if (dinput_mouse_exclusive())
+        return;
+    if (user32::g_key_state[0x10] & 0x80)
+        wparam |= 4;
+    if (user32::g_key_state[0x11] & 0x80)
+        wparam |= 8;
+    if (uint32_t hwnd = user32::keyboard_window())
+        host_post_message(hwnd, 0x020a, wparam, (uint32_t(uint16_t(y)) << 16) | uint16_t(x));
+}
+void host_post_client_mouse_wheel(uint32_t hwnd, uint32_t wparam, int32_t x, int32_t y) {
+    int32_t origin_x = 0, origin_y = 0;
+    user32::client_origin(hwnd, &origin_x, &origin_y);
+    host_post_mouse_wheel(wparam, int32_t(uint32_t(x) + uint32_t(origin_x)),
+                          int32_t(uint32_t(y) + uint32_t(origin_y)));
 }

@@ -8,9 +8,11 @@
 // trampolines into native functions here, entered through guest_call exactly
 // as translated code would be. No game image is needed.
 #include "../com.h"
+#include "../d3d7_types.h"
 #include "../dinput_joystick.h"
 #include "../dx.h"
 #include "../host_api.h"
+#include "../../runtime/display_seam.h"
 #include "../../runtime/loader.h"
 #include "../../runtime/memory.h"
 #include "../../runtime/win32.h"
@@ -1159,6 +1161,329 @@ static void test_ansi_entry_points() {
 }
 
 // ---------------------------------------------------------------------------
+// The display layers: a fullscreen DirectDraw 7 program's last frame, and the
+// GDI windows it shows over it after FlipToGDISurface - a lobby, say: an owned
+// WS_POPUP of a CS_OWNDC | CS_DBLCLKS class that keeps the DC GetDC gave it
+// and copies a back buffer to it with BitBlt in WM_PAINT.
+// ---------------------------------------------------------------------------
+namespace d7 {
+void ddraw7_enable_for_test(int on);
+}
+extern "C" uint32_t ddraw7_flips_to_gdi(bool *showing);
+namespace {
+struct Shown {
+    int w = 0, h = 0;
+    std::vector<uint32_t> argb;
+    uint32_t at(int x, int y) const {
+        return x < w && y < h ? argb[size_t(y) * size_t(w) + size_t(x)] & 0xffffffu : 0xdeadbeefu;
+    }
+};
+std::vector<Shown> g_shown;
+// The host side of display_seam.h, as a GPU presenter would answer it when
+// g_overlay_host is set.
+int g_overlay_host = 0, g_overlay_calls = 0;
+Shown g_overlay;
+} // namespace
+extern "C" void host_display_present_window(const uint32_t *argb, int w, int h) {
+    Shown f;
+    f.w = w;
+    f.h = h;
+    f.argb.assign(argb, argb + size_t(w) * size_t(h));
+    g_shown.push_back(std::move(f));
+}
+extern "C" int host_display_overlay_supported() {
+    return g_overlay_host;
+}
+extern "C" void host_display_present_overlay(const uint32_t *argb, int w, int h) {
+    ++g_overlay_calls;
+    g_overlay = Shown{};
+    if (argb) {
+        g_overlay.w = w;
+        g_overlay.h = h;
+        g_overlay.argb.assign(argb, argb + size_t(w) * size_t(h));
+    }
+}
+
+// The lobby's window procedure: the DC GetDC gave it at WM_CREATE is kept
+// (CS_OWNDC), and WM_PAINT copies a 16x16 back buffer of g_lobby_color to it.
+static uint32_t g_lobby_dc = 0, g_lobby_color = 0x000000ffu; // COLORREF red
+static void lobby_proc(X86 *c) {
+    const uint32_t hwnd = arg(c, 0), msg = arg(c, 1);
+    g_seen.push_back({hwnd, msg, arg(c, 2), arg(c, 3), guest_current_thread_id()});
+    if (msg == 0x0001) // WM_CREATE
+        g_lobby_dc = user(c, "GetDC", {hwnd});
+    if (msg == 0x000f) { // WM_PAINT
+        const uint32_t ps = scratch(0x1000), rect = scratch(0x1080);
+        user(c, "BeginPaint", {hwnd, ps});
+        const uint32_t mem = call(c, "GDI32.dll", "CreateCompatibleDC", {g_lobby_dc});
+        const uint32_t bmp = call(c, "GDI32.dll", "CreateCompatibleBitmap", {g_lobby_dc, 16, 16});
+        const uint32_t old = call(c, "GDI32.dll", "SelectObject", {mem, bmp});
+        const uint32_t brush = call(c, "GDI32.dll", "CreateSolidBrush", {g_lobby_color});
+        wr32(rect, 0);
+        wr32(rect + 4, 0);
+        wr32(rect + 8, 16);
+        wr32(rect + 12, 16);
+        user(c, "FillRect", {mem, rect, brush});
+        call(c, "GDI32.dll", "BitBlt", {g_lobby_dc, 0, 0, 16, 16, mem, 0, 0, 0x00cc0020});
+        call(c, "GDI32.dll", "SelectObject", {mem, old});
+        call(c, "GDI32.dll", "DeleteObject", {brush});
+        call(c, "GDI32.dll", "DeleteObject", {bmp});
+        call(c, "GDI32.dll", "DeleteDC", {mem});
+        user(c, "EndPaint", {hwnd, ps});
+        set_eax(c, 0);
+        return;
+    }
+    const uint32_t def = imports_resolve("USER32.dll", "DefWindowProcA");
+    set_eax(c, guest_call(c, def, hwnd, msg, arg(c, 2), arg(c, 3)));
+}
+static uint32_t g_lobby_atom = 0;
+static uint32_t make_lobby(X86 *c, uint32_t owner, int32_t x, int32_t y) {
+    if (!g_lobby_atom) {
+        const uint32_t wc = scratch(0x1100);
+        memset(g_mem + wc, 0, 40);
+        wr32(wc, 0x28); // CS_OWNDC | CS_DBLCLKS
+        wr32(wc + 4, imports_alloc_trampoline("test", "lobby_proc", lobby_proc, 4));
+        gm_put_str(wc + 0x40, "WndClass0", 32);
+        wr32(wc + 36, wc + 0x40);
+        g_lobby_atom = user(c, "RegisterClassA", {wc});
+    }
+    return user(c, "CreateWindowExA",
+                {0, g_lobby_atom, 0, 0x80000000u /* WS_POPUP */, uint32_t(x), uint32_t(y), 16, 16,
+                 owner, 0, 0, 0});
+}
+static bool saw_activate_app_since(size_t from) {
+    for (size_t i = from; i < g_seen.size(); ++i)
+        if (g_seen[i].msg == 0x001c)
+            return true;
+    return false;
+}
+
+static void test_display_layers() {
+    X86 *c = &g_main;
+    win32_reset_activation_for_test();
+    host_app_state(true, false);
+    // The game's window: a topmost fullscreen WS_POPUP, as DirectDraw's
+    // exclusive mode makes it.
+    const uint32_t game =
+        user(c, "CreateWindowExA",
+             {8 /* WS_EX_TOPMOST */, g_class_atom, 0, 0x90000000u, 0, 0, 64, 48, 0, 0, 0, 0});
+    check(game != 0, "the game's window");
+    drain(c);
+
+    d7::ddraw7_enable_for_test(1);
+    const uint32_t iid = scratch(0x1200), out = scratch(0x1210), desc = scratch(0x1280);
+    memcpy(g_mem + iid, d7::IID_IDirectDraw7, 16);
+    check(call(c, "DDRAW.dll", "DirectDrawCreateEx", {0, out, iid, 0}) == 0, "DirectDraw 7");
+    const uint32_t dd = rd32(out);
+    check(method(c, dd, 20, {game, 0x13}) == 0, "exclusive fullscreen");
+    check(method(c, dd, 21, {64, 48, 32, 0, 0}) == 0, "64x48x32");
+    gm_zero(desc, d7::DDSD2_SIZE);
+    wr32(desc + d7::DDSD2_dwSize, d7::DDSD2_SIZE);
+    wr32(desc + d7::DDSD2_dwFlags, d7::DDSD_CAPS | d7::DDSD_BACKBUFFERCOUNT);
+    wr32(desc + d7::DDSD2_ddsCaps,
+         d7::DDSCAPS_PRIMARYSURFACE | d7::DDSCAPS_FLIP | d7::DDSCAPS_COMPLEX);
+    wr32(desc + d7::DDSD2_dwBackBufferCount, 1);
+    check(method(c, dd, 6, {desc, out, 0}) == 0, "a flip chain");
+    const uint32_t front = rd32(out);
+    gm_zero(desc, 16);
+    wr32(desc, d7::DDSCAPS_BACKBUFFER);
+    check(method(c, front, 12, {desc, out}) == 0, "its back buffer");
+    const uint32_t back = rd32(out);
+    auto present = [&](uint32_t color) {
+        const uint32_t fx = scratch(0x1300);
+        gm_zero(fx, d7::DDBLTFX_SIZE);
+        wr32(fx, d7::DDBLTFX_SIZE);
+        wr32(fx + d7::DDBLTFX_dwFillColor, color);
+        method(c, back, 5, {0, 0, 0, d7::DDBLT_COLORFILL, fx});
+        return method(c, front, 11, {0, d7::DDFLIP_DONOTWAIT | d7::DDFLIP_NOVSYNC});
+    };
+    g_shown.clear();
+    check(present(0x336699) == 0, "Flip");
+    check(!g_shown.empty() && g_shown.back().at(10, 10) == 0x336699, "the frame is shown");
+
+    // FlipToGDISurface, and the lobby: an owned popup that paints itself.
+    check(method(c, dd, 10, {}) == 0, "FlipToGDISurface");
+    bool showing = false;
+    check(ddraw7_flips_to_gdi(&showing) == 1 && showing, "the GDI surface is showing");
+    const uint32_t lobby = make_lobby(c, game, 8, 8);
+    check(lobby != 0, "the lobby window");
+    const size_t seen_before = g_seen.size();
+    g_shown.clear();
+    user(c, "ShowWindow", {lobby, 5});
+    drain(c);
+    check(!g_shown.empty(), "showing and painting it presents");
+    if (!g_shown.empty()) {
+        const Shown &f = g_shown.back();
+        check(f.w == 64 && f.h == 48, "a frame of the display mode");
+        check(f.at(10, 10) == 0xff0000, "the lobby's pixels over the frame: %06x", f.at(10, 10));
+        check(f.at(2, 2) == 0x336699 && f.at(40, 40) == 0x336699,
+              "and the program's last frame around it, not black: %06x", f.at(2, 2));
+    }
+    // An owned window stays above its owner, topmost or not, and activating it
+    // is no application switch.
+    check(user(c, "GetActiveWindow", {}) == lobby, "the lobby is active");
+    check(user(c, "GetFocus", {}) == lobby, "and has the focus");
+    bool set_focus = false;
+    for (size_t i = seen_before; i < g_seen.size(); ++i)
+        set_focus |= g_seen[i].hwnd == lobby && g_seen[i].msg == 0x0007;
+    check(set_focus, "the lobby got its WM_SETFOCUS");
+    check(user(c, "WindowFromPoint", {10, 10}) == lobby, "the point is the lobby's");
+    host_post_mouse_message(0x0201, 1, 40, 40);
+    host_post_mouse_message(0x0202, 0, 40, 40);
+    drain(c);
+    drain(c);
+    check(user(c, "GetActiveWindow", {}) == game, "a click on the owner activates it");
+    check(user(c, "WindowFromPoint", {10, 10}) == lobby, "but does not raise it over the lobby");
+    host_post_mouse_message(0x0201, 1, 10, 10);
+    host_post_mouse_message(0x0202, 0, 10, 10);
+    drain(c);
+    drain(c);
+    check(user(c, "GetActiveWindow", {}) == lobby, "a click on the lobby activates it again");
+    check(!saw_activate_app_since(seen_before), "no WM_ACTIVATEAPP between the two windows");
+
+    // The program presents again: its frames keep the lobby on top.
+    g_shown.clear();
+    present(0x00ff00);
+    check(ddraw7_flips_to_gdi(&showing) == 1 && !showing, "a Flip ends the GDI surface");
+    check(!g_shown.empty() && g_shown.back().at(10, 10) == 0xff0000 &&
+              g_shown.back().at(2, 2) == 0x00ff00,
+          "a new frame under the lobby");
+
+    // Hiding re-presents without it; the owner is activated again.
+    const size_t before_hide = g_seen.size();
+    g_shown.clear();
+    user(c, "ShowWindow", {lobby, 0});
+    drain(c);
+    check(!g_shown.empty() && g_shown.back().at(10, 10) == 0x00ff00,
+          "hiding the lobby restores the frame");
+    check(user(c, "GetActiveWindow", {}) == game, "hiding the active lobby activates its owner");
+    bool activated = false;
+    for (size_t i = before_hide; i < g_seen.size(); ++i)
+        activated |= g_seen[i].hwnd == game && g_seen[i].msg == 0x0006 && (g_seen[i].wp & 0xffff);
+    check(activated && !saw_activate_app_since(before_hide),
+          "with WM_ACTIVATE and no WM_ACTIVATEAPP");
+
+    // Moving re-presents: the old place shows the frame again.
+    user(c, "ShowWindow", {lobby, 8 /* SW_SHOWNA */});
+    drain(c);
+    g_shown.clear();
+    user(c, "SetWindowPos", {lobby, 0, 30, 20, 16, 16, 0x0014 /* NOZORDER | NOACTIVATE */});
+    drain(c);
+    check(!g_shown.empty() && g_shown.back().at(32, 22) == 0xff0000 &&
+              g_shown.back().at(10, 10) == 0x00ff00,
+          "a moved window leaves no pixels behind");
+
+    // A host that composes the overlay itself gets it, and no CPU frames.
+    g_overlay_host = 1;
+    g_overlay_calls = 0;
+    g_shown.clear();
+    g_lobby_color = 0x0000ff00u; // COLORREF green, 0x00ff00
+    user(c, "InvalidateRect", {lobby, 0, 0});
+    drain(c);
+    check(g_overlay_calls >= 1 && g_overlay.w == 64 && g_overlay.h == 48,
+          "the host is handed the overlay at the mode's size");
+    check(g_overlay.argb.size() == 64 * 48 && g_overlay.argb[22 * 64 + 32] == 0xff00ff00u &&
+              g_overlay.argb[10 * 64 + 10] == 0,
+          "premultiplied: the window opaque, the rest transparent");
+    check(g_shown.empty(), "and composes it: GDI presents no frame of its own");
+    present(0x123456);
+    check(!g_shown.empty() && g_shown.back().at(32, 22) == 0x123456,
+          "frames reach that host as the program drew them");
+    user(c, "DestroyWindow", {lobby});
+    drain(c);
+    check(g_overlay.argb.empty(), "destroying the window takes the overlay away");
+    g_overlay_host = 0;
+    g_lobby_color = 0x000000ffu;
+
+    method(c, back, 2, {});
+    method(c, front, 2, {});
+    method(c, dd, 2, {});
+    d7::ddraw7_enable_for_test(-1);
+    user(c, "DestroyWindow", {game});
+    drain(c);
+}
+
+// Messages the lobby relies on: a window timer with id 0, WM_CLOSE that ends
+// one window and not the program, double clicks, the wheel, and where the
+// host's quit goes.
+static void test_lobby_messages() {
+    X86 *c = &g_main;
+    win32_reset_activation_for_test();
+    host_app_state(true, false);
+    const uint32_t game = make_window(c, true);
+    const uint32_t lobby = make_lobby(c, game, 100, 100);
+    user(c, "ShowWindow", {lobby, 5});
+    drain(c);
+
+    // SetTimer(hwnd, 0, ...) keeps the id: WM_TIMER says 0, KillTimer(hwnd, 0) finds it.
+    check(user(c, "SetTimer", {lobby, 0, 10, 0}) != 0, "SetTimer with id 0 succeeds");
+    bool fired = false;
+    for (int i = 0; i < 100 && !fired; ++i) {
+        g_seen.clear();
+        drain(c);
+        for (const Seen &s : g_seen)
+            fired |= s.hwnd == lobby && s.msg == 0x0113 && s.wp == 0;
+        call(c, "KERNEL32.dll", "Sleep", {2});
+    }
+    check(fired, "WM_TIMER with wParam 0");
+    check(user(c, "KillTimer", {lobby, 0}) == 1, "KillTimer(hwnd, 0)");
+    call(c, "KERNEL32.dll", "Sleep", {30});
+    g_seen.clear();
+    drain(c);
+    bool again = false;
+    for (const Seen &s : g_seen)
+        again |= s.msg == 0x0113;
+    check(!again, "and the timer has stopped");
+
+    // Double clicks for a CS_DBLCLKS class; two presses for one without.
+    auto clicks = [&](int32_t x, int32_t y) {
+        g_seen.clear();
+        for (uint32_t m : {0x0201u, 0x0202u, 0x0201u, 0x0202u}) {
+            host_post_mouse_message(m, m == 0x0201 ? 1 : 0, x, y);
+            drain(c);
+        }
+        std::vector<uint32_t> got;
+        for (const Seen &s : g_seen)
+            if (s.msg >= 0x0201 && s.msg <= 0x0203)
+                got.push_back(s.msg);
+        return got;
+    };
+    check(clicks(108, 108) == std::vector<uint32_t>({0x0201, 0x0202, 0x0203, 0x0202}),
+          "the second press on a CS_DBLCLKS window is WM_LBUTTONDBLCLK");
+    check(clicks(300, 300) == std::vector<uint32_t>({0x0201, 0x0202, 0x0201, 0x0202}),
+          "a class without CS_DBLCLKS gets two presses");
+
+    // The wheel goes to the focus window, with the pointer's screen position.
+    user(c, "SetFocus", {lobby});
+    g_seen.clear();
+    host_post_mouse_wheel(120u << 16, 300, 300);
+    drain(c);
+    bool wheel = false;
+    for (const Seen &s : g_seen)
+        wheel |= s.hwnd == lobby && s.msg == 0x020a && (s.wp >> 16) == 120 &&
+                 s.lp == ((300u << 16) | 300u);
+    check(wheel, "WM_MOUSEWHEEL to the focus window, in screen coordinates");
+
+    // Closing: the host's quit goes to the shown, active window the main
+    // window owns; DefWindowProc's WM_CLOSE ends that window and not the loop.
+    user(c, "SetActiveWindow", {lobby});
+    check(user(c, "GetActiveWindow", {}) == lobby, "the lobby is active");
+    if (host_main_window() == game)
+        check(win32_close_target() == lobby, "a quit goes to the lobby over the main window");
+    const uint32_t msg = scratch(0x1400);
+    while (user(c, "PeekMessageA", {msg, 0, 0, 0, 1}))
+        ;
+    user(c, "DefWindowProcA", {lobby, 0x0010, 0, 0});
+    check(!user(c, "IsWindow", {lobby}), "DefWindowProc's WM_CLOSE destroys the window");
+    bool quit = false;
+    while (user(c, "PeekMessageA", {msg, 0, 0, 0, 1}))
+        quit |= rd32(msg + 4) == 0x0012;
+    check(!quit, "and posts no WM_QUIT while the program has a window left");
+    user(c, "DestroyWindow", {game});
+    drain(c);
+}
+
+// ---------------------------------------------------------------------------
 // DirectInput: foreground, exclusive, buffers, objects
 // ---------------------------------------------------------------------------
 enum {
@@ -1389,6 +1714,8 @@ int main() {
         {"timers and WM_SETCURSOR", test_timer_and_cursor},
         {"cursors", test_cursors},
         {"the clipboard", test_clipboard},
+        {"display layers: GDI windows over a DirectDraw frame", test_display_layers},
+        {"the lobby's messages", test_lobby_messages},
         {"ANSI entry points", test_ansi_entry_points},
         {"DirectInput foreground and exclusive mouse", test_dinput_foreground},
         {"DirectInput buffers and objects", test_dinput_buffers},

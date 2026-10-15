@@ -5,6 +5,7 @@
 // (Task 7) pushes real events in with host_post_message() and the guest pulls
 // them out through PeekMessageA/GetMessageA exactly as it would on Win32.
 #include "user32_internal.h"
+#include "display_seam.h"
 #include "gdi_image.h"
 #include "win32.h"
 #include "../platform/os.h"
@@ -560,6 +561,7 @@ void u_DestroyWindow(X86 *c) {
 static void became_visible(Window *w, bool to_top) {
     if (to_top)
         reorder_window(w->hwnd, 0);
+    display_layers_changed();
     w->update_pending = true;
     if (!w->shown) {
         w->shown = true;
@@ -613,6 +615,13 @@ void u_ShowWindow(X86 *c) {
     const bool activates = cmd != 0 && cmd != 4 && cmd != 6 && cmd != 7 && cmd != 8;
     if (!was && w->visible)
         became_visible(w, cmd != 4 && cmd != 7 && cmd != 8);
+    if (was && !w->visible) {
+        // Its pixels leave the screen, and the activation, if it had it,
+        // moves on to another of the program's windows.
+        display_layers_changed();
+        activation_window_hidden(c, hwnd);
+        return;
+    }
     if (activates)
         activation_window_shown(c, hwnd, true);
 }
@@ -647,6 +656,8 @@ void set_window_pos(X86 *c, Window *w, uint32_t after, int32_t x, int32_t y, int
     // Only actual changes notify it again, or paint is starved forever.
     bool moved = !(flags & 0x0002) && (w->x != x || w->y != y);
     bool sized = !(flags & 0x0001) && (refresh_size || w->w != cx || w->h != cy);
+    if (moved || sized)
+        display_layers_changed();
     if (moved) {
         w->x = x;
         w->y = y;
@@ -676,6 +687,12 @@ void set_window_pos(X86 *c, Window *w, uint32_t after, int32_t x, int32_t y, int
     } else if ((flags & 0x0080) && w->visible) {
         w->visible = false;
         w->style &= ~WS_VISIBLE;
+        display_layers_changed();
+        const uint32_t hwnd = w->hwnd;
+        activation_window_hidden(c, hwnd);
+        w = find_window(hwnd);
+        if (!w)
+            return;
     }
     if (moved || sized) {
         // SetWindowPos sends this before returning. VCL updates its cached
@@ -872,9 +889,15 @@ void u_SetWindowLongA(X86 *c) {
         old = w->hinstance;
         w->hinstance = v;
         break;
-    case -8:
-        old = w->parent;
-        w->parent = v;
+    case -8: // GWL_HWNDPARENT: a child's parent, a top-level window's owner
+        if (w->style & 0x40000000u) {
+            old = w->parent;
+            w->parent = v;
+        } else {
+            old = w->owner;
+            w->owner = v;
+        }
+        display_layers_changed();
         break;
     case -12:
         old = w->id;
@@ -883,10 +906,12 @@ void u_SetWindowLongA(X86 *c) {
     case -16:
         old = w->style;
         w->style = v;
+        display_layers_changed();
         break;
     case -20:
         old = w->exstyle;
         w->exstyle = v;
+        display_layers_changed();
         break;
     case -21:
         old = w->userdata;
@@ -1384,10 +1409,23 @@ void def_window_proc(X86 *c, bool wide) {
             host_dispatch_to_wndproc(c, hwnd, 0x0010 /* WM_CLOSE */, 0, 0);
         set_eax(c, 0);
         return;
-    case 0x0010: // WM_CLOSE -> DestroyWindow
+    case 0x0010: { // WM_CLOSE -> DestroyWindow
+        // Windows posts no WM_QUIT here: a program quits from its own
+        // WM_DESTROY. One that never does would sit on Windows with no window
+        // at all, so when the last top-level window of the program is gone
+        // the runtime ends its loop for it; while another remains (the owner
+        // of a closed dialog or lobby), the program carries on as on Windows.
         destroy_window(c, hwnd);
-        host_post_message(0, 0x0012 /* WM_QUIT */, 0, 0);
+        bool any_top = false;
+        for (const auto &kv : windows())
+            if (!kv.second.parent && kv.first != desktop_handle) {
+                any_top = true;
+                break;
+            }
+        if (!any_top)
+            host_post_message(0, 0x0012 /* WM_QUIT */, 0, 0);
         break;
+    }
     default:
         break;
     }

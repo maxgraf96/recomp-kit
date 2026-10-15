@@ -215,6 +215,41 @@ void activation_window_shown(X86 *c, uint32_t hwnd, bool activate_it) {
     s.send(hwnd, WM_ACTIVATE_, 1, find_window(old) ? old : 0);
 }
 
+// The active window was hidden. Windows activates its owner when that can take
+// it, else the topmost other visible top-level window, with WM_NCACTIVATE and
+// WM_ACTIVATE to both - never WM_ACTIVATEAPP, the application keeps the
+// foreground - and DefWindowProc's WM_ACTIVATE moves the focus. Nothing to
+// activate leaves the hidden window active, as the program has no other.
+void activation_window_hidden(X86 *c, uint32_t hwnd) {
+    Window *w = find_window(hwnd);
+    if (!g_reported || !g_active || active_window() != hwnd || !top_level(w))
+        return;
+    uint32_t next = 0;
+    if (Window *owner = find_window(w->owner);
+        owner && top_level(owner) && owner->visible && owner->enabled)
+        next = owner->hwnd;
+    if (!next) {
+        std::vector<uint32_t> order = window_z_order(0);
+        for (auto it = order.rbegin(); it != order.rend(); ++it) {
+            Window *candidate = find_window(*it);
+            if (*it != hwnd && top_level(candidate) && candidate->visible && candidate->enabled) {
+                next = *it;
+                break;
+            }
+        }
+    }
+    if (!next)
+        return;
+    Sender s{c};
+    s.send(hwnd, WM_NCACTIVATE_, 0, 0);
+    s.send(hwnd, WM_ACTIVATE_, 0u /* WA_INACTIVE */, next);
+    set_active_window(next);
+    if (find_window(next)) {
+        s.send(next, WM_NCACTIVATE_, 1, 0);
+        s.send(next, WM_ACTIVATE_, 1u /* WA_ACTIVE */, find_window(hwnd) ? hwnd : 0);
+    }
+}
+
 // The active window is going away: another visible top-level window of the
 // application takes the activation, or nothing does. The messages are queued,
 // since the destruction is still running its own.
@@ -244,6 +279,23 @@ void host_app_state(bool focused, bool minimized) {
     g_host_focus = focused;
     g_minimized = minimized;
     reconcile(Sender{}, was_minimized);
+}
+
+uint32_t win32_close_target() {
+    const uint32_t main = host_main_window();
+    Window *a = find_window(active_window());
+    if (!main || !a || a->hwnd == main || !top_level(a) || !a->visible ||
+        window_thread(a->hwnd) != window_thread(main))
+        return main;
+    // Only a window the main window owns, at any depth: an unrelated popup
+    // (a splash screen still up) is not what the player is closing.
+    const Window *w = a;
+    for (size_t hops = 0; w && hops <= windows().size(); ++hops) {
+        if (w->owner == main)
+            return a->hwnd;
+        w = find_window(w->owner);
+    }
+    return main;
 }
 
 bool win32_app_active() {
