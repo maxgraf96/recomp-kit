@@ -16,7 +16,8 @@ registers itself from a constructor (x86.h RecompModule), so the host links
 nothing of it. lld signs arm64 output ad hoc.
 
 Nothing here needs the Xcode Command Line Tools: an LLVM clang and lld are
-enough (RECOMP_FREESTANDING_CC, RECOMP_LD64_LLD, or Homebrew's llvm and lld).
+enough (RECOMP_FREESTANDING_CC, RECOMP_LD64_LLD, or Homebrew's llvm and lld),
+and neither looks for an SDK (TOOL_ENV_IGNORED, --no-default-config).
 The symbol check reads the Mach-O's own symbol table (no nm).
 An object is rebuilt only when its source, a header it read or the flags change.
 After linking, the bundle's undefined symbols are checked against what the
@@ -50,6 +51,20 @@ RUNTIME_PREFIXES = ("_recomp_", "_g_mem", "_g_watch_", "_g_dirty", "_fx87", "_x8
 DEFAULT_CC = ("/opt/homebrew/opt/llvm/bin/clang", "clang")
 DEFAULT_LLD = ("/opt/homebrew/opt/lld/bin/ld64.lld", "ld64.lld")
 
+# What clang would read from the environment besides its arguments: an SDK
+# (SDKROOT), include directories that even -nostdinc keeps (CPATH and
+# friends), rewritten arguments, a deployment target. None of it reaches the
+# compiler or the linker, so a bundle is the same whoever builds it and no SDK
+# is ever looked up. --no-default-config (compile_flags) does the same for
+# configuration files: Homebrew's names the Command Line Tools' SDK.
+TOOL_ENV_IGNORED = frozenset(("SDKROOT", "CPATH", "C_INCLUDE_PATH", "OBJC_INCLUDE_PATH", "CPLUS_INCLUDE_PATH",
+                              "OBJCPLUS_INCLUDE_PATH", "CCC_OVERRIDE_OPTIONS", "MACOSX_DEPLOYMENT_TARGET"))
+
+
+def tool_env():
+    """The environment clang and ld64.lld run in: this process's, minus TOOL_ENV_IGNORED."""
+    return {k: v for k, v in os.environ.items() if k not in TOOL_ENV_IGNORED}
+
 
 def find_tool(explicit, env, defaults):
     """The named tool, the environment's, or the first default that exists."""
@@ -76,8 +91,8 @@ def modules_in(gen):
 
 def compile_flags(cc, gen, source_dir, defines, min_macos):
     """The freestanding compile, minus input and output."""
-    resource = subprocess.check_output([cc, "-print-resource-dir"], text=True).strip()
-    flags = ["-target", "arm64-apple-macos%s" % min_macos, "-std=c11", "-O2",
+    resource = subprocess.check_output([cc, "-print-resource-dir"], text=True, env=tool_env()).strip()
+    flags = ["--no-default-config", "-target", "arm64-apple-macos%s" % min_macos, "-std=c11", "-O2",
              "-ffreestanding", "-nostdinc", "-isystem", os.path.join(resource, "include"),
              # The libm builtins in freestanding.h stay single instructions;
              # no contraction, as ADR-level determinism demands of the image.
@@ -106,7 +121,7 @@ def compile_one(cc, flags, flags_hash, source, obj):
     if not stale(obj, dep, stamp, flags_hash):
         return False
     subprocess.run([cc] + flags + ["-MD", "-MF", str(dep), "-c", str(source), "-o", str(obj)],
-                   check=True)
+                   check=True, env=tool_env())
     stamp.write_text(flags_hash)
     return True
 
@@ -201,7 +216,7 @@ def build(gen, out, keys, cc, lld, defines, jobs, min_macos):
             if rebuilt or not bundle.is_file():
                 subprocess.run([lld, "-arch", "arm64", "-platform_version", "macos", min_macos, min_macos,
                                 "-bundle", "-undefined", "dynamic_lookup", "-o", str(bundle)] + objects,
-                               check=True)
+                               check=True, env=tool_env())
             symbols = undefined_symbols(bundle, cc)
             (out / ("%s.undefined" % key)).write_text("\n".join(symbols) + "\n")
             bad = foreign(symbols)

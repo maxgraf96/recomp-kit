@@ -111,6 +111,33 @@ def test_undefined_symbols_come_from_the_mach_o_without_nm(tmp_path):
     assert bundle.macho_undefined(tmp_path / "z.o") is None
 
 
+def test_the_environment_and_config_files_do_not_reach_the_compiler(cc, tmp_path, monkeypatch):
+    """SDKROOT, CPATH and the like are not passed on, and no configuration file
+    is read (Homebrew's names the Command Line Tools' SDK): what the driver plans
+    is the same whatever the environment says. (A compiler may still find an SDK
+    by itself - Homebrew's does, harmlessly: the bundle is the same - but the
+    bundled toolchain does not; tools/tests/test_toolchain.py checks that.)"""
+    flags = bundle.compile_flags(cc, tmp_path, tmp_path, DEFINES, "13.0")
+    assert flags[0] == "--no-default-config"
+    source = tmp_path / "probe.c"
+    source.write_text("int probe(void) { return 0; }\n")
+
+    def plan():
+        return subprocess.run([cc, "-###"] + flags + ["-c", str(source), "-o", str(tmp_path / "probe.o")],
+                              env=bundle.tool_env(), capture_output=True, text=True, check=True).stderr
+
+    baseline = plan()
+    sdk = tmp_path / "Fake.sdk"
+    sdk.mkdir()
+    (sdk / "SDKSettings.json").write_text('{"Version": "99.0", "CanonicalName": "macosx99.0"}')
+    monkeypatch.setenv("SDKROOT", str(sdk))
+    monkeypatch.setenv("CPATH", str(tmp_path / "elsewhere"))
+    monkeypatch.setenv("CCC_OVERRIDE_OPTIONS", "+-DOVERRIDDEN")
+    assert not {"SDKROOT", "CPATH", "CCC_OVERRIDE_OPTIONS"} & set(bundle.tool_env())
+    assert plan() == baseline
+    assert "Fake.sdk" not in baseline and "elsewhere" not in baseline and "OVERRIDDEN" not in baseline
+
+
 def test_the_policy_names_what_a_bundle_may_not_need():
     assert bundle.foreign(["_recomp_call", "_g_mem", "_memcpy", "_setjmp"]) == []
     assert bundle.foreign(["_fprintf", "_sin", "___stderrp"]) == ["_fprintf", "_sin", "___stderrp"]
