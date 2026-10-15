@@ -173,8 +173,8 @@ void loads(const std::string &root, const std::string &fixture) {
     check(host_resource("symbols.json") == dir + "/symbols.json",
           "symbols.json is RECOMP_CODE_DIR's: %s", host_resource("symbols.json").c_str());
     setenv("RECOMP_SYMBOLS", "/elsewhere/symbols.json", 1);
-    check(host_resource("symbols.json") == "/elsewhere/symbols.json",
-          "RECOMP_SYMBOLS wins: %s", host_resource("symbols.json").c_str());
+    check(host_resource("symbols.json") == "/elsewhere/symbols.json", "RECOMP_SYMBOLS wins: %s",
+          host_resource("symbols.json").c_str());
     unsetenv("RECOMP_SYMBOLS");
     unsetenv("RECOMP_CODE_DIR");
     check(host_resource("symbols.json") != dir + "/symbols.json",

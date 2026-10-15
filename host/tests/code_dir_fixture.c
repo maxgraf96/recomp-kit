@@ -14,9 +14,17 @@ static const uint32_t fixture_addrs[1] = {FIXTURE_BASE};
 static void (*const fixture_ptrs[1])(X86 *) = {fixture_fn};
 static RecompHookFn fixture_hooks[1];
 static uint8_t fixture_hooked[1];
-static const RecompModule fixture_module = {
-    "code-dir-fixture.dll", FIXTURE_BASE, FIXTURE_BASE + 0x1000u, fixture_addrs, 1,
-    fixture_ptrs, fixture_hooks, fixture_hooked, 0, 0, 0};
+static const RecompModule fixture_module = {"code-dir-fixture.dll",
+                                            FIXTURE_BASE,
+                                            FIXTURE_BASE + 0x1000u,
+                                            fixture_addrs,
+                                            1,
+                                            fixture_ptrs,
+                                            fixture_hooks,
+                                            fixture_hooked,
+                                            0,
+                                            0,
+                                            0};
 
 #ifndef CODE_DIR_FIXTURE_EMPTY
 __attribute__((constructor)) static void fixture_register(void) {
