@@ -910,7 +910,13 @@ void DD7_EnumDisplayModes(X86 *c) {
     for (const Mode &m : list) {
         if ((fw && m.w != fw) || (fh && m.h != fh) || (fbpp && m.bpp != fbpp))
             continue;
-        write_mode_desc(desc, m, (flags & DDEDM_REFRESHRATES) ? 60 : 0);
+        // Every mode at the display's one rate, 60 Hz, whether or not
+        // DDEDM_REFRESHRATES asked for rates: the flag only decides whether
+        // a mode is listed once per rate, and there is one. A game that
+        // keeps the enumerated rate reports and sets 60 Hz, as on the
+        // Windows reference (a 0 here made one log "at 0Hz").
+        (void)flags;
+        write_mode_desc(desc, m, 60);
         if (guest_call(c, cb, desc, ctx) == DDENUMRET_CANCEL)
             break;
     }

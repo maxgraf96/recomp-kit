@@ -124,7 +124,7 @@ static void test_create_and_query() {
 
 // EnumDisplayModes reports 5-6-5 and X8R8G8B8 modes, 800x600x16 among them.
 struct ModeSeen {
-    uint32_t w, h, bpp, pitch, r, g, b;
+    uint32_t w, h, bpp, pitch, r, g, b, refresh, flags;
 };
 static std::vector<ModeSeen> g_modes;
 static int g_mode_cancel_after = -1;
@@ -135,7 +135,9 @@ static void mode_callback(X86 *c) {
                        rd32(d + d7::DDSD2_lPitch),
                        rd32(d + d7::DDSD2_ddpfPixelFormat + d7::DDPF_dwRBitMask),
                        rd32(d + d7::DDSD2_ddpfPixelFormat + d7::DDPF_dwGBitMask),
-                       rd32(d + d7::DDSD2_ddpfPixelFormat + d7::DDPF_dwBBitMask)});
+                       rd32(d + d7::DDSD2_ddpfPixelFormat + d7::DDPF_dwBBitMask),
+                       rd32(d + d7::DDSD2_dwMipMapCount), // the dwRefreshRate union
+                       rd32(d + d7::DDSD2_dwFlags)});
     set_eax(c, int(g_modes.size()) == g_mode_cancel_after ? 0 : 1);
 }
 extern "C" int ddraw7_set_modes(const char *spec);
@@ -158,6 +160,10 @@ static void test_display_modes() {
             CHECK_EQ(m.g, 0xff00);
             CHECK_EQ(m.b, 0xff);
         }
+        // The display's rate, with or without DDEDM_REFRESHRATES (a game
+        // logs and sets what it enumerated).
+        CHECK_EQ(m.refresh, 60);
+        CHECK(m.flags & d7::DDSD_REFRESHRATE);
         has800x16 |= m.w == 800 && m.h == 600 && m.bpp == 16;
         has1024x32 |= m.w == 1024 && m.h == 768 && m.bpp == 32;
     }
