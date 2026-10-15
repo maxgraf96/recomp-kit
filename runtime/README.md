@@ -441,6 +441,7 @@ paths resolve against the guest current directory, which starts at
 | `RECOMP_STRICT=1` / `0` | strict mode on or off (default: `[runtime] strict`): an undeliverable call or jump, a call through an import of unknown stdcall argument count, or a divide error stops the run with a diagnostic; the null page faults |
 | `RECOMP_NULL_GUARD=1` / `0` | arm or disarm the null-page guard independently of strict mode |
 | `RECOMP_NET_TRACE=1` | every socket call and its outcome on stderr, broadcast fan-out included |
+| `RECOMP_NET_PCAP=FILE` | the program's traffic as it sees it, as a raw-IP pcap with wall-clock times, flushed per packet: every datagram (a broadcast once, to the address named) and every stream's bytes as data segments with a FIN at the close (`winsock.cpp`, "The capture") |
 | `RECOMP_NET_DNS=0` | gethostbyname answers only what it can without DNS |
 | `RECOMP_NET_OFFLINE_HOSTS` | comma-separated host names gethostbyname fails at once, besides `[network] offline_hosts` |
 | `RECOMP_NET_ADAPTERS` | comma-separated interface names: the adapters a guest sees, in that order |

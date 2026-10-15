@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `RECOMP_NET_PCAP=FILE` records a program's network traffic as it sees it,
+  as a raw-IP pcap with wall-clock times: every datagram it sends or receives
+  (a broadcast once, to the address it named) and every stream's bytes as
+  data segments, with a FIN when it closes the socket or reads the end of the
+  stream. Packets are flushed as they happen, so the capture can be read
+  while the program runs; any host gets it, the windowed app included, with
+  no packet capture's privileges.
 - Scripted input can wait for the world outside the game: `wait file PATH`
   goes on once the file exists, and `follow PATH` runs the lines appended to
   a file as they arrive (until a line `end`), so a run whose next step

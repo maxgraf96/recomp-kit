@@ -48,6 +48,8 @@
 //
 // Errors are per guest thread (WSAGetLastError), and also GetLastError's.
 // RECOMP_NET_TRACE=1 writes every socket call and its outcome to stderr.
+// RECOMP_NET_PCAP=FILE records the guest's traffic as a packet capture (see
+// "The capture" below).
 #include "winsock.h"
 #include "game_config.h"
 #include "imports.h"
@@ -164,6 +166,116 @@ void trace(const char *fmt, ...) {
 }
 
 // ---------------------------------------------------------------------------
+// The capture: RECOMP_NET_PCAP=FILE (opened at the first WSAStartup that sees
+// it) is a raw-IPv4 pcap (LINKTYPE_RAW) of the traffic as the guest sees it,
+// for reading a program's network protocol without a packet capture's
+// privileges:
+//   - every datagram it sends or receives, a broadcast once, to the address
+//     the guest named (not once per adapter);
+//   - the bytes of every stream, as data segments with running sequence
+//     numbers, and a FIN when the guest closes the socket or reads the end of
+//     the stream; no handshake, no acknowledgements.
+// A packet's addresses are the socket's own (its host name; the guest's
+// adapter address for a socket bound to one; the wildcard for a datagram
+// socket on INADDR_ANY) and the other end's. Times are the wall clock, so a
+// capture lines up with another machine's. Every packet is flushed, so the
+// file can be read while the program runs. The IP header checksum is right;
+// the UDP and TCP checksums are 0.
+// ---------------------------------------------------------------------------
+std::mutex g_pcap_m; // taken after g_m, never before it
+FILE *g_pcap = nullptr;
+std::string g_pcap_path;
+std::atomic<bool> g_pcap_on{false};
+const uint8_t TCP_FIN_ = 0x01, TCP_PSH_ACK_ = 0x18;
+
+void pcap_reopen(const char *path) {
+    std::lock_guard<std::mutex> lock(g_pcap_m);
+    if (g_pcap)
+        fclose(g_pcap);
+    g_pcap = nullptr;
+    g_pcap_path = path ? path : "";
+    g_pcap_on = false;
+    if (!path || !*path)
+        return;
+    if (!(g_pcap = fopen(path, "wb"))) {
+        fprintf(stderr, "[net] cannot write the capture %s\n", path);
+        return;
+    }
+    const uint32_t header[6] = {0xa1b2c3d4u, 0x00040002u, 0, 0, 65535, 101 /* LINKTYPE_RAW */};
+    fwrite(header, 1, sizeof header, g_pcap);
+    fflush(g_pcap);
+    g_pcap_on = true;
+}
+// RECOMP_NET_PCAP, once per file it names.
+void pcap_from_env() {
+    const char *path = recomp_env("NET_PCAP");
+    if (!path || !*path)
+        return;
+    {
+        std::lock_guard<std::mutex> lock(g_pcap_m);
+        if (g_pcap_path == path)
+            return;
+    }
+    pcap_reopen(path);
+}
+void put_be16(uint8_t *p, uint32_t v) {
+    p[0] = uint8_t(v >> 8);
+    p[1] = uint8_t(v);
+}
+void put_be32(uint8_t *p, uint32_t v) {
+    put_be16(p, v >> 16);
+    put_be16(p + 2, v);
+}
+// One packet. Addresses and ports in host order; `proto` 17 (UDP) or 6 (TCP,
+// with `seq` and `flags`). A stream's data longer than one IP packet holds is
+// split.
+void pcap_packet(uint8_t proto, uint32_t src_ip, uint16_t src_port, uint32_t dst_ip,
+                 uint16_t dst_port, uint32_t seq, uint8_t flags, const uint8_t *data,
+                 uint32_t len) {
+    const uint32_t l4 = proto == 6 ? 20 : 8, room = 65535 - 20 - l4;
+    if (proto != 6 && len > room)
+        len = room; // larger than any datagram: keep what fits
+    std::lock_guard<std::mutex> lock(g_pcap_m);
+    if (!g_pcap)
+        return;
+    uint32_t off = 0;
+    do {
+        const uint32_t n = std::min(len - off, room);
+        uint8_t h[40] = {0x45};
+        const uint32_t total = 20 + l4 + n;
+        put_be16(h + 2, total);
+        h[8] = 64;
+        h[9] = proto;
+        put_be32(h + 12, src_ip);
+        put_be32(h + 16, dst_ip);
+        uint32_t sum = 0;
+        for (int i = 0; i < 20; i += 2)
+            sum += uint32_t(h[i]) << 8 | h[i + 1];
+        while (sum >> 16)
+            sum = (sum & 0xffff) + (sum >> 16);
+        put_be16(h + 10, ~sum & 0xffff);
+        put_be16(h + 20, src_port);
+        put_be16(h + 22, dst_port);
+        if (proto == 6) {
+            put_be32(h + 24, seq + off);
+            h[32] = 5 << 4; // a 20-byte header
+            h[33] = flags;
+            put_be16(h + 34, 0xffff); // the window
+        } else {
+            put_be16(h + 24, 8 + n);
+        }
+        const uint64_t us = os_wall_time_us();
+        const uint32_t rec[4] = {uint32_t(us / 1000000u), uint32_t(us % 1000000u), total, total};
+        fwrite(rec, 1, sizeof rec, g_pcap);
+        fwrite(h, 1, 20 + l4, g_pcap);
+        if (n)
+            fwrite(data + off, 1, n, g_pcap);
+        off += n;
+    } while (off < len);
+    fflush(g_pcap);
+}
+
+// ---------------------------------------------------------------------------
 // Sockets.
 // ---------------------------------------------------------------------------
 struct Waiter {
@@ -198,6 +310,10 @@ struct Sock {
     // polled again until a call changes something, or the poll would spin.
     bool quiet_in = false, quiet_out = false;
     std::vector<Waiter> waiters; // blocked guest calls, one-shot
+    // The capture's stream bytes sent and received so far, and whether the
+    // end of the other side's stream was recorded.
+    uint32_t pcap_out = 0, pcap_in = 0;
+    bool pcap_peer_fin = false;
 };
 
 std::mutex g_m; // the socket table, between guest threads and the monitor
@@ -219,6 +335,46 @@ uint32_t new_handle_locked() {
         g_next_handle = g_next_handle >= 0xfff0u ? 0x100u : g_next_handle + 4;
         if (!socks().count(h))
             return h;
+    }
+}
+
+// The capture's view of a socket (under g_m): its own address.
+void pcap_self_locked(const Sock &s, uint32_t *ip, uint16_t *port) {
+    if (os_net_local_address(s.fd, ip, port) != 0)
+        *ip = 0, *port = 0;
+    if (s.iface_bound)
+        *ip = s.guest_ip;
+}
+// Records what the guest sent on socket h (`out`) or received. The other end
+// is `other` for a datagram the guest addressed or that arrived from there,
+// else the connected peer's address. A stream's empty receive is the end of
+// the other side's stream.
+void pcap_transfer(uint32_t h, bool out, const uint8_t *data, uint32_t len, bool addressed,
+                   uint32_t other_ip, uint16_t other_port) {
+    std::lock_guard<std::mutex> lock(g_m);
+    Sock *s = find_locked(h);
+    if (!s)
+        return;
+    uint32_t ip = 0;
+    uint16_t port = 0;
+    pcap_self_locked(*s, &ip, &port);
+    const bool stream = s->type == OS_NET_STREAM;
+    if ((stream || !addressed) && os_net_peer_address(s->fd, &other_ip, &other_port) != 0)
+        return;
+    if (!stream) {
+        if (out)
+            pcap_packet(17, ip, port, other_ip, other_port, 0, 0, data, len);
+        else
+            pcap_packet(17, other_ip, other_port, ip, port, 0, 0, data, len);
+    } else if (out) {
+        pcap_packet(6, ip, port, other_ip, other_port, 1 + s->pcap_out, TCP_PSH_ACK_, data, len);
+        s->pcap_out += len;
+    } else if (len) {
+        pcap_packet(6, other_ip, other_port, ip, port, 1 + s->pcap_in, TCP_PSH_ACK_, data, len);
+        s->pcap_in += len;
+    } else if (!s->pcap_peer_fin) {
+        s->pcap_peer_fin = true;
+        pcap_packet(6, other_ip, other_port, ip, port, 1 + s->pcap_in, TCP_FIN_ | 0x10, nullptr, 0);
     }
 }
 
@@ -707,6 +863,7 @@ void ws_WSAStartup(X86 *c) {
     wr16(pdata + 4 + 257 + 129 + 2, 65467);
     ++g_startups;
     g_trace = recomp_env("NET_TRACE") && atoi(recomp_env("NET_TRACE")) != 0;
+    pcap_from_env();
     trace("WSAStartup(%u.%u) -> %u start-ups", version & 0xff, version >> 8, g_startups);
     set_eax(c, 0);
 }
@@ -941,6 +1098,14 @@ void ws_closesocket(X86 *c) {
         if (!s) {
             fail(c, WSAENOTSOCK);
             return;
+        }
+        if (g_pcap_on && s->type == OS_NET_STREAM && s->connected) {
+            uint32_t ip = 0, peer_ip = 0;
+            uint16_t port = 0, peer_port = 0;
+            pcap_self_locked(*s, &ip, &port);
+            if (os_net_peer_address(s->fd, &peer_ip, &peer_port) == 0)
+                pcap_packet(6, ip, port, peer_ip, peer_port, 1 + s->pcap_out, TCP_FIN_ | 0x10,
+                            nullptr, 0);
         }
         os_net_close(s->fd);
         for (const Waiter &w : s->waiters)
@@ -1268,10 +1433,11 @@ bool accepts(const Sock &s, const OsNetDatagram &d) {
 }
 
 // recv/recvfrom: one attempt (under no lock: the descriptor is the caller's
-// for as long as it holds the baton). Returns bytes, or -1 with *err set.
+// for as long as it holds the baton). Returns bytes, or -1 with *err set; a
+// datagram's sender in *src_ip/*src_port.
 int64_t receive_once(uint32_t h, uint32_t buf, uint32_t len, uint32_t flags, uint32_t from,
                      uint32_t fromlen, uint32_t *err, bool *would_block, bool *blocking,
-                     uint32_t *timeout) {
+                     uint32_t *timeout, uint32_t *src_ip, uint16_t *src_port) {
     Sock snap;
     {
         std::lock_guard<std::mutex> lock(g_m);
@@ -1345,6 +1511,8 @@ int64_t receive_once(uint32_t h, uint32_t buf, uint32_t len, uint32_t flags, uin
                 *err = WSAEMSGSIZE; // Windows keeps the part that fit
                 return -1;
             }
+            *src_ip = info.from_ip;
+            *src_port = info.from_port;
         }
         // A stream ignores recvfrom's address arguments, as on Windows.
         return n;
@@ -1371,10 +1539,14 @@ void do_receive(X86 *c, uint32_t h, uint32_t buf, uint32_t len, uint32_t flags, 
     for (;;) {
         uint32_t err = 0, timeout = 0;
         bool would_block = false, blocking = false;
+        uint32_t src_ip = 0;
+        uint16_t src_port = 0;
         int64_t n = receive_once(h, buf, usable, flags, from, fromlen, &err, &would_block,
-                                 &blocking, &timeout);
+                                 &blocking, &timeout, &src_ip, &src_port);
         if (n >= 0) {
             trace("recv(%#x, %u) -> %lld", h, usable, (long long)n);
+            if (g_pcap_on && !(flags & MSG_PEEK_)) // a peek is recorded when it is read
+                pcap_transfer(h, false, g_mem + buf, (uint32_t)n, src_port != 0, src_ip, src_port);
             set_eax(c, (uint32_t)n);
             reenable(h, (flags & MSG_OOB_) ? FD_OOB_ : FD_READ_);
             return;
@@ -1554,6 +1726,8 @@ void do_send(X86 *c, uint32_t h, uint32_t buf, uint32_t len, uint32_t flags, uin
     }
     trace("send(%#x, %u%s%s) -> %u", h, len, has_to ? " to " : "",
           has_to ? (net_dotted(ip) + ":" + std::to_string(port)).c_str() : "", sent);
+    if (g_pcap_on)
+        pcap_transfer(h, true, g_mem + buf, sent, has_to, ip, port);
     set_eax(c, sent);
 }
 void ws_send(X86 *c) {
@@ -2734,6 +2908,9 @@ uint32_t winsock_error_from_errno(int e) {
 }
 void winsock_set_resolver_for_test(WinsockResolver fn) {
     g_resolver = fn;
+}
+void winsock_set_pcap_for_test(const char *path) {
+    pcap_reopen(path);
 }
 void winsock_set_resolve_timeout_for_test(uint32_t ms) {
     g_resolve_timeout_ms = ms ? ms : 10000;

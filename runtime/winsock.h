@@ -21,5 +21,8 @@ void winsock_set_resolver_for_test(WinsockResolver fn);
 // How long a guest lookup waits for the resolver before reporting
 // WSATRY_AGAIN; the default is 10 seconds.
 void winsock_set_resolve_timeout_for_test(uint32_t ms);
+// Starts the capture RECOMP_NET_PCAP starts at WSAStartup, into `path`
+// (closing any capture open); null or "" stops it.
+void winsock_set_pcap_for_test(const char *path);
 // Sockets the guest has open, for leak checks.
 size_t winsock_open_sockets();

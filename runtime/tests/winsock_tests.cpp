@@ -1095,6 +1095,134 @@ static void test_registration() {
     ws("closesocket", {s});
 }
 
+// ---------------------------------------------------------------------------
+// The capture (RECOMP_NET_PCAP).
+// ---------------------------------------------------------------------------
+struct Captured {
+    uint8_t proto = 0, flags = 0;
+    uint32_t src = 0, dst = 0, seq = 0, sec = 0;
+    uint16_t sport = 0, dport = 0;
+    bool header_sum_ok = false;
+    std::string data;
+};
+static uint32_t be(const uint8_t *p, int n) {
+    uint32_t v = 0;
+    for (int i = 0; i < n; ++i)
+        v = v << 8 | p[i];
+    return v;
+}
+static std::vector<Captured> read_capture(const std::string &path, uint32_t *linktype) {
+    std::vector<Captured> out;
+    FILE *f = fopen(path.c_str(), "rb");
+    if (!f)
+        return out;
+    uint32_t header[6] = {};
+    if (fread(header, 1, sizeof header, f) == sizeof header && header[0] == 0xa1b2c3d4u)
+        *linktype = header[5];
+    uint32_t rec[4];
+    while (fread(rec, 1, sizeof rec, f) == sizeof rec) {
+        std::vector<uint8_t> pkt(rec[2]);
+        if (fread(pkt.data(), 1, pkt.size(), f) != pkt.size() || pkt.size() < 28)
+            break;
+        Captured c;
+        c.sec = rec[0];
+        uint32_t sum = 0;
+        for (int i = 0; i < 20; i += 2)
+            sum += be(&pkt[i], 2);
+        while (sum >> 16)
+            sum = (sum & 0xffff) + (sum >> 16);
+        c.header_sum_ok = sum == 0xffff && be(&pkt[2], 2) == pkt.size();
+        c.proto = pkt[9];
+        c.src = be(&pkt[12], 4);
+        c.dst = be(&pkt[16], 4);
+        c.sport = (uint16_t)be(&pkt[20], 2);
+        c.dport = (uint16_t)be(&pkt[22], 2);
+        size_t data = 28;
+        if (c.proto == 6) {
+            c.seq = be(&pkt[24], 4);
+            c.flags = pkt[33];
+            data = 40;
+        }
+        c.data.assign((const char *)pkt.data() + data, pkt.size() - data);
+        out.push_back(c);
+    }
+    fclose(f);
+    return out;
+}
+
+static void test_capture() {
+    reset_scratch();
+    char path[512];
+    const char *tmp = getenv("TMPDIR");
+    snprintf(path, sizeof path, "%s/winsock_tests_%llu.pcap", tmp && *tmp ? tmp : "/tmp",
+             (unsigned long long)os_monotonic_ns());
+    winsock_set_pcap_for_test(path);
+    // A datagram each way, and a peek that is recorded once, when it is read.
+    uint32_t a = udp(), b = udp();
+    bind_to(a, LOOPBACK, 0);
+    bind_to(b, 0, 0);
+    const uint16_t pa = port_of(a), pb = port_of(b);
+    sendto_(b, "ping", LOOPBACK, pa);
+    uint32_t buf = gbuf(64);
+    ws("recv", {a, buf, 64, 2 /* MSG_PEEK */});
+    recv_now(a);
+    // A stream: data, the client's close, the end of the stream read on the
+    // server's side, the server's close.
+    uint32_t l = tcp(), cl = tcp();
+    bind_to(l, LOOPBACK, 0);
+    ws("listen", {l, 4});
+    const uint16_t lp = port_of(l);
+    ws("connect", {cl, sin(LOOPBACK, lp), 16});
+    uint32_t s = ws("accept", {l, 0, 0});
+    const uint16_t pc = port_of(cl);
+    ws("send", {cl, gstr("hello"), 5, 0});
+    ws("recv", {s, buf, 64, 0});
+    ws("send", {cl, gstr("!"), 1, 0});
+    ws("closesocket", {cl});
+    ws("recv", {s, buf, 64, 0});
+    ws("recv", {s, buf, 64, 0});
+    ws("recv", {s, buf, 64, 0});
+    ws("closesocket", {s});
+    for (uint32_t k : {a, b, l})
+        ws("closesocket", {k});
+    winsock_set_pcap_for_test(nullptr);
+    uint32_t linktype = 0;
+    std::vector<Captured> got = read_capture(path, &linktype);
+    remove(path);
+    check(linktype == 101, "the capture is a raw-IP pcap (linktype %u)", linktype);
+    check(got.size() == 9, "nine packets recorded (%zu)", got.size());
+    if (got.size() != 9)
+        return;
+    bool sums = true, times = true;
+    const uint32_t now = (uint32_t)(os_wall_time_us() / 1000000u);
+    for (const Captured &c : got) {
+        sums = sums && c.header_sum_ok;
+        times = times && c.sec + 60 > now && c.sec <= now + 1;
+    }
+    check(sums && times, "every IP header's length and checksum are right; wall-clock times");
+    check(got[0].proto == 17 && got[0].src == 0 && got[0].sport == pb && got[0].dst == LOOPBACK &&
+              got[0].dport == pa && got[0].data == "ping",
+          "a sent datagram: from the wildcard socket's port to the address named");
+    check(got[1].proto == 17 && got[1].src == LOOPBACK && got[1].sport == pb &&
+              got[1].dst == LOOPBACK && got[1].dport == pa && got[1].data == "ping",
+          "the datagram received, once (the peek is not recorded): its sender to the socket");
+    check(got[2].proto == 6 && got[2].src == LOOPBACK && got[2].sport == pc && got[2].dport == lp &&
+              got[2].seq == 1 && got[2].flags == 0x18 && got[2].data == "hello",
+          "a stream's send: a data segment from the client to the listening port, seq 1");
+    check(got[3].sport == pc && got[3].dport == lp && got[3].seq == 1 && got[3].data == "hello",
+          "and the server's receive of it, the same segment");
+    check(got[4].sport == pc && got[4].seq == 6 && got[4].data == "!", "the next send: seq 6");
+    check(got[5].sport == pc && got[5].dport == lp && got[5].flags == 0x11 && got[5].seq == 7 &&
+              got[5].data.empty(),
+          "the client's closesocket: a FIN after its 6 bytes");
+    check(got[6].sport == pc && got[6].dport == lp && got[6].seq == 6 && got[6].data == "!",
+          "the server reads the rest");
+    check(got[7].sport == pc && got[7].flags == 0x11 && got[7].seq == 7,
+          "and the end of the stream once, however often it reads it");
+    check(got[8].sport == lp && got[8].dport == pc && got[8].flags == 0x11 && got[8].seq == 1,
+          "the server's closesocket: a FIN from its side");
+}
+
 int main() {
     setvbuf(stdout, nullptr, _IONBF, 0);
     if (!os_net_supported()) {
@@ -1127,6 +1255,7 @@ int main() {
         {"the IP helper API and Netbios", test_iphlpapi},
         {"broadcast fan-out", test_broadcast},
         {"names", test_names},
+        {"the capture (RECOMP_NET_PCAP)", test_capture},
         {"the two DLLs", test_registration},
     };
     for (const auto &t : tests) {
