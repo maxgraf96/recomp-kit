@@ -158,12 +158,26 @@ void HeadlessSink::character(uint32_t codepoint, bool down) {
     const HostKeyMapping m = dik ? host_key_mapping_for_dik(dik) : HostKeyMapping{0, 0, 0};
     if (shift && down)
         key(0x2a /* LSHIFT */, true);
-    if (m.dik)
+    if (m.dik) {
+        // The key, marked as typing text the input method delivers on its
+        // own, as the windowed host posts a key that types.
         host_input_key(m.mac, down);
-    const uint32_t vk = m.vk ? m.vk : 0xe7 /* VK_PACKET */;
-    const uint32_t lparam =
-        m.dik ? host_key_lparam(m, down, false, !down) : (down ? 1u : 0xc0000001u);
-    host_post_key_text(down ? kKeyDown : kKeyUp, vk, lparam, down ? codepoint : 0);
+        host_post_key_text(down ? kKeyDown : kKeyUp, m.vk, host_key_lparam(m, down, false, !down),
+                           down ? HOST_KEY_TEXT_FOLLOWS : 0);
+    }
+    // The text, the way the platform's input method commits it: WM_CHAR in
+    // the window's code page, or an IME result for a character 1252 lacks.
+    if (down && codepoint && codepoint < 0x110000) {
+        uint16_t units[2];
+        size_t n = 1;
+        if (codepoint >= 0x10000) {
+            units[0] = uint16_t(0xd800 + ((codepoint - 0x10000) >> 10));
+            units[1] = uint16_t(0xdc00 + ((codepoint - 0x10000) & 0x3ff));
+            n = 2;
+        } else
+            units[0] = uint16_t(codepoint);
+        host_post_text(units, n);
+    }
     if (shift && !down)
         key(0x2a, false);
 }

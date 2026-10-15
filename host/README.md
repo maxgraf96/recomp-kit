@@ -439,8 +439,9 @@ lobby over a fullscreen frame, with the DirectInput mouse made non-exclusive.
 delivered as host mouse events, so the window under the point gets them
 (`WindowFromPoint`), and a later `pointer f32 ...` switches back. `type TEXT`
 types the rest of its line: the key a US layout makes each character with
-(Shift included) and, in a boot host, the character itself as `WM_CHAR` in
-the window's code page (`VK_PACKET` + `WM_CHAR` for one no key makes).
+(Shift included) and, in a boot host, the character itself the way the
+platform's input method commits text (`host_post_text`: `WM_CHAR` in the
+window's code page, or an IME result for a character code page 1252 lacks).
 
 The frames a script sees are the screen's: in a boot host, every present,
 with the program's GDI windows composed over a DirectDraw 7 frame
