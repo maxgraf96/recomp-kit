@@ -910,6 +910,31 @@ static void test_more_win32(X86 *c) {
           "GetTempPathA is Temp under the guest root, and exists: %s", tmp.c_str());
     check(call_import(c, "KERNEL32.dll", "GetTempPathA", {3, buf}) == tmp.size() + 1,
           "...and asks for the room it needs");
+
+    // A file opened with no access at all: CREATE_NEW still creates it, as
+    // on Windows (Empire Earth makes each save file so, then opens it to
+    // write), and a second CREATE_NEW finds it there. OPEN_ALWAYS with read
+    // access only creates a missing file too.
+    const uint32_t fresh = guest_str((root + "\\FRESH.EES").c_str());
+    const uint32_t hf = call_import(c, "KERNEL32.dll", "CreateFileA", {fresh, 0, 0, 0, 1, 0x80, 0});
+    check(hf != 0xffffffffu &&
+              call_import(c, "KERNEL32.dll", "GetFileAttributesA", {fresh}) != 0xffffffffu,
+          "CreateFileA(no access, CREATE_NEW) creates the file");
+    call_import(c, "KERNEL32.dll", "CloseHandle", {hf});
+    check(call_import(c, "KERNEL32.dll", "CreateFileA", {fresh, 0, 0, 0, 1, 0x80, 0}) ==
+                  0xffffffffu &&
+              call_import(c, "KERNEL32.dll", "GetLastError", {}) == 80,
+          "...and CREATE_NEW again: ERROR_FILE_EXISTS");
+    const uint32_t always = guest_str((root + "\\ALWAYS.EES").c_str());
+    const uint32_t ha =
+        call_import(c, "KERNEL32.dll", "CreateFileA", {always, 0x80000000u, 0, 0, 4, 0x80, 0});
+    check(ha != 0xffffffffu &&
+              call_import(c, "KERNEL32.dll", "GetFileAttributesA", {always}) != 0xffffffffu,
+          "CreateFileA(GENERIC_READ, OPEN_ALWAYS) creates a missing file");
+    call_import(c, "KERNEL32.dll", "CloseHandle", {ha});
+    check(call_import(c, "KERNEL32.dll", "DeleteFileA", {fresh}) == 1 &&
+              call_import(c, "KERNEL32.dll", "DeleteFileA", {always}) == 1,
+          "...and both delete again");
     const uint32_t made =
         call_import(c, "KERNEL32.dll", "GetTempFileNameA", {buf, guest_str("eex"), 0, buf + 260});
     const std::string temp_file = gm_str(buf + 260, 260);

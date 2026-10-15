@@ -44,6 +44,7 @@ enum {
     ERROR_FILE_NOT_FOUND_ = 2,
     ERROR_PATH_NOT_FOUND_ = 3,
     ERROR_ACCESS_DENIED_ = 5,
+    ERROR_FILE_EXISTS_ = 80,
     ERROR_INVALID_HANDLE_ = 6,
     ERROR_NOT_ENOUGH_MEMORY_ = 8,
     ERROR_NO_MORE_FILES_ = 18,
@@ -4466,8 +4467,16 @@ void create_file_named(X86 *c, const std::string &name) {
     // archive into the profile. Such a handle opens through the read tier and
     // moves to the write tier at its first WriteFile (file_promote_for_write).
     bool deferred = want_write && !create;
-    int op = (want_write && !deferred) ? WIN32_FILE_WRITE : WIN32_FILE_READ;
+    // CREATE_NEW, CREATE_ALWAYS and TRUNCATE_EXISTING change the file whatever
+    // the access asked for: Windows creates a file opened with no access at
+    // all (Empire Earth makes each save file so, then opens it to write).
+    bool writes = want_write || disp == 1 || disp == 2 || disp == 5;
+    int op = (writes && !deferred) ? WIN32_FILE_WRITE : WIN32_FILE_READ;
     std::string host = win32_host_path_op(name, op);
+    // OPEN_ALWAYS without write access: the file as the read tiers have it,
+    // else a new one where writes go.
+    if (host.empty() && disp == 4 && op == WIN32_FILE_READ)
+        host = win32_host_path_op(name, WIN32_FILE_WRITE);
     if (host.empty()) {
         set_last_error(ERROR_FILE_NOT_FOUND_);
         LOGV("CreateFileA(%s): not found", name.c_str());
@@ -4496,7 +4505,7 @@ void create_file_named(X86 *c, const std::string &name) {
     }
     int fd = os_fd_open(host.c_str(), flags);
     if (fd < 0) {
-        set_last_error(ERROR_FILE_NOT_FOUND_);
+        set_last_error(errno == EEXIST && disp == 1 ? ERROR_FILE_EXISTS_ : ERROR_FILE_NOT_FOUND_);
         set_eax(c, INVALID_HANDLE_VALUE_);
         return;
     }

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `CreateFile` with `CREATE_NEW`, `CREATE_ALWAYS` or `TRUNCATE_EXISTING` creates
+  or truncates the file whatever access it asks for, as Windows does, and
+  `OPEN_ALWAYS` with read access only creates a file no tier has; a second
+  `CREATE_NEW` fails with `ERROR_FILE_EXISTS`. A file opened with no access
+  went through the read tiers and failed: Empire Earth makes every save file
+  that way, so each autosave failed ("Error Creating File").
 - A followed script line that fails (a click that cannot reach its target, a
   wait that runs out) is reported and skipped instead of ending the run, as a
   line that does not parse already was: whoever writes the file decides what
