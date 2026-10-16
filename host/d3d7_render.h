@@ -77,6 +77,9 @@ extern "C" void host_d7_dump_next(const char *path);
 // for the call. For a host that checks or writes what was shown (scripted
 // input); a readback per frame, so null it when nobody is looking.
 extern "C" void host_d7_set_frame_tap(void (*tap)(const uint32_t *argb, int w, int h));
+// Asked before each tap's readback: 0 skips it (a script that is only waiting).
+// Null, the default, always reads back.
+extern "C" void host_d7_set_frame_tap_wanted(int (*wanted)(void));
 // The presenter is about to stop: finish GPU work and drop the renderer made on
 // its device.
 extern "C" void host_d7_release_device(void);

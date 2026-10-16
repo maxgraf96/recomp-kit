@@ -687,6 +687,13 @@ struct Runner::Impl {
     uint32_t phase_ms = 0;
     uint64_t phase_frames = 0;
     std::atomic<uint64_t> frames_now{0}; // read by pixels() for its log
+    // Pixels cost the host a GPU readback and a copy of every frame. A plain
+    // `wait N` reads none, so while one has more than kQuietMargin ms to go and
+    // no dump is pending the host may skip them (wants_pixels()). The wait's
+    // last stretch delivers frames again, so `latest` is a recent picture
+    // whenever the next step looks at it or takes it as an action's baseline.
+    static constexpr uint32_t kQuietMargin = 1000;
+    std::atomic<bool> quiet{false};
     // The closed-loop move.
     struct Move {
         double gain_x = 0, gain_y = 0; // pixels per count, measured; 0 = not yet
@@ -787,6 +794,22 @@ struct Runner::Impl {
             *y = int32_t(ry);
         }
         return true;
+    }
+
+    // After every tick: whether the step it stopped at is a plain wait with
+    // more than the margin to go, with no dump in flight.
+    void update_quiet(uint32_t now) {
+        bool q = false;
+        if (!done && !fail && step_begun && pc < script.steps.size()) {
+            const Step &st = script.steps[pc];
+            q = st.op == Op::Wait && now - step_ms < st.ms &&
+                st.ms - (now - step_ms) > kQuietMargin;
+        }
+        if (q) {
+            std::lock_guard<std::mutex> lock(m);
+            q = pending_dumps.empty() && dumps_done >= dumps_armed;
+        }
+        quiet.store(q, std::memory_order_relaxed);
     }
 
     // Before every action: what `wait change` and `wait message` measure from.
@@ -1285,6 +1308,13 @@ void Runner::tick(Sink &sink, uint32_t now, uint64_t frames) {
     Impl &d = *impl_;
     if (!d.loaded || d.done || d.fail)
         return;
+    struct Quiet { // on every way out of this tick
+        Impl &d;
+        uint32_t now;
+        ~Quiet() {
+            d.update_quiet(now);
+        }
+    } quiet{d, now};
     d.frames_now = frames;
     if (!d.started) {
         d.started = true;
@@ -1410,7 +1440,7 @@ void Runner::pixels(const uint32_t *argb, int w, int h) {
 }
 
 bool Runner::wants_pixels() const {
-    return running();
+    return running() && !impl_->quiet.load(std::memory_order_relaxed);
 }
 
 void Runner::message(uint32_t, uint32_t msg) {

@@ -362,6 +362,25 @@ static void test_waits() {
         CHECK(wrong.r.failure().find("pixel (10, 10) was 102030, not ff0000") != std::string::npos);
     }
     {
+        // A plain wait looks at no frame: the host may skip them until its
+        // last second, which refreshes the latest picture for what follows.
+        Sim sim("wait frames 2\nwait 5000\nwait size 64 48 within 500\n");
+        CHECK(sim.r.wants_pixels());
+        sim.run(100);
+        CHECK(sim.r.wants_pixels() == false);
+        sim.run(3000);
+        CHECK(sim.r.wants_pixels() == false);
+        sim.run(1500);
+        CHECK(sim.r.wants_pixels());
+        sim.run(5000);
+        CHECK(sim.r.finished());
+        CHECK(!sim.r.wants_pixels());
+        // Waits shorter than the margin, and every other step, want them.
+        Sim brief("wait 900\nwait 900\n");
+        brief.run(100);
+        CHECK(brief.r.wants_pixels());
+    }
+    {
         // The whole-script timeout.
         Sim sim("timeout 500\nwait 10000\n");
         sim.run(5000);

@@ -254,7 +254,9 @@ class Runner {
     // `frames` the number of frames presented so far.
     void tick(Sink &sink, uint32_t now_ms, uint64_t frames);
     // A presented frame's pixels. Any thread; the host passes every presented
-    // frame it can, or at least every one while wants_pixels() says so.
+    // frame it can, or at least every one while wants_pixels() says so. That
+    // is false during most of a plain `wait N` (no step then looks at frames),
+    // so a host can skip the readback that pixels cost it.
     void pixels(const uint32_t *argb, int w, int h);
     bool wants_pixels() const;
     // A window procedure is about to receive `msg`. Any thread.

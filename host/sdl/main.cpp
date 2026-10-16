@@ -2406,8 +2406,13 @@ int main(int argc, char **argv) {
     fflush(stdout);
     // RECOMP_INPUT_SCRIPT: a script drives the game (host/input_script.h).
     g_script = iscript::host_start_from_env();
-    if (g_script)
+    if (g_script) {
+        host_d7_set_frame_tap_wanted([]() -> int {
+            const iscript::Runner *r = iscript::host_runner();
+            return r && r->wants_pixels();
+        });
         host_d7_set_frame_tap(script_frame);
+    }
 
     // The music's synth, built here and not later. midiOutOpen arrives on a
     // guest thread holding the cooperative scheduler baton, which stops

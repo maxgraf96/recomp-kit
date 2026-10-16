@@ -221,6 +221,44 @@ gpu::Address address_of(uint32_t a) {
 
 std::atomic<uint32_t> g_generation{1};
 
+// RECOMP_D3D7_STATS=1: every 5 s of presents, one line of what the renderer did
+// per frame and what its stalls cost - the pipelines compiled on first use, the
+// textures created, the uploads and readbacks - for finding a frame's hitches.
+struct Costs {
+    uint64_t pipelines = 0, creates = 0, uploads = 0, readbacks = 0;
+    double pipeline_ms = 0, create_ms = 0, upload_ms = 0, readback_ms = 0, worst_pipeline_ms = 0;
+    uint64_t upload_bytes = 0, draws = 0, primitives = 0, passes = 0, frames = 0;
+};
+double percentile(std::vector<double> v, double q) {
+    if (v.empty())
+        return 0;
+    std::sort(v.begin(), v.end());
+    return v[size_t(q * double(v.size() - 1))];
+}
+bool stats_wanted() {
+    static const bool on = [] {
+        const char *v = recomp_env("D3D7_STATS");
+        return v && *v && strcmp(v, "0") != 0;
+    }();
+    return on;
+}
+// RECOMP_D3D7_FRAME_LOG=FILE: the wall-clock time of every present, Unix epoch
+// milliseconds, one a line - the game's own frame times, whatever the display
+// then shows of them.
+FILE *frame_log() {
+    static FILE *f = [] {
+        const char *path = recomp_env("D3D7_FRAME_LOG");
+        FILE *out = path && *path ? fopen(path, "w") : nullptr;
+        if (out)
+            setvbuf(out, nullptr, _IOFBF, 1 << 16);
+        return out;
+    }();
+    return f;
+}
+double now_ms() {
+    return double(os_monotonic_ns()) / 1e6;
+}
+
 } // namespace
 
 // ===========================================================================
@@ -258,7 +296,10 @@ struct D3D7Renderer::Impl {
 
     std::unordered_map<uint64_t, gpu::Pipeline> pipelines;
     HostD7Stats stats{};
-    std::vector<uint32_t> list; // index-list scratch
+    Costs costs, reported;
+    double report_ms = 0, last_present_ms = 0;
+    std::vector<double> intervals; // present to present, this report's
+    std::vector<uint32_t> list;    // index-list scratch
 
     explicit Impl(gpu::Device *d) : dev(d), generation(g_generation.fetch_add(1) + 1) {
         gpu::RenderState rs;
@@ -393,9 +434,16 @@ struct D3D7Renderer::Impl {
         auto it = pipelines.find(key);
         if (it != pipelines.end())
             return it->second;
+        const double t0 = stats_wanted() ? now_ms() : 0;
         gpu::Pipeline p = dev->render_pipeline(quad ? "d3d7_quad" : "d3d7", rs);
         pipelines[key] = p;
         ++stats.pipelines;
+        if (stats_wanted()) {
+            const double ms = now_ms() - t0;
+            ++costs.pipelines;
+            costs.pipeline_ms += ms;
+            costs.worst_pipeline_ms = std::max(costs.worst_pipeline_ms, ms);
+        }
         return p;
     }
     gpu::RenderState pass_state() const {
@@ -408,6 +456,15 @@ struct D3D7Renderer::Impl {
 
     // --- resources ---------------------------------------------------------
     bool create(uint32_t id, int w, int h, int levels, uint32_t flags) {
+        if (!stats_wanted())
+            return create_now(id, w, h, levels, flags);
+        const double t0 = now_ms();
+        const bool ok = create_now(id, w, h, levels, flags);
+        ++costs.creates;
+        costs.create_ms += now_ms() - t0;
+        return ok;
+    }
+    bool create_now(uint32_t id, int w, int h, int levels, uint32_t flags) {
         destroy(id);
         Res r;
         r.w = w;
@@ -460,6 +517,16 @@ struct D3D7Renderer::Impl {
         res.erase(it);
     }
     void upload(uint32_t id, int level, const HostD7Rect &r, const void *bgra, int pitch) {
+        if (!stats_wanted())
+            return upload_now(id, level, r, bgra, pitch);
+        const double t0 = now_ms();
+        upload_now(id, level, r, bgra, pitch);
+        ++costs.uploads;
+        costs.upload_bytes +=
+            uint64_t(std::max(0, r.x1 - r.x0)) * uint64_t(std::max(0, r.y1 - r.y0)) * 4;
+        costs.upload_ms += now_ms() - t0;
+    }
+    void upload_now(uint32_t id, int level, const HostD7Rect &r, const void *bgra, int pitch) {
         Res *t = find(id);
         if (!t || t->depth || level < 0 || level >= t->levels)
             return;
@@ -489,6 +556,15 @@ struct D3D7Renderer::Impl {
         stats.upload_bytes += uint64_t(w) * uint64_t(h) * 4;
     }
     bool readback(uint32_t id, int level, const HostD7Rect &r, void *out, int pitch) {
+        if (!stats_wanted())
+            return readback_now(id, level, r, out, pitch);
+        const double t0 = now_ms();
+        const bool ok = readback_now(id, level, r, out, pitch);
+        ++costs.readbacks;
+        costs.readback_ms += now_ms() - t0;
+        return ok;
+    }
+    bool readback_now(uint32_t id, int level, const HostD7Rect &r, void *out, int pitch) {
         Res *t = find(id);
         if (!t || t->depth || level < 0 || level >= t->levels)
             return false;
@@ -652,6 +728,42 @@ struct D3D7Renderer::Impl {
     // --- draws -------------------------------------------------------------
     void draw(const HostD7Draw &d);
     void present(uint32_t id, const HostD7Rect &r, int mode_w, int mode_h);
+
+    // RECOMP_D3D7_STATS: one line per 5 s, per frame where it is a rate.
+    void report_costs() {
+        costs.draws = stats.draws;
+        costs.primitives = stats.primitives;
+        costs.passes = stats.passes;
+        ++costs.frames;
+        const double now = now_ms();
+        if (last_present_ms != 0)
+            intervals.push_back(now - last_present_ms);
+        last_present_ms = now;
+        if (report_ms == 0)
+            report_ms = now;
+        if (now - report_ms < 5000)
+            return;
+        const Costs &a = reported, &b = costs;
+        const double f = double(std::max<uint64_t>(1, b.frames - a.frames));
+        fprintf(stderr,
+                "[d3d7] stats: %.0f frames in %.1f s; per frame %.0f draws, %.0f primitives, "
+                "%.1f passes, %.1f uploads (%.0f KB, %.2f ms); %llu textures created (%.1f ms), "
+                "%llu pipelines compiled (%.1f ms, worst %.1f ms), %llu readbacks (%.1f ms); "
+                "frame ms p50 %.1f p95 %.1f p99 %.1f max %.1f\n",
+                f, (now - report_ms) / 1000.0, (b.draws - a.draws) / f,
+                (b.primitives - a.primitives) / f, (b.passes - a.passes) / f,
+                (b.uploads - a.uploads) / f, (b.upload_bytes - a.upload_bytes) / 1024.0 / f,
+                (b.upload_ms - a.upload_ms) / f, (unsigned long long)(b.creates - a.creates),
+                b.create_ms - a.create_ms, (unsigned long long)(b.pipelines - a.pipelines),
+                b.pipeline_ms - a.pipeline_ms, b.worst_pipeline_ms,
+                (unsigned long long)(b.readbacks - a.readbacks), b.readback_ms - a.readback_ms,
+                percentile(intervals, 0.5), percentile(intervals, 0.95),
+                percentile(intervals, 0.99), percentile(intervals, 1.0));
+        intervals.clear();
+        reported = costs;
+        costs.worst_pipeline_ms = 0;
+        report_ms = now;
+    }
 };
 
 void D3D7Renderer::Impl::draw(const HostD7Draw &d) {
@@ -909,6 +1021,7 @@ std::mutex g_dump_lock;
 std::string g_dump_next;
 uint64_t g_present_serial = 0;
 std::atomic<void (*)(const uint32_t *, int, int)> g_frame_tap{nullptr};
+std::atomic<int (*)(void)> g_frame_tap_wanted{nullptr};
 
 bool write_ppm(const std::string &path, const uint32_t *bgra, int w, int h) {
     FILE *f = fopen(path.c_str(), "wb");
@@ -951,6 +1064,9 @@ std::string dump_path(uint64_t serial) {
 }
 } // namespace
 
+extern "C" void host_d7_set_frame_tap_wanted(int (*wanted)(void)) {
+    g_frame_tap_wanted.store(wanted);
+}
 extern "C" void host_d7_set_frame_tap(void (*tap)(const uint32_t *, int, int)) {
     g_frame_tap.store(tap);
 }
@@ -963,9 +1079,23 @@ void D3D7Renderer::Impl::present(uint32_t id, const HostD7Rect &r, int mode_w, i
     if (w <= 0 || h <= 0)
         return;
     ++stats.presents;
+    if (stats_wanted())
+        report_costs();
+    if (FILE *log = frame_log()) {
+        fprintf(log, "%.3f\n", double(os_wall_time_us()) / 1000.0);
+        if (stats.presents % 64 == 0)
+            fflush(log);
+    }
     const uint64_t serial = ++g_present_serial;
     const std::string dump = dump_path(serial);
-    const auto tap = g_frame_tap.load();
+    // The tap's frame is a readback, which waits for the GPU: skipped while the
+    // tap says it does not want one.
+    auto tap = g_frame_tap.load();
+    if (tap) {
+        const auto wanted = g_frame_tap_wanted.load();
+        if (wanted && !wanted())
+            tap = nullptr;
+    }
     if (!dump.empty() || tap) {
         std::vector<uint32_t> px(size_t(w) * size_t(h));
         if (readback(id, 0, r, px.data(), w * 4)) {
