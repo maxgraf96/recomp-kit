@@ -40,6 +40,19 @@
   scheduling point, handoff cost, idle time, mouse-press latency);
   `RECOMP_SCHED_TRACE_LONG_MS` logs every long hold and wait as it happens.
   `RECOMP_SCHED_POLICY=rr` restores the old policy for bisection.
+- The run thread no longer spins on the event loop while the game waits.
+  With nothing to run, it waits in the host until the earliest deadline, and
+  SDL waits only in whole milliseconds, so it came straight back from the
+  fraction of one that a `Sleep(1)` leaves. The scheduler handed it the rest
+  again and again: in the new `runtime_tests` check, 106,860 calls into the
+  host for 20 `Sleep(1)` calls (now 20). The SDL host now waits the fraction on
+  the run loop (`os_wait_run_loop`, Apple platforms), which input still ends.
+  Elsewhere the runtime sleeps it on the thread's condition variable.
+  Measured in Empire Earth, idle in a late game at the 60 fps limit and
+  124 ticks a second: the run thread 22-47% of a core -> 2%, the process
+  75-77% -> 63-65%, and the kernel's energy estimate for the process
+  4.6 W -> 2.0 W (the cores ran at 3.6 GHz instead of 4.2). At the main menu:
+  the run thread 11-15% -> 6-7%, 173 -> 87 mW.
 - The Frame limit now holds a game that paces itself by the vertical blank.
   A DirectDraw 7 `Flip` without `DDFLIP_NOVSYNC`, or a DXGI `Present` with a
   sync interval, waits for the first refresh at least 1/limit after the

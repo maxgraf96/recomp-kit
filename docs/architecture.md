@@ -132,6 +132,18 @@ it at the next scheduling pass in which it is free, so a loop of Enter and
 Leave keeps it, as on Windows. Guest threads run at the user-interactive QoS class, so macOS
 neither puts the holder on an efficiency core nor behind a build.
 
+The run thread under a windowed host is also the one that services the window
+system, so it never just sleeps. Waiting for the baton, it polls events once
+and then waits on its condition variable, at most 2 ms at a time. With nothing
+to run, it waits inside the host until the earliest deadline
+(`host_set_idle_waiter`), and input ends that wait at once. SDL waits only in
+whole milliseconds, so the SDL host waits the rest of a slice on the run loop
+(`os_wait_run_loop` in `platform/os.h`, on Apple platforms), which input and
+events posted to the application still end. Where a host cannot wait that
+fraction, the runtime sleeps it on the condition variable. It is never handed
+back to the host: in a game of `Sleep(1)` loops, that was a spin on the event
+loop for most of every idle millisecond.
+
 `RECOMP_SCHED_TRACE=FILE` (`runtime/sched_trace.h`) reports, per thread and per
 window (`RECOMP_SCHED_TRACE_EVERY`, 10 s): the time it held the baton, how long
 it waited for it while it could run, why it gave it up, the longest stretch
