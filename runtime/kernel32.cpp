@@ -3563,14 +3563,26 @@ void sched_leave_critsec(uint32_t cs) {
     wr32(cs + CS_OFF_LOCK_COUNT, rec ? rec - 1 : 0xffffffffu);
     if (!rec) {
         wr32(cs + CS_OFF_OWNER, 0);
-        // A thread waiting for it may go on, but leaving never gives the
+        // A thread waiting for it may go on, but leaving does not give the
         // baton up, as on Windows, where the leaver keeps running and the
         // waiter wakes on another processor. The section is not handed over
         // either: the waiter takes it at the next scheduling pass in which it
         // is free, so a leaver that takes it straight back keeps it. A tight
         // loop of Enter and Leave (Empire Earth paints each tile of a new map
         // under one) would otherwise hand the baton to the waiter once per
-        // pass of the loop.
+        // pass of the loop. The exception is a waiter of a higher priority:
+        // on Windows it would take the section at once, on its own processor
+        // or by preempting this one (Empire Earth's time-critical simulation
+        // waits for its world lock this way), so the next checkpoint gives it
+        // the section and the baton.
+        const double now = sched_now();
+        for (GuestThread *t : threads())
+            if (t->blocked && t->wait_kind == W_CRITSEC && t->wait_cs == cs &&
+                sched_base_class(t->priority) > sched_class(me, now)) {
+                g_sched_recheck.store(true, std::memory_order_relaxed);
+                recomp_sched_pending = 1u;
+                break;
+            }
     }
     g_sched_m.unlock();
 }
