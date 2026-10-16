@@ -530,6 +530,30 @@ void host_input_state(HostInputState *out) {
     g_input.mouse_dx = g_input.mouse_dy = g_input.mouse_dz = 0;
 }
 
+// A host that keeps every key transition (host/input.cpp does), when a test
+// turns it on; off, it answers as the weak default does: no journal.
+bool g_key_edges_on = false;
+std::vector<std::pair<uint8_t, uint8_t>> g_key_edges;
+uint64_t host_input_key_edges(uint64_t from, uint8_t *dik, uint8_t *down, uint32_t max, uint32_t *n,
+                              int *lost) {
+    if (n)
+        *n = 0;
+    if (lost)
+        *lost = 0;
+    if (!g_key_edges_on)
+        return HOST_NO_KEY_EDGES;
+    if (!max)
+        return g_key_edges.size();
+    uint32_t taken = 0;
+    for (uint64_t i = from; i < g_key_edges.size() && taken < max; ++i, ++taken) {
+        dik[taken] = g_key_edges[i].first;
+        down[taken] = g_key_edges[i].second;
+    }
+    if (n)
+        *n = taken;
+    return from + taken;
+}
+
 } // extern "C"
 
 // ---------------------------------------------------------------------------
@@ -5186,6 +5210,82 @@ static void test_unchanged_state_produces_no_buffered_event() {
     wr32(count, 8);
     CHECK_EQ(call_method(kb, DID_GetDeviceData, {16, buf, count, 0}), DI_OK);
     CHECK_EQ(rd32(count), 0u);
+}
+
+// A key pressed and released between two of the game's polls. DirectInput's
+// buffer has both records (Windows buffers every transition); a diff of the
+// states at each poll sees nothing at all. With the host's transitions the
+// shim replays them in order, and GetDeviceState still reports the key up.
+static void test_key_tap_between_polls() {
+    for (int journal = 0; journal < 2; ++journal) {
+        cpu_reset();
+        dinput_reset();
+        memset(&g_input, 0, sizeof g_input);
+        g_key_edges.clear();
+        g_key_edges_on = journal != 0;
+        uint32_t create = tramp("DINPUT.dll", "DirectInputCreateA");
+        CHECK_EQ(call_shim(create, {0x400000, 0x0700, sc(0), 0}), DI_OK);
+        uint32_t di = rd32(sc(0));
+        uint32_t guid = sc(0x40);
+        static const uint8_t KBD[16] = {0x61, 0x2B, 0x1D, 0x6F, 0xA0, 0xD5, 0xCF, 0x11,
+                                        0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00};
+        for (int i = 0; i < 16; ++i)
+            wr8(guid + (uint32_t)i, KBD[i]);
+        CHECK_EQ(call_method(di, DI_CreateDevice, {guid, sc(0x50), 0}), DI_OK);
+        uint32_t kb = rd32(sc(0x50));
+        uint32_t df = sc(0x70);
+        gm_zero(df, 24);
+        wr32(df + 0, 24);
+        wr32(df + 4, 16);
+        wr32(df + 12, 256);
+        CHECK_EQ(call_method(kb, DID_SetDataFormat, {df}), DI_OK);
+        uint32_t prop = sc(0x80);
+        gm_zero(prop, 20);
+        wr32(prop + 0, 20);
+        wr32(prop + 4, 16);
+        wr32(prop + 16, 32);
+        CHECK_EQ(call_method(kb, DID_SetProperty, {1 /* DIPROP_BUFFERSIZE */, prop}), DI_OK);
+        // A key held since before Acquire is reported once, from the state.
+        g_input.keys[0x2a] = 0x80; // LSHIFT
+        g_key_edges.push_back({0x2a, 1});
+        CHECK_EQ(call_method(kb, DID_Acquire, {}), DI_OK);
+        uint32_t count = sc(0x90), buf = sc(0xa0);
+        wr32(count, 8);
+        CHECK_EQ(call_method(kb, DID_GetDeviceData, {16, buf, count, 0}), DI_OK);
+        CHECK_EQ(rd32(count), 1u);
+        CHECK_EQ(rd32(buf + 0), 0x2au);
+        // D (0x20) down and up again before the next poll; Shift stays down.
+        g_key_edges.push_back({0x20, 1});
+        g_key_edges.push_back({0x20, 0});
+        dinput_host_input_changed();
+        wr32(count, 8);
+        CHECK_EQ(call_method(kb, DID_GetDeviceData, {16, buf, count, 0}), DI_OK);
+        if (journal) {
+            CHECK_EQ(rd32(count), 2u);
+            CHECK_EQ(rd32(buf + 0), 0x20u);
+            CHECK_EQ(rd32(buf + 4), 0x80u);
+            CHECK_EQ(rd32(buf + 16), 0x20u);
+            CHECK_EQ(rd32(buf + 20), 0u);
+            CHECK(rd32(buf + 28) > rd32(buf + 12)); // dwSequence
+        } else {
+            CHECK_EQ(rd32(count), 0u);
+        }
+        uint32_t state = sc(0x200);
+        CHECK_EQ(call_method(kb, DID_GetDeviceState, {256, state}), DI_OK);
+        CHECK_EQ(rd8(state + 0x20), 0u);
+        CHECK_EQ(rd8(state + 0x2a), 0x80u);
+        // Held across polls: one down, and nothing more until it comes up.
+        g_input.keys[0x20] = 0x80;
+        g_key_edges.push_back({0x20, 1});
+        wr32(count, 8);
+        CHECK_EQ(call_method(kb, DID_GetDeviceData, {16, buf, count, 0}), DI_OK);
+        CHECK_EQ(rd32(count), 1u);
+        wr32(count, 8);
+        CHECK_EQ(call_method(kb, DID_GetDeviceData, {16, buf, count, 0}), DI_OK);
+        CHECK_EQ(rd32(count), 0u);
+    }
+    g_key_edges_on = false;
+    g_key_edges.clear();
 }
 
 static void test_mouse_motion_survives_keyboard_poll() {
@@ -13699,6 +13799,7 @@ int main() {
         {"dinput notification", test_dinput_event_notification},
         {"dinput create W and Ex", test_dinput_create_w},
         {"mouse motion survives", test_mouse_motion_survives_keyboard_poll},
+        {"key tap between polls", test_key_tap_between_polls},
         {"unchanged state buffered", test_unchanged_state_produces_no_buffered_event},
         {"re-attach a palette", test_setpalette_self},
         {"colour key at 16 bpp", test_colorkey_16bpp},

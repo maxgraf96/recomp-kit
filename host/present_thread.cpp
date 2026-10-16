@@ -117,6 +117,9 @@ struct Service : std::enable_shared_from_this<Service> {
     double last_link_tick = -1, window_started = -1;
     unsigned faults = 0, logged_faults = 0;
     double frame_period = 1.0 / 60, fake_now = 0;
+    // The frame limit's deadline for the next paced present (frame_pacing.h
+    // paced_refresh_delay); 0 until a limit is on.
+    double limit_deadline = 0;
     void fault(unsigned bit, const char *reason) { // mutex held
         if (logged_faults & bit)
             return;
@@ -1843,22 +1846,23 @@ bool host_present_suspended(void) {
 // Present with a sync interval returns at a vertical blank on Windows, and a
 // renderer that asks for one paces its whole loop by it. This is how long
 // until the presenter's next refresh boundary, `intervals` refreshes on, on the
-// device clock the pacer keeps. The caller waits it out in the scheduler: a
-// host sleep here would hold the guest baton for the whole wait and freeze
-// every other guest thread with it. A headless presenter has no display to
-// wait for, so a smoke still runs as fast as it can.
+// device clock the pacer keeps - and, with the settings page's Frame limit on,
+// no sooner than the limit allows (frame_pacing.h paced_refresh_delay), which
+// is what caps a game that flips at the display's rate. One call per present:
+// the limit's deadline advances with each. The caller waits it out in the
+// scheduler: a host sleep here would hold the guest baton for the whole wait
+// and freeze every other guest thread with it, and the scheduler's wait is
+// what hands the time the limit saves to the game's other threads. A headless
+// presenter has no display to wait for, so a smoke still runs as fast as it
+// can.
 extern "C" double host_present_refresh_delay(int intervals) {
     auto s = active.load();
     if (!s || s->fake || !s->device || intervals <= 0)
         return 0.0;
-    double period, now;
-    {
-        std::lock_guard lock(s->mutex);
-        period = s->frame_period > 0 ? s->frame_period : 1.0 / 60;
-        now = s->device->now_seconds();
-    }
-    const double next = (std::floor(now / period) + intervals) * period;
-    return next > now ? next - now : 0.0;
+    std::lock_guard lock(s->mutex);
+    const double period = s->frame_period > 0 ? s->frame_period : 1.0 / 60;
+    return paced_refresh_delay(s->device->now_seconds(), period, intervals, mods_display_fps(),
+                               &s->limit_deadline);
 }
 
 // The GDI overlay (runtime/display_seam.h), on the guest thread under the

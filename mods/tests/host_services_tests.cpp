@@ -455,6 +455,64 @@ MOD_TEST_SUITE(higher_resolution_provider_validates_layout_and_keeps_legacy_api)
     MOD_CHECK_EQ(mods_texture_override_ex(9, 2, 2, 16, &out), 0);
 }
 
+// game.toml [settings] frame_limit / performance_overlay give a fresh
+// profile's rows; a saved graph nobody chose follows a game's "off", one the
+// player picked (page or F11) stays.
+MOD_TEST_SUITE(display_game_defaults_and_overlay_choice) {
+    char dir[512];
+    snprintf(dir, sizeof dir, "%s/pop-overlay-default-XXXXXX", os_temp_dir());
+    const bool made = os_mkdtemp(dir) == 0;
+    MOD_CHECK(made);
+    if (!made)
+        return;
+    const std::string previous_profile = mods_overlay_profile_dir();
+    mods_overlay_set_profile_dir(dir);
+    const std::string path = mods_settings_path();
+    auto boot = [&](int fps_row, int overlay_row) {
+        mods_display_reset();
+        setup();
+        mods_display_game_defaults_for_test(fps_row, overlay_row);
+        mods_settings_load(path.c_str()); // false for a profile with no file yet
+        mods_display_live_defaults();
+        mods_display_default_overlay(2);
+        mods_display_init();
+    };
+    // No game default: the windowed host's 60 FPS and graph.
+    boot(-1, -1);
+    MOD_CHECK_EQ(mods_display_fps(), 60);
+    MOD_CHECK_EQ(mods_display_overlay(), 2);
+    // A fresh profile with the game's own: 120 FPS, the overlay off.
+    boot(3, 0);
+    MOD_CHECK_EQ(mods_display_fps(), 120);
+    MOD_CHECK_EQ(mods_display_overlay(), 0);
+    // A profile saved with the host's defaults (every declared value is
+    // saved), as an older build left it: its graph was nobody's choice.
+    os_unlink(path.c_str());
+    boot(-1, -1);
+    MOD_CHECK(mods_settings_save());
+    boot(2, 0);
+    MOD_CHECK_EQ(mods_display_fps(), 60);
+    MOD_CHECK_EQ(mods_display_overlay(), 0);
+    // The player turns the graph on: it stays across restarts.
+    MOD_CHECK_EQ(mods_display_set(DISPLAY_OVERLAY, 2), POP_OK);
+    boot(2, 0);
+    MOD_CHECK_EQ(mods_display_overlay(), 2);
+    // A choice other than the graph was never in doubt.
+    MOD_CHECK_EQ(mods_display_set(DISPLAY_OVERLAY, 1), POP_OK);
+    boot(2, 0);
+    MOD_CHECK_EQ(mods_display_overlay(), 1);
+    // The frame limit row keeps what the profile saved.
+    MOD_CHECK_EQ(mods_display_set(DISPLAY_FPS, 0), POP_OK);
+    boot(2, 0);
+    MOD_CHECK_EQ(mods_display_fps(), 0);
+    mods_display_game_defaults_for_test(-1, -1);
+    mods_display_reset();
+    mods_settings_reset();
+    mods_overlay_set_profile_dir(previous_profile.c_str());
+    os_unlink(path.c_str());
+    os_rmdir(dir);
+}
+
 MOD_TEST_SUITE(hd_controls_persist_across_restart) {
     char dir[512];
     snprintf(dir, sizeof dir, "%s/pop-hd-settings-XXXXXX", os_temp_dir());

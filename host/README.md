@@ -70,7 +70,12 @@ in `mod-settings.json`; reopening the menu restores that selection without
 reapplying the preset and overwriting later manual changes.
 
 F10 display/mod settings and the F11 overlay selection save immediately to
-`<profile>/mod-settings.json`, using an atomic replacement. `RECOMP_PROFILE_DIR`
+`<profile>/mod-settings.json`, using an atomic replacement. A fresh profile
+starts with `game.toml [settings] frame_limit` and `performance_overlay` when
+the game names them, else a windowed host's 60 FPS and the platform's overlay
+(the graph on a desktop). The Frame limit holds a game that flips or presents
+with a sync interval (`paced_refresh_delay`, `host/frame_pacing.h`) as well as
+one whose frame clock the runtime paces. `RECOMP_PROFILE_DIR`
 selects a different profile; worktrees have separate default profiles. The
 original GOG files remain the fallback read layer and are not modified.
 

@@ -63,6 +63,13 @@ system_fonts = false
 # registered and DirectMusic looks missing, as on a system without it.
 dmusic = false
 
+# [settings] rows = [...] lists the settings page's rows a game shows (all of
+# them without the key); key = "F10" opens the page ("none": only Command-comma
+# or the on-screen button). frame_limit = "original" | 40 | 60 | 120 and
+# performance_overlay = "off" | "counters" | "graph" are what a fresh profile
+# starts with; without them a windowed host's 60 FPS and the platform's
+# overlay.
+
 # [network] offline_hosts = ["old.example.com"]: host names gethostbyname fails
 # at once (WSAHOST_NOT_FOUND) instead of asking a resolver, for a server long
 # gone whose lookup would otherwise wait on DNS (RECOMP_NET_OFFLINE_HOSTS adds

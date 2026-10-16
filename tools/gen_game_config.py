@@ -108,6 +108,14 @@ def render_header(cfg, developer_paths=True):
     lines.append("#define RECOMP_SETTINGS_ROWS 0x%03xu" % mask)
     # The page's key as a DirectInput scan code; 0: none.
     lines.append("#define RECOMP_SETTINGS_KEY 0x%02xu" % game_config.SETTINGS_KEYS[cfg["settings"]["key"]])
+    # A fresh profile's Frame limit and performance overlay, as the rows' value
+    # indexes; -1: the host's default.
+    limit = cfg["settings"].get("frame_limit")
+    overlay = cfg["settings"].get("performance_overlay")
+    lines.append("#define RECOMP_SETTINGS_FRAME_LIMIT_DEFAULT %d" %
+                 (game_config.SETTINGS_FRAME_LIMITS.index(limit) if limit is not None else -1))
+    lines.append("#define RECOMP_SETTINGS_OVERLAY_DEFAULT %d" %
+                 (game_config.SETTINGS_OVERLAYS.index(overlay) if overlay is not None else -1))
     # The launcher's data: what to call the game, where to get it, where an
     # install may be, and what an import copies (host/launcher/).
     launcher = cfg["launcher"]

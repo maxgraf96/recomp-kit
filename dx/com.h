@@ -369,6 +369,7 @@ struct ComObj {
     uint32_t notify_event = 0; // SetEventNotification, 0 when none
     uint32_t axis_mode_absolute = 0;
     uint8_t last_keys[256] = {0};
+    uint64_t key_edges = 0; // keyboard: the host key transitions already replayed
     uint8_t last_buttons[8] = {0};
     int32_t last_x = 0, last_y = 0, last_z = 0;
     uint32_t sequence = 0;

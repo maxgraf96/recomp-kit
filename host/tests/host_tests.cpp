@@ -404,6 +404,49 @@ static void test_input_state() {
     host_input_reset();
 }
 
+// Every key transition is kept, in order, for DirectInput's keyboard buffer
+// (host_input_key_edges): a tap between two of the game's polls is two
+// records. Repeats of a held key are not transitions.
+static void test_input_key_edges() {
+    host_input_reset();
+    uint8_t dik[8], down[8];
+    uint32_t n = 9;
+    int lost = 1;
+    CHECK_EQ(host_input_key_edges(0, dik, down, 8, &n, &lost), 0u);
+    CHECK_EQ(n, 0u);
+    CHECK_EQ(lost, 0);
+    host_input_key(0x02, true);  // D
+    host_input_key(0x02, true);  // the key repeating: no transition
+    host_input_key(0x02, false); // up before anyone looked
+    host_input_modifiers(0x00000002u | 0x00020000u);
+    CHECK_EQ(host_input_key_edges(0, nullptr, nullptr, 0, nullptr, nullptr), 3u);
+    uint64_t cursor = host_input_key_edges(0, dik, down, 2, &n, &lost);
+    CHECK_EQ(cursor, 2u);
+    CHECK_EQ(n, 2u);
+    CHECK_EQ(dik[0], 0x20);
+    CHECK_EQ(down[0], 1);
+    CHECK_EQ(dik[1], 0x20);
+    CHECK_EQ(down[1], 0);
+    cursor = host_input_key_edges(cursor, dik, down, 8, &n, &lost);
+    CHECK_EQ(cursor, 3u);
+    CHECK_EQ(n, 1u);
+    CHECK_EQ(dik[0], 0x2a); // DIK_LSHIFT
+    CHECK_EQ(down[0], 1);
+    host_input_modifiers(0);
+    // A reader more than the journal behind is told, and starts from now.
+    for (int i = 0; i < 600; ++i)
+        host_input_key(0x35, i % 2 == 0);
+    cursor = host_input_key_edges(cursor, dik, down, 8, &n, &lost);
+    CHECK_EQ(lost, 1);
+    CHECK_EQ(n, 0u);
+    CHECK_EQ(cursor, host_input_key_edges(0, nullptr, nullptr, 0, nullptr, nullptr));
+    // A reset under a reader is the same thing.
+    host_input_reset();
+    host_input_key_edges(cursor, dik, down, 8, &n, &lost);
+    CHECK_EQ(lost, 1);
+    host_input_reset();
+}
+
 // The game's DirectInput devices are serviced by two guest threads that wait on
 // an event, so input nobody announces is input the game never sees. Every
 // mutator has to announce, and the count has to move for every kind of event.
@@ -9323,6 +9366,65 @@ static void test_display_settings_bridge() {
     CHECK(display_offered_modes == supported);
 }
 
+// A present that waits for the vertical blank under the Frame limit
+// (frame_pacing.h paced_refresh_delay): the frames it releases are refresh
+// boundaries, spaced by the limit on average, never closer than the display
+// allows, and a late frame does not catch up in a burst.
+static void test_paced_refresh_delay() {
+    struct Case {
+        double hz;
+        int limit;
+        double fps; // what a game that renders in 2 ms gets
+    } cases[] = {{120, 0, 120}, {120, 60, 60}, {120, 40, 40}, {120, 120, 120}, {60, 60, 60},
+                 {60, 120, 60}, {144, 60, 60}, {100, 60, 60}, {60, 40, 40}};
+    for (const Case &k : cases) {
+        const double period = 1 / k.hz;
+        double now = 0.0013, deadline = 0, first = -1, last = -1, closest = 1;
+        int frames = 0;
+        while (now < 10) {
+            const double wait = paced_refresh_delay(now, period, 1, k.limit, &deadline);
+            CHECK(wait >= 0 &&
+                  wait <= 1.0 / std::min(k.hz, double(k.limit ? k.limit : 1000)) + period);
+            now += wait;
+            // Released on a boundary.
+            CHECK(std::fabs(now / period - std::round(now / period)) < 1e-6);
+            if (last >= 0)
+                closest = std::min(closest, now - last);
+            if (first < 0)
+                first = now;
+            last = now;
+            ++frames;
+            now += 0.002; // the next frame's work
+        }
+        CHECK_NEAR((frames - 1) / (last - first), k.fps, k.fps * 0.01);
+        CHECK(closest >= period - 1e-9);
+    }
+    // Without a limit it is the time to the next boundary, as before, and
+    // `intervals` refreshes on.
+    double d = 5;
+    CHECK_NEAR(paced_refresh_delay(0.001, 1.0 / 60, 1, 0, &d), 1.0 / 60 - 0.001, 1e-9);
+    CHECK_EQ(d, 0.0);
+    CHECK_NEAR(paced_refresh_delay(0.001, 1.0 / 60, 2, 0, nullptr), 2.0 / 60 - 0.001, 1e-9);
+    CHECK_EQ(paced_refresh_delay(0.001, 0, 1, 60, &d), 0.0);
+    // 60 on a 120 Hz display: every other refresh. A frame 50 ms late is shown
+    // at the next refresh, and the one after it two refreshes later, not at
+    // once to make up for it.
+    const double p = 1.0 / 120;
+    d = 0;
+    double t = 0.001;
+    t += paced_refresh_delay(t, p, 1, 60, &d);
+    CHECK_NEAR(t, p, 1e-9);
+    t += 0.002;
+    t += paced_refresh_delay(t, p, 1, 60, &d);
+    CHECK_NEAR(t, 3 * p, 1e-9);
+    t += 0.0503;
+    const double late = t + paced_refresh_delay(t, p, 1, 60, &d);
+    CHECK_NEAR(late, std::ceil(t / p) * p, 1e-9);
+    t = late + 0.002;
+    t += paced_refresh_delay(t, p, 1, 60, &d);
+    CHECK_NEAR(t - late, 2 * p, 1e-9);
+}
+
 static void test_native_frame_metrics() {
     // Rounded sleeps must average to the requested cadence, including 120Hz's
     // fractional 8.333ms period. Slow work must not trigger a catch-up burst.
@@ -9983,6 +10085,7 @@ int main(int argc, char **argv) {
     mem_init();
     test_fullscreen_edge_presentation();
     test_native_frame_metrics();
+    test_paced_refresh_delay();
     test_wide_cursor_bound();
     test_pointer_reaches_scrolling_edges();
     test_native_overlay_pixels();
@@ -10036,6 +10139,7 @@ int main(int argc, char **argv) {
         {"window size for a guest mode", test_window_size},
         {"scan code map", test_scancodes},
         {"input state", test_input_state},
+        {"input key transitions", test_input_key_edges},
         {"input gate", test_input_gate},
         {"input gate modifiers", test_input_gate_modifiers},
         {"input method text", test_input_method_text},

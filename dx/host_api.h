@@ -316,6 +316,18 @@ struct HostInputState {
     uint8_t keys[256];
 };
 void host_input_state(HostInputState *out);
+// Every key transition the host has seen, in order, for DirectInput's keyboard
+// buffer: a key pressed and released between two of the game's polls is still
+// two records, as a real buffered keyboard reports it, where a diff of the
+// states at each poll loses it. `from` is the caller's cursor (0 at the
+// start). Up to `max` transitions after it go to `dik` and `down` (*n of them)
+// and the cursor past them is returned; HOST_NO_KEY_EDGES when the host keeps
+// none. *lost is set when the host no longer holds all of them: the cursor
+// returned is then the newest, and the caller resynchronises from
+// host_input_state. max 0 asks only for the newest cursor.
+#define HOST_NO_KEY_EDGES UINT64_MAX
+uint64_t host_input_key_edges(uint64_t from, uint8_t *dik, uint8_t *down, uint32_t max, uint32_t *n,
+                              int *lost);
 // Optional window feedback, at mouse delivery under the guest baton.
 void host_input_pointer_correction(int32_t *dx, int32_t *dy);
 

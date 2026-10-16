@@ -373,6 +373,33 @@ class LoadTests(unittest.TestCase):
                     game_config.load(game)
                 self.assertIn(bad, str(caught.exception))
 
+    def test_settings_defaults_knobs(self):
+        # [settings] frame_limit / performance_overlay: a fresh profile's rows,
+        # as the rows' value indexes; -1 leaves the host's default.
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            (game / "globals.toml").write_text((ROOT / "games/stub/globals.toml").read_text())
+            base = (ROOT / "games/stub/game.toml").read_text()
+            (game / "game.toml").write_text(base)
+            header = gen_game_config.render_header(game_config.load(game))
+            self.assertIn("#define RECOMP_SETTINGS_FRAME_LIMIT_DEFAULT -1", header)
+            self.assertIn("#define RECOMP_SETTINGS_OVERLAY_DEFAULT -1", header)
+            for limit, index in (('"original"', 0), ("40", 1), ("60", 2), ("120", 3)):
+                (game / "game.toml").write_text(
+                    base + '\n[settings]\nframe_limit = %s\nperformance_overlay = "off"\n' % limit)
+                header = gen_game_config.render_header(game_config.load(game))
+                self.assertIn("#define RECOMP_SETTINGS_FRAME_LIMIT_DEFAULT %d" % index, header)
+                self.assertIn("#define RECOMP_SETTINGS_OVERLAY_DEFAULT 0", header)
+            (game / "game.toml").write_text(base + '\n[settings]\nperformance_overlay = "graph"\n')
+            self.assertIn("#define RECOMP_SETTINGS_OVERLAY_DEFAULT 2",
+                          gen_game_config.render_header(game_config.load(game)))
+            for bad in ("frame_limit = 30", "frame_limit = true", 'frame_limit = "60"',
+                        'performance_overlay = "on"', "performance_overlay = 1"):
+                (game / "game.toml").write_text(base + "\n[settings]\n%s\n" % bad)
+                with self.assertRaises(ValueError) as caught:
+                    game_config.load(game)
+                self.assertIn(bad.split(" =")[0], str(caught.exception))
+
     def test_mods_builtin_knob(self):
         with tempfile.TemporaryDirectory() as tmp:
             game = Path(tmp)

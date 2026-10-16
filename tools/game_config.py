@@ -29,6 +29,11 @@ SETTINGS_ROW_ALIASES = {"keypad": "controls"}
 # on-screen controls' button). F11 is the performance overlay's.
 SETTINGS_KEYS = {"F1": 0x3B, "F2": 0x3C, "F3": 0x3D, "F4": 0x3E, "F5": 0x3F, "F6": 0x40, "F7": 0x41,
                  "F8": 0x42, "F9": 0x43, "F10": 0x44, "F12": 0x58, "none": 0}
+# [settings] frame_limit and performance_overlay: what a fresh profile starts
+# with, by the rows' own values (mods/display_settings.cpp). Without the key the
+# host's default stands (a windowed desktop host: 60 FPS and the graph).
+SETTINGS_FRAME_LIMITS = ("original", 40, 60, 120)
+SETTINGS_OVERLAYS = ("off", "counters", "graph")
 
 # [controls] default_layout and the on-screen layout picker's choices.
 CONTROLS_LAYOUTS = ("pad", "keys", "pad+keys", "hidden")
@@ -205,6 +210,14 @@ def load(game_dir):
     if key not in SETTINGS_KEYS:
         raise ValueError("%s: [settings] key must be one of %s, not %r"
                          % (source, ", ".join(SETTINGS_KEYS), key))
+    limit = settings.get("frame_limit")
+    if limit is not None and (isinstance(limit, bool) or limit not in SETTINGS_FRAME_LIMITS):
+        raise ValueError("%s: [settings] frame_limit must be one of %s, not %r"
+                         % (source, ", ".join(map(str, SETTINGS_FRAME_LIMITS)), limit))
+    overlay = settings.get("performance_overlay")
+    if overlay is not None and overlay not in SETTINGS_OVERLAYS:
+        raise ValueError("%s: [settings] performance_overlay must be one of %s, not %r"
+                         % (source, ", ".join(SETTINGS_OVERLAYS), overlay))
     launcher = cfg.setdefault("launcher", {})
     launcher.setdefault("title", game["name"])
     launcher.setdefault("store", "")

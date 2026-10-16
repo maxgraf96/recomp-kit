@@ -23,6 +23,9 @@ bool mods_settings_row_listed(int bit);
 // The kit's tests see every row whatever the game lists; one that checks the
 // list sets its own mask (bits as RECOMP_SETTINGS_ROWS).
 void mods_settings_rows_for_test(unsigned mask);
+// As game.toml [settings] frame_limit / performance_overlay would set them
+// (row values; -1: the host's default).
+void mods_display_game_defaults_for_test(int fps_row, int overlay_row);
 #endif
 struct DisplayMode {
     int w, h, bpp;

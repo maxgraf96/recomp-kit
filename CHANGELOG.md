@@ -40,6 +40,35 @@
   scheduling point, handoff cost, idle time, mouse-press latency);
   `RECOMP_SCHED_TRACE_LONG_MS` logs every long hold and wait as it happens.
   `RECOMP_SCHED_POLICY=rr` restores the old policy for bisection.
+- The Frame limit now holds a game that paces itself by the vertical blank.
+  A DirectDraw 7 `Flip` without `DDFLIP_NOVSYNC`, or a DXGI `Present` with a
+  sync interval, waits for the first refresh at least 1/limit after the
+  previous frame's, on a deadline that advances by 1/limit
+  (`host/frame_pacing.h` `paced_refresh_delay`): 60 on a 120 Hz display is
+  every other refresh, a rate the display does not divide still averages the
+  limit, and a late frame starts a new phase instead of catching up. Before,
+  such a game presented at the display's rate whatever the row said (Empire
+  Earth at up to 120 frames a second on a ProMotion display). The wait is the
+  scheduler's, so the game's other threads get the time: Empire Earth's main
+  loop ran 480 passes a second at a 60 limit against 240 at 120.
+- `game.toml [settings] frame_limit` (`"original"`, 40, 60 or 120) and
+  `performance_overlay` (`"off"`, `"counters"` or `"graph"`) set what a fresh
+  profile starts with (`RECOMP_SETTINGS_FRAME_LIMIT_DEFAULT`,
+  `RECOMP_SETTINGS_OVERLAY_DEFAULT`); without them a windowed host's 60 FPS and
+  the platform's overlay stand. Every declared setting is saved, defaults
+  included, so a profile could not tell a chosen overlay from the old default
+  graph: a choice made on the settings page or with F11 now marks it
+  (`host.display/overlay_chosen`), and an unmarked graph follows the default,
+  so a game whose default is off loses the graph once.
+- DirectInput's keyboard buffer replays every key transition the host saw, in
+  order (`host_input_key_edges`), instead of diffing the key states at each
+  poll. A key pressed and released between two of the game's polls is a down
+  and an up record, as on Windows; before, it was not reported at all, and a
+  quick tap of a hotkey did nothing when the game polled less often than the
+  key was held (Empire Earth polls once per pass of its main loop). Keys held
+  when the device is acquired, and a reader that falls more than 512
+  transitions behind, still come from the state.
+
 - GDI draws a row at a time where it can. `BitBlt` (and a 1:1 `StretchBlt`)
   between 32-bit `BI_RGB` DIBs, window surfaces and 1-bit sources, constant-
   and per-pixel-alpha `AlphaBlend`, fills (`Rectangle`'s interior, opaque

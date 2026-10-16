@@ -48,18 +48,45 @@ void mods_display_reset() {
     fps = overlay = 0;
     scene_w = scene_h = 0;
 }
+// A game's own defaults for a fresh profile (game.toml [settings] frame_limit
+// and performance_overlay, as the rows' values; -1 leaves the host's).
+#ifndef RECOMP_SETTINGS_FRAME_LIMIT_DEFAULT
+#define RECOMP_SETTINGS_FRAME_LIMIT_DEFAULT -1
+#endif
+#ifndef RECOMP_SETTINGS_OVERLAY_DEFAULT
+#define RECOMP_SETTINGS_OVERLAY_DEFAULT -1
+#endif
+namespace {
+#ifdef POPM_TESTING
+int game_fps_default = RECOMP_SETTINGS_FRAME_LIMIT_DEFAULT;
+int game_overlay_default = RECOMP_SETTINGS_OVERLAY_DEFAULT;
+#else
+const int game_fps_default = RECOMP_SETTINGS_FRAME_LIMIT_DEFAULT;
+const int game_overlay_default = RECOMP_SETTINGS_OVERLAY_DEFAULT;
+#endif
+} // namespace
+#ifdef POPM_TESTING
+void mods_display_game_defaults_for_test(int fps_row, int overlay_row) {
+    game_fps_default = fps_row;
+    game_overlay_default = overlay_row;
+}
+#endif
+// A windowed host's defaults: 60 FPS and the frame-time graph, unless the
+// game names its own.
 void mods_display_live_defaults() {
     if (initialized)
         return;
-    desired[DISPLAY_FPS] = 2;
-    desired[DISPLAY_OVERLAY] = 2;
+    desired[DISPLAY_FPS] = game_fps_default >= 0 ? game_fps_default : 2;
+    desired[DISPLAY_OVERLAY] = game_overlay_default >= 0 ? game_overlay_default : 2;
 }
 // The overlay a fresh profile starts with, when the host wants something
-// other than the live default: a player build starts without the graph.
+// other than the live default: a player build starts without the graph. A
+// game that names its own default keeps it.
 void mods_display_default_overlay(int mode) {
     if (initialized)
         return;
-    desired[DISPLAY_OVERLAY] = std::clamp(mode, 0, 2);
+    desired[DISPLAY_OVERLAY] =
+        std::clamp(game_overlay_default >= 0 ? game_overlay_default : mode, 0, 2);
 }
 namespace {
 #ifdef POPM_TESTING
@@ -82,6 +109,7 @@ void mods_display_init() {
         return;
     initialized = true;
     const int maximum[] = {1, 4, 1, 2, std::max(0, int(modes.size()) - 1), 3, 2, 1, 4};
+    const int overlay_default = desired[DISPLAY_OVERLAY];
     for (int i = 0; i < DISPLAY_ROW_COUNT; ++i) {
         mods_settings_declare(MODS_OWNER_RUNTIME, "host.display", keys[i], keys[i], POP_SETTING_INT,
                               desired[i], 0, maximum[i]);
@@ -95,6 +123,19 @@ void mods_display_init() {
         static const int neutral[DISPLAY_ROW_COUNT] = {0, 0, 1, 0, 0, 0, 0, 1, 3};
         if (!mods_settings_row_listed(i) && i != DISPLAY_WINDOW && i != DISPLAY_OVERLAY)
             desired[i] = neutral[i];
+    }
+    // Every declared value is saved, defaults included, so a profile from
+    // before the player could be told apart holds the graph a windowed host
+    // used to start with whether or not anyone chose it. Only a choice made on
+    // the page or with F11 marks the overlay as the player's; an unmarked graph
+    // follows the default, so a game whose default is off loses it once.
+    mods_settings_declare(MODS_OWNER_RUNTIME, "host.display", "overlay_chosen", "overlay_chosen",
+                          POP_SETTING_BOOL, 0, 0, 1);
+    int64_t chosen = 0;
+    mods_settings_get(MODS_OWNER_RUNTIME, "overlay_chosen", &chosen);
+    if (!chosen && desired[DISPLAY_OVERLAY] == 2 && overlay_default != 2) {
+        desired[DISPLAY_OVERLAY] = overlay_default;
+        mods_settings_set(MODS_OWNER_RUNTIME, keys[DISPLAY_OVERLAY], overlay_default);
     }
     if (modes.empty())
         desired[DISPLAY_RENDERING] = 0;
@@ -195,8 +236,10 @@ PopModStatus mods_display_set(DisplayRow row, int value) {
         scale = value;
     if (row == DISPLAY_FPS)
         fps = rates[value];
-    if (row == DISPLAY_OVERLAY)
+    if (row == DISPLAY_OVERLAY) {
         overlay = value;
+        mods_settings_set(MODS_OWNER_RUNTIME, "overlay_chosen", 1);
+    }
     if (row == DISPLAY_TEXTURES)
         textures = value;
     if (row == DISPLAY_FILTERING)

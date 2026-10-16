@@ -78,3 +78,37 @@ class FramePacing {
         return s;
     }
 };
+
+// How long a present that waits for the vertical blank (a DirectDraw 7 Flip
+// without DDFLIP_NOVSYNC, a DXGI Present with a sync interval) waits, `now`
+// and `period` in seconds on the presenter's device clock. Without a frame
+// limit it is the time to the refresh boundary `intervals` refreshes on, as
+// Windows' vertical blank. With one (`limit` frames a second, the settings
+// page's Frame limit) the frames also keep to a deadline that advances by
+// 1/limit each frame, and the wait ends at the first boundary no earlier than
+// half a refresh before it: 60 on a 120 Hz display is every other refresh, and
+// a rate the display does not divide still averages the limit. A frame more
+// than half a refresh past its deadline starts a new phase at the next
+// boundary rather than catching up in a burst. `deadline` is the caller's
+// state across frames (0 to start). The limit only ever adds refreshes to the
+// wait the game asked for.
+inline double paced_refresh_delay(double now, double period, int intervals, int limit,
+                                  double *deadline) {
+    if (!(period > 0) || intervals <= 0)
+        return 0.0;
+    double next = (std::floor(now / period) + intervals) * period;
+    if (limit > 0 && deadline) {
+        const double target = *deadline + 1.0 / limit;
+        if (*deadline <= 0 || target < now - period / 2) {
+            *deadline = next;
+        } else {
+            const double earliest = target - period / 2;
+            if (next < earliest)
+                next = std::ceil(earliest / period) * period;
+            *deadline = target;
+        }
+    } else if (deadline) {
+        *deadline = 0;
+    }
+    return next > now ? next - now : 0.0;
+}

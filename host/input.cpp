@@ -258,6 +258,16 @@ struct State {
 };
 State g;
 
+// Every key transition, in order, for DirectInput's keyboard buffer
+// (host_input_key_edges). 512 is more than any game takes between two polls;
+// a reader that falls further behind is told so and resynchronises.
+constexpr uint32_t kKeyEdges = 512;
+struct KeyEdge {
+    uint8_t dik, down;
+};
+KeyEdge g_key_edges[kKeyEdges];
+uint64_t g_key_edge_count = 0;
+
 // The unsided VK_SHIFT / VK_CONTROL / VK_MENU are down while EITHER side is,
 // which is why they cannot simply follow whichever side moved last: releasing
 // the right Shift while the left is still held would report Shift up.
@@ -304,8 +314,12 @@ void notify_input_changed() {
 }
 
 void set_key(uint8_t dik, uint8_t vk, bool down) {
-    if (dik)
-        g.keys[dik] = down ? 0x80 : 0x00;
+    if (dik) {
+        const uint8_t now = down ? 0x80 : 0x00;
+        if (g.keys[dik] != now)
+            g_key_edges[g_key_edge_count++ % kKeyEdges] = {dik, uint8_t(down)};
+        g.keys[dik] = now;
+    }
     if (vk)
         host_set_key_state(vk, down);
     switch (vk) {
@@ -563,6 +577,7 @@ void host_input_peek(int32_t *x, int32_t *y, int32_t *dx, int32_t *dy, uint8_t *
 
 void host_input_reset() {
     g = State();
+    g_key_edge_count = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -570,6 +585,31 @@ void host_input_reset() {
 // reports motion since the last poll, so reporting the same motion twice would
 // move the cursor twice.
 // ---------------------------------------------------------------------------
+extern "C" uint64_t host_input_key_edges(uint64_t from, uint8_t *dik, uint8_t *down, uint32_t max,
+                                         uint32_t *n, int *lost) {
+    uint32_t taken = 0;
+    if (!max) {
+        if (n)
+            *n = 0;
+        if (lost)
+            *lost = 0;
+        return g_key_edge_count;
+    }
+    // A reader ahead of the count (the journal was reset under it) or more
+    // than a ring behind has lost transitions; it starts again from now.
+    const bool behind = from > g_key_edge_count || g_key_edge_count - from > kKeyEdges;
+    if (lost)
+        *lost = behind;
+    if (!behind)
+        for (uint64_t i = from; i < g_key_edge_count && taken < max; ++i, ++taken) {
+            dik[taken] = g_key_edges[i % kKeyEdges].dik;
+            down[taken] = g_key_edges[i % kKeyEdges].down;
+        }
+    if (n)
+        *n = taken;
+    return behind ? g_key_edge_count : from + taken;
+}
+
 extern "C" void host_input_state(HostInputState *out) {
     ++g_read_count;
     if (!out)

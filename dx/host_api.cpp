@@ -102,6 +102,15 @@ HOST_DEFAULT void host_input_state(HostInputState *out) {
     if (out)
         memset(out, 0, sizeof(*out));
 }
+// ... and no transitions to replay: DirectInput diffs the states.
+HOST_DEFAULT uint64_t host_input_key_edges(uint64_t, uint8_t *, uint8_t *, uint32_t, uint32_t *n,
+                                           int *lost) {
+    if (n)
+        *n = 0;
+    if (lost)
+        *lost = 0;
+    return HOST_NO_KEY_EDGES;
+}
 
 // No host means no pad either: off, no packet, nothing queued, no rumble
 // sink. The axis/button order strings still answer with the spec order, since

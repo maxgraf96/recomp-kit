@@ -226,6 +226,32 @@ void poll_device(ComObj *d) {
     refresh_host_input();
 
     if (d->dev_type == DIDEVTYPE_KEYBOARD) {
+        // Every transition since the last poll, in order, where the host keeps
+        // them: a key pressed and released between two polls is still a down
+        // and an up record, as Windows' buffer has it (a game counting presses
+        // per poll, as Empire Earth's ISKeyboard does, sees the tap). Then the
+        // state itself, which settles whatever the transitions did not carry:
+        // keys already held at Acquire, and a reader that fell behind.
+        uint8_t dik[64], down[64];
+        for (int round = 0; d->key_edges != HOST_NO_KEY_EDGES && round < 16; ++round) {
+            uint32_t n = 0;
+            int lost = 0;
+            const uint64_t next = host_input_key_edges(d->key_edges, dik, down, 64, &n, &lost);
+            if (next == HOST_NO_KEY_EDGES) {
+                d->key_edges = HOST_NO_KEY_EDGES;
+                break;
+            }
+            for (uint32_t i = 0; i < n; ++i) {
+                const uint8_t now = down[i] ? 0x80u : 0u;
+                if (now != (d->last_keys[dik[i]] & 0x80u)) {
+                    push_event(d, pack_event(dik[i], now));
+                    d->last_keys[dik[i]] = now;
+                }
+            }
+            d->key_edges = next;
+            if (lost || n < 64)
+                break;
+        }
         for (uint32_t k = 0; k < 256; ++k) {
             uint8_t now = g_host_in.keys[k] & 0x80u;
             if (now != (d->last_keys[k] & 0x80u)) {
@@ -523,6 +549,10 @@ void Device_Acquire(X86 *c) {
     d->events.clear();
     memset(d->last_keys, 0, sizeof d->last_keys);
     memset(d->last_buttons, 0, sizeof d->last_buttons);
+    // Transitions from now on: the keys held at this moment come from the
+    // state at the first poll.
+    if (d->dev_type == DIDEVTYPE_KEYBOARD)
+        d->key_edges = host_input_key_edges(0, nullptr, nullptr, 0, nullptr, nullptr);
     if (is_joystick(d))
         joy_acquired(d);
     com_ret(c, DI_OK);
