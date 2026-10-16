@@ -2937,6 +2937,14 @@ static int test_idle_waiter(double seconds) {
     return 0;
 }
 
+// SDL's shape: it waits in whole milliseconds, so it comes straight back from
+// a slice under one.
+static int test_ms_idle_waiter(double seconds) {
+    ++g_idle_calls;
+    os_sleep_us((uint64_t)(seconds * 1000.0) * 1000);
+    return 0;
+}
+
 // Repeated short handoffs model the input workers woken by pointer motion.
 // An AppKit wait cannot hear a scheduler condition-variable broadcast, so
 // sleeping in that host callback adds a full slice to each completed handoff.
@@ -3307,6 +3315,27 @@ static void test_scheduling(X86 *c) {
               "(requested %.1f ms, elapsed %.1f ms)",
               g_idle_total * 1000, elapsed * 1000);
         poll_exit_code(c, worker, pcode, 400);
+    }
+
+    // --- a host that waits in milliseconds is not spun for the rest of one --
+    // With nothing else to run, the run thread hands its Sleep to the host.
+    // SDL rounds the slice down to whole milliseconds and returns at once from
+    // one shorter than that, and the scheduler used to hand it the rest again
+    // and again: a spin on the event loop for the last fraction of every
+    // Sleep(1). The fraction is slept on the condition variable now.
+    {
+        g_idle_calls = 0;
+        host_set_idle_waiter(test_ms_idle_waiter);
+        const double started = wall_seconds();
+        for (int i = 0; i < 20; ++i)
+            call_import(c, "KERNEL32.dll", "Sleep", {1});
+        const double elapsed = wall_seconds() - started;
+        host_set_idle_waiter(nullptr);
+        check(elapsed >= 0.020, "20 Sleep(1) calls took at least 20 ms (%.1f ms)",
+              elapsed * 1000.0);
+        check(g_idle_calls >= 20 && g_idle_calls <= 60,
+              "the host was asked about once per Sleep(1), not spun (%u calls for 20)",
+              g_idle_calls);
     }
 
     // --- a host signal wakes the RUN thread, on both waiting paths ----------

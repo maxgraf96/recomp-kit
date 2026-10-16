@@ -2524,11 +2524,26 @@ void sched_wait_locked(size_t me, double until, double max_slice) {
         // handoff makes short mouse/keyboard workers cost a full 2 ms slice,
         // many times per rendered frame while the pointer moves. Poll events
         // first, then wait on the notification the returning worker signals.
-        waiter(awaiting_baton ? 0.0 : slice);
+        const int arrived = waiter(awaiting_baton ? 0.0 : slice);
         g_in_idle_slice = false;
         g_sched_m.lock();
-        if (!awaiting_baton || g_baton == me)
-            return;
+        if (awaiting_baton) {
+            if (g_baton == me)
+                return;
+        } else {
+            // The holder with nothing to run. A host that can only wait in
+            // whole milliseconds (SDL, where there is no run loop to wait on
+            // for the rest) comes back at once from a slice under one, and
+            // the caller, finding the deadline not yet due, would hand it the
+            // rest again and again: a spin on the event loop for the last
+            // fraction of every Sleep(1). Input, or a remainder of a
+            // millisecond or more, goes back to the caller; a smaller
+            // remainder is slept below, on the condition a host signal or
+            // input still interrupts.
+            const double rest = until ? until - sched_now() : 0.0;
+            if (arrived || rest <= 0.0 || rest >= 0.001)
+                return;
+        }
     }
 
     // The host has been serviced, or none is installed. Sleep interruptibly,

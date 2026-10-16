@@ -343,7 +343,11 @@ sleeps. Guest threads run at the user-interactive QoS class.
 **A thread that cannot proceed blocks.** It leaves the runnable set with a
 deadline, the scheduler runs everything else, and when nothing is runnable it
 sleeps until the earliest deadline instead of spinning. `Sleep(ms)` suspends
-the caller for the interval; `Sleep(0)` yields, as documented.
+the caller for the interval; `Sleep(0)` yields, as documented. On the run
+thread under a windowed host the sleep is the host's (`host_set_idle_waiter`),
+so input can end it. A host that comes back early with no input and less than
+a millisecond left (one that can only wait in whole milliseconds) is not asked
+again: the rest is slept on the thread's condition variable.
 
 **Nothing is released by a timeout that did not happen.** A zero timeout
 answers from the current state. A finite timeout expires only once the time has
