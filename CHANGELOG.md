@@ -102,13 +102,23 @@
   presented frame back from the GPU (`host_d7_set_frame_tap_wanted`). That
   readback waited for the GPU on every frame and copied it twice: in a
   scripted Empire Earth game, a quarter of the render thread's time.
+- A DirectDraw 7 surface in a 32-bit BGRA layout is read back into, and
+  uploaded from, guest memory directly. A back buffer's `GetDC` (the game draws
+  text on it) read the GPU copy into a zeroed vector, converted it row by row
+  (a copy), and after `ReleaseDC` converted it back (a copy and the alpha
+  byte) and packed it (a copy and the alpha byte again) before the transient
+  buffer's copy: at 1920x1200, eight passes over 9 MB and two fresh 9 MB
+  allocations for each `GetDC`. Now the readback writes the rows at the
+  surface's pitch, the upload hands guest memory to the backend, which sets an
+  opaque resource's alpha in its one packing pass, and the Metal device keeps
+  its readback staging buffer. The bytes that reach guest memory and the GPU
+  are the same (`d3d7_tests`, "32-bit surfaces without a conversion").
 - `RECOMP_D3D7_STATS=1` prints, every 5 s, what the Direct3D 7 renderer did per
   frame (draws, primitives, render passes, uploads) and what its stalls cost
   (pipelines compiled, textures created, readbacks), with the game's frame
   times (p50/p95/p99/max). `RECOMP_D3D7_FRAME_LOG=FILE` writes the wall-clock
   time of every present, the game's own frame times whatever the display
   shows of them.
-
 - GDI draws a row at a time where it can. `BitBlt` (and a 1:1 `StretchBlt`)
   between 32-bit `BI_RGB` DIBs, window surfaces and 1-bit sources, constant-
   and per-pixel-alpha `AlphaBlend`, fills (`Rectangle`'s interior, opaque

@@ -26,6 +26,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -533,18 +534,23 @@ struct D3D7Renderer::Impl {
         const int w = r.x1 - r.x0, h = r.y1 - r.y0;
         if (w <= 0 || h <= 0)
             return;
-        std::vector<uint32_t> packed;
+        // Packed rows, alpha set for an opaque resource: one pass, into memory
+        // that is written whole (no zero fill first).
+        std::unique_ptr<uint32_t[]> packed;
         const void *src = bgra;
         if (pitch != w * 4 || t->opaque) {
-            packed.resize(size_t(w) * size_t(h));
-            for (int y = 0; y < h; ++y)
-                memcpy(packed.data() + size_t(y) * size_t(w),
-                       static_cast<const uint8_t *>(bgra) + size_t(y) * size_t(pitch),
-                       size_t(w) * 4);
-            if (t->opaque)
-                for (uint32_t &p : packed)
-                    p |= 0xff000000u;
-            src = packed.data();
+            packed.reset(new uint32_t[size_t(w) * size_t(h)]);
+            for (int y = 0; y < h; ++y) {
+                const uint32_t *row = reinterpret_cast<const uint32_t *>(
+                    static_cast<const uint8_t *>(bgra) + size_t(y) * size_t(pitch));
+                uint32_t *out = packed.get() + size_t(y) * size_t(w);
+                if (t->opaque)
+                    for (int x = 0; x < w; ++x)
+                        out[x] = row[x] | 0xff000000u;
+                else
+                    memcpy(out, row, size_t(w) * 4);
+            }
+            src = packed.get();
         }
         end_pass();
         const Slice s = transient(src, uint64_t(w) * uint64_t(h) * 4);

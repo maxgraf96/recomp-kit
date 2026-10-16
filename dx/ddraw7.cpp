@@ -334,8 +334,13 @@ bool read_back(const Backend *b, Surface *s) {
         memset(gm_ptr(s->mem), 0, size_t(s->pitch) * s->height);
         return true;
     }
-    std::vector<uint32_t> bgra(size_t(s->width) * s->height);
     HostD7Rect r{0, 0, int32_t(s->width), int32_t(s->height)};
+    // A 32-bit BGRA surface has the backend's own layout (row_from_bgra is a
+    // copy of each row): read it straight into guest memory, rows at the
+    // surface's pitch, which a back buffer's GetDC does several times a second.
+    if (standard_8888(s->format) && s->pitch >= s->width * 4)
+        return b->readback(root_of(s)->id, s->level, &r, gm_ptr(s->mem), int(s->pitch));
+    std::vector<uint32_t> bgra(size_t(s->width) * s->height);
     if (!b->readback(root_of(s)->id, s->level, &r, bgra.data(), int(s->width * 4)))
         return false;
     for (uint32_t y = 0; y < s->height; ++y)
@@ -348,12 +353,19 @@ void upload(const Backend *b, Surface *s) {
         log_once("ddraw7.depthupload", "ddraw7: a depth buffer written by the CPU is not uploaded");
         return;
     }
+    HostD7Rect r{0, 0, int32_t(s->width), int32_t(s->height)};
+    // 32-bit BGRA goes up from guest memory as it is: row_to_bgra would only
+    // copy it and, without an alpha channel, set the alpha byte, which every
+    // backend does itself for the opaque resource ensure_resource made.
+    if (s->mem && standard_8888(s->format) && s->pitch >= s->width * 4) {
+        b->upload(root_of(s)->id, s->level, &r, gm_ptr(s->mem), int(s->pitch));
+        return;
+    }
     std::vector<uint32_t> bgra(size_t(s->width) * s->height);
     if (s->mem)
         for (uint32_t y = 0; y < s->height; ++y)
             row_to_bgra(s->format, gm_ptr(s->mem + y * s->pitch),
                         bgra.data() + size_t(y) * s->width, int(s->width));
-    HostD7Rect r{0, 0, int32_t(s->width), int32_t(s->height)};
     b->upload(root_of(s)->id, s->level, &r, bgra.data(), int(s->width * 4));
 }
 // The root's backend resource exists under the current generation. Levels whose

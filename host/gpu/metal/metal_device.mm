@@ -326,8 +326,13 @@ bool MetalDevice::readback(Texture t, Region r, void *bytes, int pitch) {
         }
         const int bpp = bytes_per_pixel(format_of(texture.pixelFormat));
         const NSUInteger row = NSUInteger(r.w) * bpp;
-        id<MTLBuffer> staging = [device_ newBufferWithLength:row * r.h
+        std::lock_guard staging_lock(readback_mutex_);
+        if (!readback_staging_ || readback_staging_.length < row * r.h)
+            readback_staging_ = [device_ newBufferWithLength:row * r.h
                                                      options:MTLResourceStorageModeShared];
+        id<MTLBuffer> staging = readback_staging_;
+        if (!staging)
+            return false;
         id<MTLCommandBuffer> buffer = [queue_ commandBuffer];
         id<MTLBlitCommandEncoder> blit = [buffer blitCommandEncoder];
         [blit copyFromTexture:texture

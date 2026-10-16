@@ -960,6 +960,73 @@ static void test_coherence() {
     d7::use_soft_backend(false);
 }
 
+// A 32-bit BGRA surface goes between the renderer and guest memory without a
+// conversion. Lock reads the renderer's pixels byte for byte, the alpha byte
+// included; an X8R8G8B8 surface the guest wrote with alpha 0 reaches the
+// renderer opaque, as the converting path made it, and its guest copy keeps
+// what the guest wrote; an A8R8G8B8 texture keeps its alpha.
+static void test_direct_8888() {
+    cpu_reset();
+    d7::use_soft_backend(true);
+    Device d = make_device(16, 16);
+    d7::Surface *rt = d7::surface_from_guest(d.rt);
+    CHECK(rt != nullptr);
+    CHECK_EQ(clear(d.dev, d7::CLEAR_TARGET | d7::CLEAR_ZBUFFER, 0x00123456u), 0);
+    call_method(d.dev, DEV_BeginScene, {});
+    draw(d.dev, d7::PT_TRIANGLELIST, quad2d(0, 0, 8, 8, 0x80abcdefu), QUAD_INDICES);
+    call_method(d.dev, DEV_EndScene, {});
+    CHECK(!rt->cpu_valid && rt->gpu_valid);
+    int w = 0, h = 0;
+    const uint32_t *gpu = d7soft::pixels(rt->id, 0, &w, &h);
+    CHECK(gpu && w == 16 && h == 16);
+    const uint32_t desc = gmem(d7::DDSD2_SIZE);
+    wr32(desc, d7::DDSD2_SIZE);
+    CHECK_EQ(call_method(d.rt, S_Lock, {0, desc, d7::DDLOCK_READONLY, 0}), 0);
+    const uint32_t pitch = rd32(desc + d7::DDSD2_lPitch), mem = rd32(desc + d7::DDSD2_lpSurface);
+    CHECK_EQ(pitch, 64u);
+    int differ = 0;
+    for (int y = 0; gpu && y < 16; ++y)
+        for (int x = 0; x < 16; ++x)
+            differ += rd32(mem + uint32_t(y) * pitch + uint32_t(x) * 4) != gpu[y * 16 + x];
+    CHECK_EQ(differ, 0);
+    CHECK_EQ(rd32(mem + 2 * pitch + 2 * 4), 0xffabcdefu);   // drawn; the target is opaque
+    CHECK_EQ(rd32(mem + 12 * pitch + 12 * 4), 0xff123456u); // cleared
+    CHECK_EQ(call_method(d.rt, S_Unlock, {0}), 0);
+    // The guest writes alpha 0; a draw into the target uploads it first.
+    auto value = [](int x, int y) { return uint32_t(x * 0x10 + y) << 8 | 0x07u; };
+    write(d.rt, value);
+    CHECK(rt->cpu_valid && !rt->gpu_valid);
+    call_method(d.dev, DEV_BeginScene, {});
+    draw(d.dev, d7::PT_TRIANGLELIST, quad2d(0, 0, 1, 1, 0xffffffffu), QUAD_INDICES);
+    call_method(d.dev, DEV_EndScene, {});
+    gpu = d7soft::pixels(rt->id, 0, &w, &h);
+    CHECK(gpu != nullptr);
+    if (gpu) {
+        CHECK_EQ(gpu[0], 0xffffffffu);
+        CHECK_EQ(gpu[5 * 16 + 9], 0xff000000u | value(9, 5));
+        CHECK_EQ(gpu[15 * 16 + 15], 0xff000000u | value(15, 15));
+    }
+    CHECK_EQ(rd32(rt->mem + 5 * 64 + 9 * 4), value(9, 5)); // the upload left guest memory alone
+    // A texture with an alpha channel keeps it.
+    const uint32_t tex = texture(d.dd, 4, 4, PF_A8R8G8B8);
+    write(tex, [](int x, int y) { return 0x40abcd00u | uint32_t(y * 4 + x); });
+    call_method(d.dev, DEV_BeginScene, {});
+    call_method(d.dev, DEV_SetTexture, {0, tex});
+    draw(d.dev, d7::PT_TRIANGLELIST, quad2d(0, 0, 16, 16, 0xffffffffu), QUAD_INDICES);
+    call_method(d.dev, DEV_EndScene, {});
+    call_method(d.dev, DEV_SetTexture, {0, 0});
+    d7::Surface *ts = d7::surface_from_guest(tex);
+    const uint32_t *texels = ts ? d7soft::pixels(ts->id, 0, &w, &h) : nullptr;
+    CHECK(texels != nullptr);
+    if (texels) {
+        CHECK_EQ(texels[0], 0x40abcd00u);
+        CHECK_EQ(texels[3 * 4 + 2], 0x40abcd0eu);
+    }
+    heap_free(desc);
+    release_all(d, {tex});
+    d7::use_soft_backend(false);
+}
+
 // ---------------------------------------------------------------------------
 // Scenes on the reference renderer, against hand-computed pixels
 // ---------------------------------------------------------------------------
@@ -1098,6 +1165,7 @@ int main() {
         {"device state", test_device_state},
         {"CPU-only device", test_cpu_only_device},
         {"coherence", test_coherence},
+        {"32-bit surfaces without a conversion", test_direct_8888},
         {"scenes on the reference renderer", test_scene_values},
     };
     for (auto &t : tests) {

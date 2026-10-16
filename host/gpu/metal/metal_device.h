@@ -137,6 +137,11 @@ class MetalDevice final : public Device {
     std::unordered_map<std::string, Pipeline> compute_cache_;
     std::unordered_map<uint64_t, id<MTLDepthStencilState>> depth_cache_;
     std::unordered_map<uint64_t, id<MTLSamplerState>> sampler_cache_;
+    // readback()'s staging buffer for private textures, kept between reads: a
+    // back buffer read back several times a second would otherwise get a new
+    // buffer, and its pages zeroed, each time.
+    std::mutex readback_mutex_;
+    id<MTLBuffer> readback_staging_;
 };
 
 } // namespace gpu
