@@ -114,6 +114,11 @@ double g_every = 10.0;
 // RECOMP_SCHED_TRACE_LONG_MS: every hold and every wait for the baton longer
 // than this is written out as it happens, a wait with the holds that filled it.
 double g_long = 0.0;
+// RECOMP_SCHED_TRACE_TIMELINE=FILE: every hold as a row, on the host's
+// monotonic clock (seconds; the presenter's frame timings use the same one),
+// so a frame that came late can be laid beside the threads that held the
+// baton meanwhile.
+FILE *g_timeline = nullptr;
 struct HoldRec {
     size_t idx;
     double start, end;
@@ -148,6 +153,13 @@ void open_out() {
     const char *e = recomp_env("SCHED_TRACE_EVERY");
     if (e && atof(e) > 0.0)
         g_every = atof(e);
+    if (const char *tl = recomp_env("SCHED_TRACE_TIMELINE")) {
+        g_timeline = fopen(tl, "w");
+        if (g_timeline) {
+            setvbuf(g_timeline, nullptr, _IOFBF, 1 << 20);
+            fprintf(g_timeline, "# hold,start_s,end_s,thread,given up by\n");
+        }
+    }
     const char *l = recomp_env("SCHED_TRACE_LONG_MS");
     if (l && atof(l) > 0.0)
         g_long = atof(l) / 1000.0;
@@ -298,6 +310,9 @@ void end_hold(size_t idx, double now, const char *why, bool runnable) {
         t.win.hold.add(held);
         t.all.hold.add(held);
         g_ring[g_ring_n++ % RING] = HoldRec{idx, t.hold_since, now, why};
+        if (g_timeline)
+            fprintf(g_timeline, "H,%.6f,%.6f,%s,%s\n", t.hold_since, now, name_of(idx).c_str(),
+                    why);
         if (g_long > 0.0 && held >= g_long) {
             fprintf(g_out,
                     "[sched %.3fs] long hold: %s %.1f ms, given up by %s; %llu points, the "
@@ -474,6 +489,8 @@ void sched_trace_final(void) {
     if (!g_sched_trace)
         return;
     report(now_s(), true);
+    if (g_timeline)
+        fflush(g_timeline);
 }
 
 void sched_trace_input_event(uint64_t at_ns) {

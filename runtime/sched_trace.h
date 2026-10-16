@@ -2,6 +2,9 @@
 //
 //   RECOMP_SCHED_TRACE=FILE        write the report to FILE (1: stderr)
 //   RECOMP_SCHED_TRACE_EVERY=S     a window report every S seconds (default 10)
+//   RECOMP_SCHED_TRACE_LONG_MS=N   every hold and wait longer than N ms, as it happens
+//   RECOMP_SCHED_TRACE_TIMELINE=F  every hold as a row of F (start, end, thread,
+//                                  why), on the host's monotonic clock
 //
 // Per guest thread: how long it held the baton each time (a hold runs from
 // its return to guest code to the call that gives the baton up), how long it

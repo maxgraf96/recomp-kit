@@ -470,6 +470,7 @@ paths resolve against the guest current directory, which starts at
 | `RECOMP_SCHED_QUANTUM_MS` / `_STARVE_MS` / `_SPIN_US` | the quantum (2), how long a ready thread waits before it is raised to the top class (20), how long a thread that gave the baton up spins for it (50 us; 0 never) |
 | `RECOMP_SCHED_TRACE=FILE` | the scheduler's report (`1`: stderr): per thread and per window (`RECOMP_SCHED_TRACE_EVERY`, 10 s) its holds, its waits for the baton while ready, why it gave it up, its longest stretch without a scheduling point; handoffs and their cost, idle time, mouse-press latency (`sched_trace.h`) |
 | `RECOMP_SCHED_TRACE_LONG_MS=N` | with the trace: every hold and every wait for the baton longer than N ms as it happens, a wait with the holds that filled it |
+| `RECOMP_SCHED_TRACE_TIMELINE=FILE` | with the trace: every hold as a CSV row (start, end, thread, why) on the host's monotonic clock, which the presenter's `RECOMP_FRAME_TIMINGS` also uses |
 | `RECOMP_IMPORT_STATS=1` | at exit, classify every import as called / not reached / logging-only |
 | `RECOMP_STRICT=1` / `0` | strict mode on or off (default: `[runtime] strict`): an undeliverable call or jump, a call through an import of unknown stdcall argument count, or a divide error stops the run with a diagnostic; the null page faults |
 | `RECOMP_NULL_GUARD=1` / `0` | arm or disarm the null-page guard independently of strict mode |
