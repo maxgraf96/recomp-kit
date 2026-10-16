@@ -24,6 +24,7 @@
 
 #include <string>
 #ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
 #include <mach-o/dyld.h>
 #endif
 #ifndef __EMSCRIPTEN__
@@ -568,6 +569,21 @@ void os_sleep_us(uint64_t us) {
     ts.tv_sec = (time_t)(us / 1000000ull);
     ts.tv_nsec = (long)((us % 1000000ull) * 1000ull);
     nanosleep(&ts, nullptr);
+}
+
+int os_wait_run_loop(double seconds) {
+#ifdef __APPLE__
+    // AppKit (and UIKit) take window-system events from the main thread's run
+    // loop in its default mode, and posting an event stops the run loop, so
+    // the wait ends the moment either happens. A run loop with nothing
+    // attached does not wait at all: it says it is finished.
+    if (seconds <= 0.0)
+        return 0;
+    return CFRunLoopRunInMode(kCFRunLoopDefaultMode, seconds, true) != kCFRunLoopRunFinished;
+#else
+    (void)seconds;
+    return 0;
+#endif
 }
 
 int os_strcasecmp(const char *a, const char *b) {

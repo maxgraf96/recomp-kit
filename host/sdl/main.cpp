@@ -1917,10 +1917,28 @@ int idle_wait(double seconds) {
         return 0;
     if (seconds < 0.0)
         seconds = 0.0;
+    const uint64_t until = os_monotonic_ns() + uint64_t(seconds * 1e9);
     apply_window_mode();
     apply_mode_change();
     int changed = service(seconds);
     after_events();
+    // SDL waits in whole milliseconds, so it comes back early by the fraction
+    // of one: at once from a slice shorter than that, which is most of them in
+    // a game of Sleep(1) loops. The fraction is waited on the run loop, which
+    // input still wakes; a script's events, queued by after_events, are taken
+    // at once. Where there is no run loop to wait on the runtime sleeps it on a
+    // condition variable, which only the scheduler can wake. A remainder of a
+    // millisecond or more goes back to the caller, who asks again.
+    while (!changed && seconds > 0.0) {
+        const uint64_t now = os_monotonic_ns();
+        if (now >= until || until - now >= 1000000u)
+            break;
+        if (!SDL_HasEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST) &&
+            !os_wait_run_loop(double(until - now) / 1e9))
+            break;
+        changed = service(0.0);
+        after_events();
+    }
     return changed;
 }
 

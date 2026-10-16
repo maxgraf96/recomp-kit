@@ -624,6 +624,10 @@ uint64_t os_wall_time_us(void) {
 void os_sleep_us(uint64_t us) {
     Sleep((DWORD)((us + 999) / 1000));
 }
+int os_wait_run_loop(double seconds) {
+    (void)seconds;
+    return 0;
+}
 
 int os_strcasecmp(const char *a, const char *b) {
     return _stricmp(a, b);

@@ -10,7 +10,10 @@ pop_optimize(recomp_platform 2)
 if(ANDROID)
   # Bionic provides pthread functions in libc, without a separate libpthread.
   target_link_libraries(recomp_platform PUBLIC dl log)
-elseif(NOT WIN32 AND NOT APPLE)
+elseif(APPLE)
+  # os_wait_run_loop waits on the run loop.
+  target_link_libraries(recomp_platform PUBLIC "-framework CoreFoundation")
+elseif(NOT WIN32)
   target_link_libraries(recomp_platform PUBLIC dl pthread)
 endif()
 

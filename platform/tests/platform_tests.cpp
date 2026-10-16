@@ -42,6 +42,14 @@ void *deep_stack(void *arg) {
     return nullptr;
 }
 
+// A new thread's run loop has nothing attached to it.
+void *wait_on_own_run_loop(void *arg) {
+    const uint64_t t0 = os_monotonic_ns();
+    const int waited = os_wait_run_loop(0.2);
+    *(uint64_t *)arg = (waited ? 1ull << 63 : 0) | (os_monotonic_ns() - t0);
+    return nullptr;
+}
+
 int collect_name(const char *name, void *user) {
     ((std::vector<std::string> *)user)->push_back(name);
     return 0;
@@ -85,6 +93,16 @@ void test_time() {
     CHECK(os_gmtime(86400, &utc) == 0 && utc.tm_year == 70 && utc.tm_mday == 2 && utc.tm_hour == 0);
     struct tm local{};
     CHECK(os_localtime(86400 * 365, &local) == 0 && local.tm_year >= 70);
+    // A run loop with nothing attached (a fresh thread's) does not wait, and
+    // says so, so the caller sleeps by other means.
+    uint64_t own = 0;
+    OsThread *t = os_thread_create(wait_on_own_run_loop, &own, 0);
+    CHECK(t != nullptr);
+    if (t)
+        os_thread_join(t);
+    CHECK((own >> 63) == 0);
+    CHECK((own & ~(1ull << 63)) < 100000000ull);
+    CHECK(os_wait_run_loop(0.0) == 0);
 }
 
 void test_vm() {

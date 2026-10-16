@@ -188,6 +188,13 @@ int os_localtime(int64_t seconds, struct tm *out);
 int os_gmtime(int64_t seconds, struct tm *out);
 uint64_t os_wall_time_us(void); // microseconds since the Unix epoch
 void os_sleep_us(uint64_t us);
+// Waits on the calling thread's run loop for up to `seconds`, coming back as
+// soon as the window system hands it anything (an input event, an event
+// posted to the application): the precise, interruptible sleep a windowed
+// host's main thread can take where its toolkit only waits in milliseconds.
+// Returns 0 when it did not wait - no such run loop on this platform, or
+// nothing attached to this thread's - and the caller sleeps by other means.
+int os_wait_run_loop(double seconds);
 
 // ---------------------------------------------------------------------------
 // Strings.

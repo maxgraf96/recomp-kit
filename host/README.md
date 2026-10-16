@@ -123,6 +123,18 @@ and returns 1 the moment input arrives so the guest can re-check its own
 condition instead of sitting out the rest of the slice. Making it wait would be
 latency on every keystroke with no cause a person could see.
 
+SDL's wait takes whole milliseconds, and a slice is rarely whole: a
+`Sleep(1)` has less than a millisecond left by the time it reaches the host. So
+`idle_wait` waits what SDL leaves of the slice on the run loop
+(`os_wait_run_loop`: `CFRunLoopRunInMode` in the default mode, which an input
+event or an event posted to the application ends). Events a script queued
+meanwhile are taken at once. A remainder of a millisecond or more goes back to
+the runtime, which asks again; where there is no run loop to wait on (SDL on
+Linux and Windows), the runtime sleeps the fraction on the run thread's
+condition variable. The fraction used to come straight back to the runtime,
+which handed it to the host again: Empire Earth's run thread spent 25-47% of a
+core polling AppKit that way in an idle late game at 60 frames a second.
+
 While another guest thread holds the scheduler baton, the host instead polls
 events without sleeping. The main thread then waits on its own condition
 variable, which the worker's handoff signals, so its return wakes it
