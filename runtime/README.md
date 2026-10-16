@@ -325,9 +325,10 @@ stretch, so code a shim called back keeps the scheduling points it had.
 **Who runs is Windows' choice for one processor.** A ready thread's class is
 the priority Windows gives it (8 plus its `THREAD_PRIORITY_*` offset; 15 for
 time-critical, 1 for idle). The higher class runs; within a class, the thread
-that became ready first. A thread that wakes from a wait is boosted by one,
+that became ready first. A thread whose wait is satisfied is boosted by one,
 the run thread by two when host input arrives for it, until it blocks again
-or uses up a quantum; one kept ready for 20 ms is raised to 15 for a quantum.
+or uses up a quantum; a timeout and a critical section boost nothing; one
+kept ready for 20 ms is raised to 15 for a quantum.
 The holder gives way at once to a thread that outranks it, and at the end of
 its quantum to one of its own class. `SetThreadPriority` and
 `GetThreadPriority` keep the value.
@@ -354,8 +355,8 @@ run deadline ends the process in that case.
 clears the auto-reset event or takes the mutex at the moment it releases a
 waiter, so one signal releases exactly one of them. `SetEvent`,
 `ReleaseSemaphore` and `ReleaseMutex` grant waits there and then, as Windows
-does; a released critical section is not handed over, and its waiter takes it
-at the holder's next checkpoint if it is still free.
+does. Leaving a critical section never gives the baton up and hands nothing
+over: its waiter takes it at the next scheduling pass in which it is free.
 
 **Suspension is a count.** `SuspendThread` and `ResumeThread` both return the
 previous count and a thread runs again only at zero, so two suspends need two
@@ -468,6 +469,7 @@ paths resolve against the guest current directory, which starts at
 | `RECOMP_CREATETHREAD=sync` | run a thread body to completion inside `CreateThread` (pre-scheduler behaviour, for bisection) |
 | `RECOMP_SCHED_POLICY=rr` | the scheduler's earlier policy: round robin by thread index, a 1 ms slice, no priorities, boosts or preemption points (for bisection and A/B runs of one build) |
 | `RECOMP_SCHED_QUANTUM_MS` / `_STARVE_MS` / `_SPIN_US` | the quantum (2), how long a ready thread waits before it is raised to the top class (20), how long a thread that gave the baton up spins for it (50 us; 0 never) |
+| `RECOMP_SCHED_SLEEP_BOOST=1` | boost a thread whose `Sleep` or wait timed out as well (default: only a satisfied wait), for comparison |
 | `RECOMP_SCHED_TRACE=FILE` | the scheduler's report (`1`: stderr): per thread and per window (`RECOMP_SCHED_TRACE_EVERY`, 10 s) its holds, its waits for the baton while ready, why it gave it up, its longest stretch without a scheduling point; handoffs and their cost, idle time, mouse-press latency (`sched_trace.h`) |
 | `RECOMP_SCHED_TRACE_LONG_MS=N` | with the trace: every hold and every wait for the baton longer than N ms as it happens, a wait with the holds that filled it |
 | `RECOMP_SCHED_TRACE_TIMELINE=FILE` | with the trace: every hold as a CSV row (start, end, thread, why) on the host's monotonic clock, which the presenter's `RECOMP_FRAME_TIMINGS` also uses |

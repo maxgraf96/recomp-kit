@@ -108,15 +108,17 @@ only one that decides:
 Who runs next follows Windows' rules for one processor. A ready thread's class
 is the priority Windows would give it in a process of normal priority class
 (8 + `THREAD_PRIORITY_*` offset; 15 for time-critical); the higher class runs,
-and within a class the thread that became ready first. A thread that wakes
-from a wait is boosted by one, and the run thread by two when host input
-arrives for it, until it blocks again or uses a quantum. A thread kept ready
+and within a class the thread that became ready first. A thread whose wait is
+satisfied (an event, a semaphore, a socket) is boosted by one, and the run
+thread by two when host input arrives for it, until it blocks again or uses a
+quantum; a timeout (a `Sleep` over) and a critical section boost nothing. A thread kept ready
 for 20 ms is raised to 15 for one quantum, so a busy high-priority thread
 cannot shut the others out for long. The holder yields when a ready thread
 outranks it, or at the end of its quantum (2 ms) to a ready thread of its own
 class. `RECOMP_SCHED_POLICY=rr` restores the round robin by thread index with
 a 1 ms slice that came before, for bisection; `RECOMP_SCHED_QUANTUM_MS`,
-`RECOMP_SCHED_STARVE_MS` and `RECOMP_SCHED_SPIN_US` tune the policy.
+`RECOMP_SCHED_STARVE_MS`, `RECOMP_SCHED_SPIN_US` and `RECOMP_SCHED_SLEEP_BOOST`
+tune the policy.
 
 A handoff wakes only the thread it names: each thread sleeps on its own
 condition variable. A thread that gave the baton up while it can still run
@@ -124,9 +126,10 @@ spins on an atomic hint for up to 50 us first, because the thread it gave way
 to often hands it straight back (the run thread under a windowed host polls
 its events instead). A waiter's object is taken when the change
 that satisfies it is made (`SetEvent`, `ReleaseSemaphore`, `ReleaseMutex`
-evaluate the waits there and then, as Windows does); a critical section is not
-handed over, its waiter takes it at the holder's next checkpoint if it is
-still free. Guest threads run at the user-interactive QoS class, so macOS
+evaluate the waits there and then, as Windows does). Leaving a critical section
+never gives the baton up and does not hand the section over: its waiter takes
+it at the next scheduling pass in which it is free, so a loop of Enter and
+Leave keeps it, as on Windows. Guest threads run at the user-interactive QoS class, so macOS
 neither puts the holder on an efficiency core nor behind a build.
 
 `RECOMP_SCHED_TRACE=FILE` (`runtime/sched_trace.h`) reports, per thread and per

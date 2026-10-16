@@ -6,9 +6,11 @@
   instead of a round robin by thread index. A ready thread's class is the
   priority Windows gives it (`SetThreadPriority` is kept now: 8 plus the
   offset, 15 for time-critical); the higher class runs, and within a class
-  the thread that became ready first. A thread that wakes from a wait is
-  boosted by one, the run thread by two when input arrives for it; one kept
-  waiting 20 ms is raised to the top class for a quantum. The holder gives way
+  the thread that became ready first. A thread whose wait is satisfied is
+  boosted by one, the run thread by two when input arrives for it (a timeout
+  and a critical section boost nothing); one kept waiting 20 ms is raised to
+  the top class for a quantum. Leaving a critical section never gives the
+  baton up. The holder gives way
   at once to a thread that outranks it and at the end of its 2 ms quantum to
   one of its own class. Empire Earth's simulation thread is time-critical,
   paces itself on a timer and tunes its tick rate for 30% of the processor:
