@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+- The guest-thread scheduler follows Windows' rules for one processor
+  instead of a round robin by thread index. A ready thread's class is the
+  priority Windows gives it (`SetThreadPriority` is kept now: 8 plus the
+  offset, 15 for time-critical); the higher class runs, and within a class
+  the thread that became ready first. A thread that wakes from a wait is
+  boosted by one, the run thread by two when input arrives for it; one kept
+  waiting 20 ms is raised to the top class for a quantum. The holder gives way
+  at once to a thread that outranks it and at the end of its 2 ms quantum to
+  one of its own class. Empire Earth's simulation thread is time-critical,
+  paces itself on a timer and tunes its tick rate for 30% of the processor:
+  it now runs its ticks whole, so the tick time it measures is the tick's own
+  and not the renderer's, and it picks a higher rate. Measured on a late-game
+  save in the windowed app: the tick time 4.3 -> 1.7 ms, the tick rate 72 ->
+  100 a second, a mouse press reaches the game in 2.5 ms (35 ms at worst
+  before, 6 now), frames 37 -> 42 a second; a Huge random map's tile painting
+  15.6 -> 0.6 s, because the game raises its loader thread while it loads.
+- A handoff wakes the one thread it names: every guest thread sleeps on its
+  own condition variable, where all of them used to wake on one and go back
+  to sleep. A thread that gave the baton up while it can still run spins for
+  it for 50 us first. Guest threads run at the user-interactive QoS class.
+- Preemption points in translated code: the translator emits
+  `RECOMP_SAFEPOINT` (`runtime/x86.h`) at every function entry and loop head;
+  a ticker thread raises `recomp_sched_pending` every half quantum and a
+  thread made ready that outranks the holder raises it at once. A point acts
+  only where nothing but guest code is on the stack. `--no-safepoints`
+  leaves them out.
+- `SetEvent`, `ReleaseSemaphore` and `ReleaseMutex` grant waits when they are
+  called, as Windows does, and only the baton holder evaluates waits: a woken
+  thread that was not the holder could take a semaphore count or reset an
+  event while the holder ran.
+- `RECOMP_SCHED_TRACE=FILE`: a per-thread report of the scheduler (holds,
+  waits for the baton, why it was given up, the longest stretch without a
+  scheduling point, handoff cost, idle time, mouse-press latency);
+  `RECOMP_SCHED_TRACE_LONG_MS` logs every long hold and wait as it happens.
+  `RECOMP_SCHED_POLICY=rr` restores the old policy for bisection.
 - GDI draws a row at a time where it can. `BitBlt` (and a 1:1 `StretchBlt`)
   between 32-bit `BI_RGB` DIBs, window surfaces and 1-bit sources, constant-
   and per-pixel-alpha `AlphaBlend`, fills (`Rectangle`'s interior, opaque

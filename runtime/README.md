@@ -22,6 +22,7 @@ owns. Compile the runtime with `-I<repo root>` so `guest.h` can find it.
 | `dispatch.cpp` | weak `recomp_call`/`recomp_jump` through the module registry when no image table is linked (freestanding bundles), and the `recomp_libm_*` functions `freestanding.h` maps to |
 | `freestanding.h` | the C library surface generated code uses, as builtins and runtime entry points, for `RECOMP_FREESTANDING` |
 | `kernel32.cpp` | heap, files, modules, TLS, sync objects, time, strings and locale |
+| `sched_trace.cpp` | `RECOMP_SCHED_TRACE`: the guest-thread scheduler's per-thread report |
 | `user32.cpp` | window classes and windows, the per-thread message queues and sent messages, paint/DC/input |
 | `user32_activation.cpp` | activation and focus: what the host reports through `host_app_state` becomes WM_ACTIVATEAPP / WM_ACTIVATE / WM_SETFOCUS / WM_KILLFOCUS / WM_SIZE, as Windows sends them |
 | `user32_ansi.cpp` | the ANSI odds and ends: class queries, window text, LoadStringA/LoadBitmapA from any loaded module, MoveWindow, ChangeDisplaySettingsA, wsprintfA, SetWindowsHookExA |
@@ -305,12 +306,37 @@ under a mutex. Nothing in the guest arena, the shims or the generated code
 needs a lock, because there is never more than one guest instruction in
 flight — the same invariant the single-threaded runtime had.
 
-**Every call into the runtime is a scheduling checkpoint.** `imports_dispatch`
-yields if the running thread has held the baton for a millisecond. Scheduling
-must not depend on which API the guest happens to poll: the frame limiter spins
-on `GetTickCount`, and when only blocking calls yielded it could starve the
-DirectInput workers indefinitely with their 200 ms waits already expired. The
-millisecond rate limit keeps the cost to one clock read.
+**Every call into the runtime is a scheduling checkpoint.** Scheduling must
+not depend on which API the guest happens to poll: the frame limiter spins on
+`GetTickCount`, and when only blocking calls yielded it could starve the
+DirectInput workers indefinitely with their 200 ms waits already expired. A
+checkpoint costs a clock read, and takes the scheduler's lock only when there
+is something to decide: the holder's quantum (2 ms) is up, a timed wait is
+due, or a thread that outranks the holder has become ready.
+
+**So is every function entry and loop head in translated code.** The
+translator emits `RECOMP_SAFEPOINT` there (`x86.h`; `translate.py
+--no-safepoints` leaves it out). A ticker raises `recomp_sched_pending` every
+half quantum, and a thread made ready that outranks the holder raises it at
+once; the point then decides as a checkpoint does. It acts only at the
+thread's own callback depth with no mod hook live and outside an atomic
+stretch, so code a shim called back keeps the scheduling points it had.
+
+**Who runs is Windows' choice for one processor.** A ready thread's class is
+the priority Windows gives it (8 plus its `THREAD_PRIORITY_*` offset; 15 for
+time-critical, 1 for idle). The higher class runs; within a class, the thread
+that became ready first. A thread that wakes from a wait is boosted by one,
+the run thread by two when host input arrives for it, until it blocks again
+or uses up a quantum; one kept ready for 20 ms is raised to 15 for a quantum.
+The holder gives way at once to a thread that outranks it, and at the end of
+its quantum to one of its own class. `SetThreadPriority` and
+`GetThreadPriority` keep the value.
+
+**A handoff wakes one thread.** Each guest thread sleeps on its own condition
+variable and is woken only when it is handed the baton (or, as the parked
+holder, when a host signal, input or an exit arrives). One that gave the baton
+up while it could still run spins on an atomic hint for 50 us before it
+sleeps. Guest threads run at the user-interactive QoS class.
 
 **A thread that cannot proceed blocks.** It leaves the runnable set with a
 deadline, the scheduler runs everything else, and when nothing is runnable it
@@ -326,7 +352,10 @@ run deadline ends the process in that case.
 
 **A wait is taken when it is granted.** The scheduler decrements the semaphore,
 clears the auto-reset event or takes the mutex at the moment it releases a
-waiter, so one signal releases exactly one of them.
+waiter, so one signal releases exactly one of them. `SetEvent`,
+`ReleaseSemaphore` and `ReleaseMutex` grant waits there and then, as Windows
+does; a released critical section is not handed over, and its waiter takes it
+at the holder's next checkpoint if it is still free.
 
 **Suspension is a count.** `SuspendThread` and `ResumeThread` both return the
 previous count and a thread runs again only at zero, so two suspends need two
@@ -437,6 +466,10 @@ paths resolve against the guest current directory, which starts at
 | `RECOMP_REGISTRY` | registry backing file (default `build/recomp/registry.json`) |
 | `RECOMP_CREATETHREAD=skip` | record `CreateThread` without running the thread body |
 | `RECOMP_CREATETHREAD=sync` | run a thread body to completion inside `CreateThread` (pre-scheduler behaviour, for bisection) |
+| `RECOMP_SCHED_POLICY=rr` | the scheduler's earlier policy: round robin by thread index, a 1 ms slice, no priorities, boosts or preemption points (for bisection and A/B runs of one build) |
+| `RECOMP_SCHED_QUANTUM_MS` / `_STARVE_MS` / `_SPIN_US` | the quantum (2), how long a ready thread waits before it is raised to the top class (20), how long a thread that gave the baton up spins for it (50 us; 0 never) |
+| `RECOMP_SCHED_TRACE=FILE` | the scheduler's report (`1`: stderr): per thread and per window (`RECOMP_SCHED_TRACE_EVERY`, 10 s) its holds, its waits for the baton while ready, why it gave it up, its longest stretch without a scheduling point; handoffs and their cost, idle time, mouse-press latency (`sched_trace.h`) |
+| `RECOMP_SCHED_TRACE_LONG_MS=N` | with the trace: every hold and every wait for the baton longer than N ms as it happens, a wait with the holds that filled it |
 | `RECOMP_IMPORT_STATS=1` | at exit, classify every import as called / not reached / logging-only |
 | `RECOMP_STRICT=1` / `0` | strict mode on or off (default: `[runtime] strict`): an undeliverable call or jump, a call through an import of unknown stdcall argument count, or a divide error stops the run with a diagnostic; the null page faults |
 | `RECOMP_NULL_GUARD=1` / `0` | arm or disarm the null-page guard independently of strict mode |

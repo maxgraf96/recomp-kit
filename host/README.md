@@ -119,8 +119,9 @@ condition instead of sitting out the rest of the slice. Making it wait would be
 latency on every keystroke with no cause a person could see.
 
 While another guest thread holds the scheduler baton, the host instead polls
-events without sleeping. The main thread then waits on the scheduler condition
-variable, so the worker's return wakes it immediately. A 2 ms cap keeps events
+events without sleeping. The main thread then waits on its own condition
+variable, which the worker's handoff signals, so its return wakes it
+immediately. A 2 ms cap keeps events
 responsive if the worker runs longer. Sleeping inside SDL for these short
 handoffs used to add a full slice for every input worker wakeup, causing large
 frame spikes during ordinary pointer movement.

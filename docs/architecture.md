@@ -78,10 +78,66 @@ otherwise.
 
 ## Threads and ownership
 
-Original game threads are cooperatively scheduled by `runtime/kernel32.cpp`.
-Each has a register file and stack, but **one guest thread holds the execution
-baton at a time**. A blocking import yields it. Host workers never mutate guest
-memory concurrently with that thread.
+Original game threads are scheduled by `runtime/kernel32.cpp`. Each has a
+register file, a guest stack and its own host thread, but **one guest thread
+holds the execution baton at a time**. Host workers never mutate guest memory
+concurrently with that thread. Nothing in the guest arena, the shims or the
+generated code needs a lock: there is never more than one guest instruction in
+flight.
+
+### The scheduler
+
+The baton moves at scheduling points, with the thread that holds it as the
+only one that decides:
+
+- **A blocking import** - a wait that cannot be satisfied yet, `Sleep`,
+  `EnterCriticalSection` on a section another thread owns - parks its thread
+  and hands the baton on.
+- **Every import call** is a checkpoint. It costs a clock read; the lock is
+  taken only when there is something to decide: the quantum is up, a timed
+  wait is due, or a thread that outranks the holder has become ready.
+- **A preemption point in translated code.** The translator puts
+  `RECOMP_SAFEPOINT` (`runtime/x86.h`) at every function entry and loop head.
+  A ticker host thread raises `recomp_sched_pending` every half quantum, and
+  any thread made ready that outranks the holder raises it at once; the point
+  then makes the same decision as a checkpoint. A point acts only where
+  nothing but guest code is on the thread's stack (no shim callback, no mod
+  hook, no atomic stretch), so a callback keeps exactly the scheduling points
+  it had. Clear, a point is a load and a branch not taken.
+
+Who runs next follows Windows' rules for one processor. A ready thread's class
+is the priority Windows would give it in a process of normal priority class
+(8 + `THREAD_PRIORITY_*` offset; 15 for time-critical); the higher class runs,
+and within a class the thread that became ready first. A thread that wakes
+from a wait is boosted by one, and the run thread by two when host input
+arrives for it, until it blocks again or uses a quantum. A thread kept ready
+for 20 ms is raised to 15 for one quantum, so a busy high-priority thread
+cannot shut the others out for long. The holder yields when a ready thread
+outranks it, or at the end of its quantum (2 ms) to a ready thread of its own
+class. `RECOMP_SCHED_POLICY=rr` restores the round robin by thread index with
+a 1 ms slice that came before, for bisection; `RECOMP_SCHED_QUANTUM_MS`,
+`RECOMP_SCHED_STARVE_MS` and `RECOMP_SCHED_SPIN_US` tune the policy.
+
+A handoff wakes only the thread it names: each thread sleeps on its own
+condition variable. A thread that gave the baton up while it can still run
+spins on an atomic hint for up to 50 us first, because the thread it gave way
+to often hands it straight back (the run thread under a windowed host polls
+its events instead). A waiter's object is taken when the change
+that satisfies it is made (`SetEvent`, `ReleaseSemaphore`, `ReleaseMutex`
+evaluate the waits there and then, as Windows does); a critical section is not
+handed over, its waiter takes it at the holder's next checkpoint if it is
+still free. Guest threads run at the user-interactive QoS class, so macOS
+neither puts the holder on an efficiency core nor behind a build.
+
+`RECOMP_SCHED_TRACE=FILE` (`runtime/sched_trace.h`) reports, per thread and per
+window (`RECOMP_SCHED_TRACE_EVERY`, 10 s): the time it held the baton, how long
+it waited for it while it could run, why it gave it up, the longest stretch
+without a scheduling point, the cost of a handoff, the time nothing could run
+and the latency of a mouse press from the host's event to the guest's first
+read of it. `RECOMP_SCHED_TRACE_LONG_MS=N` also writes every hold and every
+wait longer than N ms as it happens, a wait with the holds that filled it. A
+game can name its threads and add its own lines (`sched_set_thread_namer`,
+`sched_set_trace_reporter`).
 
 The presentation worker consumes completed immutable frames. GPU resources and
 texture revisions remain alive until commands that reference them complete.
