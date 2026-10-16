@@ -2892,7 +2892,11 @@ bool sched_satisfy_locked(GuestThread *t) {
     double now = sched_now();
     if (g_sched_trace)
         sched_trace_ready(t->index, now);
-    sched_make_ready_locked(t, now, 1);
+    // A critical section is no wake-up worth a boost: its owner releases and
+    // takes it many times a second, and a boosted waiter would preempt it at
+    // the next import every time (the convoy above). A waiter of a higher
+    // priority still outranks the owner, as on Windows.
+    sched_make_ready_locked(t, now, t->wait_kind == W_CRITSEC ? 0 : 1);
     t->blocked = false;
     t->wait_kind = W_NONE;
     t->wait_n = 0;
@@ -3550,16 +3554,14 @@ void sched_leave_critsec(uint32_t cs) {
     wr32(cs + CS_OFF_LOCK_COUNT, rec ? rec - 1 : 0xffffffffu);
     if (!rec) {
         wr32(cs + CS_OFF_OWNER, 0);
-        // A thread waiting for it may go on. It is not handed the section:
-        // the next pass gives it to that thread if it is still free, and a
-        // leaver that takes it straight back keeps it, as on Windows (no
-        // convoy). The flag makes that pass the holder's next checkpoint.
-        for (GuestThread *t : threads())
-            if (t->blocked && t->wait_kind == W_CRITSEC && t->wait_cs == cs) {
-                g_sched_recheck.store(true, std::memory_order_relaxed);
-                recomp_sched_pending = 1u;
-                break;
-            }
+        // A thread waiting for it may go on, but leaving never gives the
+        // baton up, as on Windows, where the leaver keeps running and the
+        // waiter wakes on another processor. The section is not handed over
+        // either: the waiter takes it at the next scheduling pass in which it
+        // is free, so a leaver that takes it straight back keeps it. A tight
+        // loop of Enter and Leave (Empire Earth paints each tile of a new map
+        // under one) would otherwise hand the baton to the waiter once per
+        // pass of the loop.
     }
     g_sched_m.unlock();
 }
