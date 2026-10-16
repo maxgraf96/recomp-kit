@@ -2817,6 +2817,32 @@ static void fake_abandoning_thread(X86 *c) {
     set_eax(c, 0);
 }
 
+// The tests of the default policy's order are skipped under the old one.
+static bool sched_policy_rr() {
+    const char *p = recomp_env("SCHED_POLICY");
+    return p && strcmp(p, "rr") == 0;
+}
+
+// Records the order threads first ran in, by their start parameter.
+static uint32_t g_order[4];
+static uint32_t g_order_n = 0;
+static void fake_order_thread(X86 *c) {
+    if (g_order_n < 4)
+        g_order[g_order_n++] = arg(c, 0);
+    set_eax(c, 0x0de4);
+}
+
+// Computes for 100 ms without an import call, passing a preemption point the
+// way a translated loop head does (runtime/x86.h, RECOMP_SAFEPOINT).
+static volatile int g_compute_done = 0;
+static void fake_compute_thread(X86 *c) {
+    const double t0 = wall_seconds();
+    while (wall_seconds() - t0 < 0.1)
+        RECOMP_SAFEPOINT(c);
+    g_compute_done = 1;
+    set_eax(c, 0xc0de);
+}
+
 // Calls ExitProcess from a worker. The main thread owns the landing pad, so
 // this has to reach it however deeply it is blocked.
 static uint32_t g_exiting_started = 0;
@@ -3312,6 +3338,46 @@ static void test_scheduling(X86 *c) {
             check(g_idle_calls > 0, "the run thread went through the host waiter (%u calls)",
                   g_idle_calls);
         host_set_idle_waiter(nullptr);
+    }
+
+    // --- the higher priority runs first ------------------------------------
+    // Two threads made ready together: the one at THREAD_PRIORITY_TIME_CRITICAL
+    // gets the baton first, whatever the order they were created and resumed
+    // in, as on Windows. (RECOMP_SCHED_POLICY=rr would run them by index.)
+    if (!sched_policy_rr()) {
+        g_order_n = 0;
+        uint32_t ofn = imports_alloc_trampoline("test", "order_thread", fake_order_thread, 1);
+        uint32_t low = call_import(c, "KERNEL32.dll", "CreateThread", {0, 0, ofn, 1, 4, 0});
+        uint32_t high = call_import(c, "KERNEL32.dll", "CreateThread", {0, 0, ofn, 2, 4, 0});
+        check(call_import(c, "KERNEL32.dll", "SetThreadPriority", {high, 15}) == 1 &&
+                  call_import(c, "KERNEL32.dll", "GetThreadPriority", {high}) == 15,
+              "SetThreadPriority keeps the priority GetThreadPriority reports");
+        call_import(c, "KERNEL32.dll", "ResumeThread", {low});
+        call_import(c, "KERNEL32.dll", "ResumeThread", {high});
+        call_import(c, "KERNEL32.dll", "Sleep", {20});
+        check(g_order_n == 2 && g_order[0] == 2 && g_order[1] == 1,
+              "the time-critical thread ran before the normal one (%u ran: %u, %u)", g_order_n,
+              g_order[0], g_order[1]);
+        poll_exit_code(c, low, pcode, 64);
+        poll_exit_code(c, high, pcode, 64);
+    }
+
+    // --- a thread computing without an import call is preempted -----------
+    // At a preemption point in translated code, once its quantum is up: the
+    // thread it gave way to gets the baton back long before the 100 ms of
+    // computing are over.
+    if (!sched_policy_rr()) {
+        g_compute_done = 0;
+        uint32_t cfn = imports_alloc_trampoline("test", "compute_thread", fake_compute_thread, 1);
+        uint32_t th = call_import(c, "KERNEL32.dll", "CreateThread", {0, 0, cfn, 0, 0, 0});
+        const double t0 = wall_seconds();
+        const bool moved = host_guest_yield();
+        const double took = wall_seconds() - t0;
+        check(moved && !g_compute_done && took < 0.05,
+              "the computing thread gave the baton back at a preemption point (%.1f ms, done %d)",
+              took * 1000.0, (int)g_compute_done);
+        check(poll_exit_code(c, th, pcode, 400) == 0xc0de && g_compute_done,
+              "and finished its computing afterwards");
     }
 
     // --- a worker's ExitProcess reaches a main thread blocked indefinitely --

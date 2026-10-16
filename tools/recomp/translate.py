@@ -3128,6 +3128,22 @@ class Translator(object):
         for e in entries:
             labels.add(e)
 
+        # Preemption points (runtime/x86.h, RECOMP_SAFEPOINT): the function's
+        # entry, and every loop head - the target of a branch back to an
+        # address at or before its own. A thread computing in guest code then
+        # passes a point at least once per call and once per loop iteration,
+        # so the scheduler can hand the baton on without waiting for an import.
+        safepoints = not getattr(self.opts, "no_safepoints", False)
+        loop_heads = set()
+        if safepoints:
+            for i, ins in enumerate(fn.insns):
+                if i in dead or not (ins.mnem in JCC or ins.mnem == "JMP"):
+                    continue
+                t = self.branch_target(ins)
+                if t is not None and t in fn.index and t <= ins.addr:
+                    loop_heads.add(t)
+            self.stats["_safepoint_loop_heads"] += len(loop_heads)
+
         out = []
         if fn.addr in INTRINSIC_BODY:
             self.stats["_intrinsic_body"] += 1
@@ -3144,6 +3160,8 @@ class Translator(object):
         prologue = 0                 # lines before the first instruction
         if entries:
             out.append("static void body_%08x(X86 *c, uint32_t entry_) {" % fn.addr)
+            if safepoints:
+                out.append("    RECOMP_SAFEPOINT(c);")
             if fn.seh_escapes:
                 out.append("    uint64_t seh_mark_ = recomp_seh_frame_mark(c);")
             out.append("    switch (entry_) {")
@@ -3154,6 +3172,8 @@ class Translator(object):
             out.append("    }")
         else:
             out.append("void fn_%08x(X86 *c) {" % fn.addr)
+            if safepoints:
+                out.append("    RECOMP_SAFEPOINT(c);")
             if fn.seh_escapes:
                 out.append("    uint64_t seh_mark_ = recomp_seh_frame_mark(c);")
             if head:
@@ -3164,6 +3184,8 @@ class Translator(object):
                 continue
             if ins.addr in labels:
                 out.append("L_%08x: ;" % ins.addr)
+                if ins.addr in loop_heads:
+                    out.append("    RECOMP_SAFEPOINT(c);")
             body = self.emit(fn, i, live_out[i])
             for line in body:
                 out.append("    " + line)
@@ -4486,6 +4508,9 @@ def main():
     ap.add_argument("--only", nargs="*", default=None)
     ap.add_argument("--eager-flags", action="store_true",
                     help="compute every flag at every instruction (debug)")
+    ap.add_argument("--no-safepoints", action="store_true",
+                    help="emit no preemption points (RECOMP_SAFEPOINT) at function entries and "
+                         "loop heads: only import calls are scheduling points")
     ap.add_argument("--check-flags", action="store_true",
                     help="report flags that would cross CALL/RET boundaries")
     ap.add_argument("--report", default=None, help="write a JSON stats file")
@@ -6182,8 +6207,11 @@ def main():
         if body and body[0].startswith("static void body_"):
             continue                      # multi-entry form, dispatched below
         lines = [l for l in body[1:] if l.strip()]
-        # Host-only ownership bookkeeping does not execute a guest instruction
-        # or modify its CPU. The first guest operation must still reach ADDR.
+        # Host-only bookkeeping - a preemption point, the SEH ownership mark -
+        # does not execute a guest instruction or modify its CPU. The first
+        # guest operation must still reach ADDR.
+        if lines and lines[0].strip() == "RECOMP_SAFEPOINT(c);":
+            lines = lines[1:]
         if lines and lines[0].strip() == "uint64_t seh_mark_ = recomp_seh_frame_mark(c);":
             lines = lines[1:]
         if not lines:

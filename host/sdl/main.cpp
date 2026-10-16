@@ -54,6 +54,7 @@
 #include "../../runtime/loader.h"
 #include "../../runtime/mods_seam.h"
 #include "../../runtime/win32.h"
+#include "../../runtime/sched_trace.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h> // on iOS this supplies the UIKit entry point and renames main
@@ -765,6 +766,13 @@ void apply_button(int button, bool down, int32_t x, int32_t y, bool inside, bool
 }
 
 void handle_button(const SDL_MouseButtonEvent &event, int button, bool down) {
+    if (down && g_sched_trace) {
+        // SDL stamps the event when it took it from the system; its clock is
+        // SDL_GetTicksNS, so the age is measured on that clock.
+        const uint64_t sdl_now = SDL_GetTicksNS();
+        const uint64_t age = sdl_now > event.timestamp ? sdl_now - event.timestamp : 0;
+        sched_trace_input_event(os_monotonic_ns() - age);
+    }
     PendingInput e;
     e.kind = PendingInput::BUTTON;
     e.button = button;

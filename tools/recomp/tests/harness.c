@@ -634,7 +634,12 @@ double harness_st0(const X86 *c) {
     return c->st[c->fpu_top & 7];
 }
 
-/* Standalone translator harness has no scheduler or sampling thread. */
+/* Standalone translator harness has no scheduler or sampling thread: nothing
+ * raises the preemption flag, and a preemption point has nothing to do. */
+volatile uint32_t recomp_sched_pending = 0;
+void recomp_sched_safepoint(X86 *c) {
+    (void)c;
+}
 const int recomp_profile_enabled = 0;
 void recomp_profile_push(uint32_t index) {
     (void)index;

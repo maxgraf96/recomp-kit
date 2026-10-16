@@ -358,6 +358,28 @@ extern const int recomp_resumable_stacks;
 extern uint32_t recomp_frame_watch;
 void recomp_frame_changed(X86 *c, uint32_t target, uint32_t before, uint32_t after);
 extern const int recomp_profile_enabled;
+
+/* Preemption points. The translator puts RECOMP_SAFEPOINT at every function
+ * entry and at every loop head (the target of a backward branch). The
+ * scheduler sets recomp_sched_pending when the thread that holds the baton
+ * should look at the schedule - a quantum may be up, or a thread that
+ * outranks it may be ready - and the point then hands the baton on if it
+ * should (kernel32.cpp, "The scheduler"). Clear, it costs a load and a branch
+ * that is not taken. The guest state is whole at both places: between two
+ * instructions, with nothing held in host temporaries, so a thread switched
+ * out there resumes exactly where it stopped. RECOMP_NO_SAFEPOINTS compiles
+ * them out, leaving only the import calls as scheduling points. */
+extern volatile uint32_t recomp_sched_pending;
+void recomp_sched_safepoint(X86 *c);
+#ifdef RECOMP_NO_SAFEPOINTS
+#define RECOMP_SAFEPOINT(c) ((void)0)
+#else
+#define RECOMP_SAFEPOINT(c)                                                                        \
+    do {                                                                                           \
+        if (__builtin_expect(recomp_sched_pending != 0u, 0))                                       \
+            recomp_sched_safepoint(c);                                                             \
+    } while (0)
+#endif
 void recomp_profile_push(uint32_t index);
 void recomp_profile_pop(void);
 

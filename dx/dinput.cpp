@@ -15,6 +15,7 @@
 #include "../runtime/memory.h"
 #include "../runtime/win32.h"
 #include "../runtime/native_seam.h"
+#include "../runtime/sched_trace.h"
 
 #include <string.h>
 #include <iterator>
@@ -588,8 +589,11 @@ void Device_GetDeviceState(X86 *c) {
         wr32(out + DIMS_OFF_lZ, (uint32_t)d->last_z);
     }
     uint32_t nbuttons = size >= DIMOUSESTATE2_SIZE ? 8u : 4u;
-    for (uint32_t b = 0; b < nbuttons && DIMS_OFF_rgbButtons + b < size; ++b)
+    for (uint32_t b = 0; b < nbuttons && DIMS_OFF_rgbButtons + b < size; ++b) {
         wr8(out + DIMS_OFF_rgbButtons + b, d->last_buttons[b]);
+        if (g_sched_trace && (d->last_buttons[b] & 0x80u))
+            sched_trace_input_consumed("GetDeviceState");
+    }
     // Relative axes report motion since the previous call, so reading them is
     // what clears them. The buttons are a level and stay.
     d->last_x = d->last_y = d->last_z = 0;
@@ -661,6 +665,9 @@ void Device_GetDeviceData(X86 *c) {
                                 ? (uint32_t)event_data_signed(e)
                                 : event_data(e);
             wr32(a + DIDOD_OFF_dwData, data);
+            if (g_sched_trace && d->dev_type == DIDEVTYPE_MOUSE && ofs >= DIMS_OFF_rgbButtons &&
+                (data & 0x80u))
+                sched_trace_input_consumed("GetDeviceData");
             wr32(a + DIDOD_OFF_dwTimeStamp, now);
             wr32(a + DIDOD_OFF_dwSequence, ++d->sequence);
             static const bool trace = recomp_env("TRACE_POINTER") != nullptr;

@@ -18,6 +18,7 @@
 #include "native_seam.h"
 #include "loader.h"
 #include "codepages.h"
+#include "sched_trace.h"
 
 #include <errno.h>
 #include "../platform/os.h"
@@ -30,6 +31,7 @@
 
 #include <map>
 #include <chrono>
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 #include <algorithm>
@@ -54,6 +56,12 @@ enum {
     ERROR_CALL_NOT_IMPLEMENTED_ = 120,
 };
 static const uint32_t INVALID_HANDLE_VALUE_ = 0xffffffffu;
+
+// Set when the baton holder should look at the schedule at its next
+// preemption point in translated code (runtime/x86.h, RECOMP_SAFEPOINT): by
+// the ticker every quantum, and at once when a thread that outranks the
+// holder becomes ready. Cleared by the point that looks.
+extern "C" volatile uint32_t recomp_sched_pending = 0;
 static const uint32_t FILE_ATTRIBUTE_READONLY_ = 0x001;
 static const uint32_t FILE_ATTRIBUTE_DIRECTORY_ = 0x010;
 static const uint32_t FILE_ATTRIBUTE_ARCHIVE_ = 0x020;
@@ -1973,6 +1981,8 @@ void k_ReleaseSemaphore(X86 *c) {
         return;
     }
     o->count += n;
+    if (n > 0)
+        sched_wake_all();
     set_eax(c, 1);
 }
 
@@ -2102,6 +2112,14 @@ struct GuestThread {
     double last_yield = 0.0;  // for the bounded scheduling checkpoint
     jmp_buf exit_jmp;
     uint32_t exit_code = 0;
+    // Scheduling (see "The scheduler" below). Each thread sleeps on its own
+    // condition, so a handoff wakes the one thread it names and no other.
+    std::condition_variable cv;
+    int32_t priority = 0;    // SetThreadPriority's THREAD_PRIORITY_* value
+    int8_t boost = 0;        // woke from a wait (or input came for it), quantum not used up
+    uint64_t ready_seq = 0;  // the order threads became ready in: FIFO per class
+    double ready_at = 0.0;   // when it last became ready
+    double hold_start = 0.0; // when it was last handed the baton
 };
 
 // Scheduling deadlines run on a real monotonic clock, never on host_millis():
@@ -2117,8 +2135,24 @@ std::vector<GuestThread *> &threads() {
 }
 
 std::mutex g_sched_m;
-std::condition_variable_any g_sched_cv;
 size_t g_baton = 0; // index of the thread allowed to run
+// g_baton for a thread spinning without the lock: written with it, under
+// g_sched_m, and only ever read as a hint that the lock is worth taking.
+std::atomic<size_t> g_baton_hint{0};
+// Something the holder should look at, at its next scheduling checkpoint: a
+// ready thread outranks it, or a waiter may be satisfiable now. Set under
+// g_sched_m or by the holder; read by the holder without the lock.
+std::atomic<bool> g_sched_recheck{false};
+// The earliest deadline among blocked threads (monotonic seconds, 0: none),
+// so the holder's checkpoint can release a timed wait on time without taking
+// the lock to look. Written under g_sched_m.
+std::atomic<double> g_next_deadline{0.0};
+std::atomic<bool> g_host_signal_pending{false};
+uint64_t g_ready_seq = 0; // under g_sched_m
+// The callback depth (recomp_callback_depth) at which this thread runs its own
+// guest code: 0 on the run thread, 1 inside a worker's thread body. Deeper is
+// guest code called back from a shim.
+__thread uint32_t t_callback_base = 0;
 // Read by the host from the very thread that sets it, so a plain bool is the
 // whole of it: no other thread looks.
 bool g_in_idle_slice = false;
@@ -2194,6 +2228,46 @@ int (*g_idle_waiter)(double) = nullptr;
 const double HOST_IDLE_BATON_SLICE = 0.002;
 const double HOST_IDLE_MAX_SLICE = 0.050;
 
+// The policy (see "The scheduler"), read once.
+//
+//   RECOMP_SCHED_POLICY=fifo     the default: wake boost, FIFO per class,
+//                                preemption at the next checkpoint
+//   RECOMP_SCHED_POLICY=rr       the round robin by thread index that came
+//                                before it, every slice a millisecond, for
+//                                bisection and A/B runs of one build
+//   RECOMP_SCHED_QUANTUM_MS=Q    the time slice (default 2; rr: 1)
+//   RECOMP_SCHED_SPIN_US=U       how long a thread that gave the baton up
+//                                while runnable spins for it before it sleeps
+//                                (default 50; 0: never)
+//   RECOMP_SCHED_STARVE_MS=S     how long a ready thread waits before it is
+//                                raised to the top class (default 20)
+struct SchedPolicy {
+    bool rr = false;
+    double quantum = 0.002;
+    double spin = 50e-6;
+    double starve = 0.020;
+};
+const SchedPolicy &sched_policy() {
+    static const SchedPolicy p = [] {
+        SchedPolicy q;
+        const char *v = recomp_env("SCHED_POLICY");
+        q.rr = v && strcmp(v, "rr") == 0;
+        q.quantum = q.rr ? 0.001 : 0.002;
+        if (const char *e = recomp_env("SCHED_QUANTUM_MS"))
+            if (atof(e) > 0.0)
+                q.quantum = atof(e) / 1000.0;
+        if (const char *e = recomp_env("SCHED_SPIN_US"))
+            q.spin = atof(e) > 0.0 ? atof(e) * 1e-6 : 0.0;
+        if (const char *e = recomp_env("SCHED_STARVE_MS"))
+            if (atof(e) > 0.0)
+                q.starve = atof(e) / 1000.0;
+        return q;
+    }();
+    return p;
+}
+bool thread_runnable(const GuestThread *t);
+void sched_wake_holder_locked();
+
 __thread X86 *t_ctx = nullptr;
 __thread uint32_t t_id = 1;
 
@@ -2211,6 +2285,7 @@ GuestThread *cur_thread() {
         m->tls = TLS_BASE;
         threads().push_back(m);
         g_baton = 0;
+        sched_trace_thread(0, 1, 0, 0, true);
     }
     return threads()[t_self];
 }
@@ -2364,9 +2439,22 @@ bool sched_in_idle_slice() {
 // above is parked on the scheduler's condition with a deadline of up to a
 // second, and would sleep out that deadline with the input in hand; this wakes
 // it so it re-evaluates. Signalling costs nothing when nobody is parked.
+//
+// The run thread is the one that applies it, so it is boosted as Windows
+// boosts a thread that input arrives for: when it is waiting for its turn,
+// it gets the baton at the holder's next checkpoint rather than after
+// everyone else's quantum.
 void sched_input_arrived() {
     g_sched_m.lock();
-    g_sched_cv.notify_all();
+    if (!threads().empty() && !sched_policy().rr && g_baton != 0) {
+        GuestThread *m = threads()[0];
+        if (thread_runnable(m)) {
+            m->boost = 2;
+            g_sched_recheck.store(true, std::memory_order_relaxed);
+            recomp_sched_pending = 1u;
+        }
+    }
+    sched_wake_holder_locked();
     g_sched_m.unlock();
 }
 
@@ -2422,7 +2510,7 @@ void sched_wait_locked(size_t me, double until, double max_slice) {
         // anything the guest would see - input delivery, and mod callbacks
         // above all - until it holds the baton itself.
         g_in_idle_slice = true;
-        // AppKit's event wait cannot hear g_sched_cv. Sleeping there for each
+        // AppKit's event wait cannot hear a thread's condition. Sleeping there for each
         // handoff makes short mouse/keyboard workers cost a full 2 ms slice,
         // many times per rendered frame while the pointer moves. Poll events
         // first, then wait on the notification the returning worker signals.
@@ -2442,7 +2530,37 @@ void sched_wait_locked(size_t me, double until, double max_slice) {
         return;
     if (wait > 1.0)
         wait = 1.0;
-    g_sched_cv.wait_for(g_sched_m, std::chrono::duration<double>(wait));
+    // On this thread's own condition: a handoff names one thread and wakes
+    // only it. The lock is g_sched_m, held by the caller and held again on
+    // return; the unique_lock only lends it to the wait.
+    std::unique_lock<std::mutex> held(g_sched_m, std::adopt_lock);
+    threads()[me]->cv.wait_for(held, std::chrono::duration<double>(wait));
+    held.release();
+}
+
+// Caller holds g_sched_m and has just given the baton up while it can still
+// run. The thread it went to often hands it straight back - a Sleep(1)
+// poller, a boosted waker with little to do - and a wake-up through the
+// kernel costs tens of microseconds. So spin on the hint for a moment before
+// sleeping. Returns with g_sched_m held either way.
+//
+// Not the run thread under a host: it spends the wait servicing the host's
+// events (sched_wait_locked), which a spin would skip.
+void sched_spin_for_baton_locked(size_t me) {
+    const double spin = sched_policy().spin;
+    if (spin <= 0.0 || g_baton == me || (g_idle_waiter && threads()[me]->is_main))
+        return;
+    g_sched_m.unlock();
+    const double until = sched_now() + spin;
+    unsigned n = 0;
+    while (g_baton_hint.load(std::memory_order_acquire) != me) {
+        if ((++n & 63) == 0 && sched_now() >= until)
+            break;
+#if defined(__aarch64__)
+        __asm__ __volatile__("yield");
+#endif
+    }
+    g_sched_m.lock();
 }
 
 // ---------------------------------------------------------------------------
@@ -2517,6 +2635,118 @@ bool thread_runnable(const GuestThread *t) {
     if (t->suspend_count > 0)
         return false;
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Choosing who runs: Windows' rules, for one processor.
+//
+// A ready thread's class is the priority Windows gives it in a process of
+// normal priority class: 8 plus its THREAD_PRIORITY_* offset (-2..2), 15 for
+// THREAD_PRIORITY_TIME_CRITICAL, 1 for THREAD_PRIORITY_IDLE. The higher class
+// runs; within a class the thread that became ready first goes first.
+//
+// A thread that has just woken from a wait - its event set, its sleep over,
+// its socket readable - is boosted by one, and the thread input arrives for by
+// two, as Windows' wait-completion and input boosts do; never above 15. A
+// boost lasts until the thread blocks again or uses up a quantum. A thread
+// kept ready for the starvation limit (RECOMP_SCHED_STARVE_MS, 20 ms) is
+// raised to 15 for its next quantum, as Windows' balance-set manager raises a
+// starved thread, only far sooner (Windows waits four seconds): one processor
+// is all the guest has, and a picture that stops for seconds is a hang to the
+// player. Twenty milliseconds is a little over a frame at 60 Hz; a
+// time-critical thread's short bursts - a tick or two - stay whole.
+//
+// Empire Earth relies on this: its simulation thread runs at TIME_CRITICAL,
+// paces itself on a timer and tunes its tick rate so that ticks take 30% of
+// the processor (simparity.md §4.1), which is how it shared a single 2001
+// processor with its renderer.
+// ---------------------------------------------------------------------------
+int sched_base_class(int32_t priority) {
+    if (priority >= 15)
+        return 15;
+    if (priority <= -15)
+        return 1;
+    return 8 + (priority < -2 ? -2 : priority > 2 ? 2 : priority);
+}
+
+bool sched_starved(const GuestThread *t, double now) {
+    return t->ready_at > 0.0 && now - t->ready_at >= sched_policy().starve;
+}
+
+int sched_class(const GuestThread *t, double now) {
+    if (sched_starved(t, now))
+        return 15;
+    int c = sched_base_class(t->priority);
+    if (c < 15 && t->boost)
+        c = std::min(15, c + t->boost);
+    return c;
+}
+
+// Caller holds g_sched_m. Is `a` to run before `b`?
+bool sched_before(const GuestThread *a, const GuestThread *b, double now) {
+    int ca = sched_class(a, now), cb = sched_class(b, now);
+    if (ca != cb)
+        return ca > cb;
+    return a->ready_seq < b->ready_seq;
+}
+
+// Caller holds g_sched_m. `t` can run from `at` on: it goes to the back of
+// its class, boosted by `boost` (or not), and the holder is told when it is
+// outranked.
+void sched_make_ready_locked(GuestThread *t, double at, int boost) {
+    t->ready_seq = ++g_ready_seq;
+    t->ready_at = at;
+    t->boost = sched_policy().rr ? 0 : (int8_t)boost;
+    if (sched_policy().rr || g_baton >= threads().size() || threads()[g_baton] == t)
+        return;
+    if (sched_class(t, at) > sched_class(threads()[g_baton], at)) {
+        g_sched_recheck.store(true, std::memory_order_relaxed);
+        recomp_sched_pending = 1u;
+    }
+}
+
+// Caller holds g_sched_m. Moves the baton to `to` and wakes that thread, and
+// only that one. `from_runnable` says whether the thread it was taken from
+// can still run, for the trace.
+void sched_set_baton_locked(size_t to, const char *why, bool from_runnable) {
+    double now = sched_now();
+    if (g_sched_trace && to != g_baton)
+        sched_trace_assign(to, now, why, from_runnable);
+    g_baton = to;
+    g_baton_hint.store(to, std::memory_order_release);
+    if (to < threads().size()) {
+        GuestThread *t = threads()[to];
+        // A thread that gets its turn by starving keeps the top class for the
+        // quantum it is given, or the thread it was raised past would take
+        // the baton straight back.
+        if (!sched_policy().rr && sched_starved(t, now))
+            t->boost = (int8_t)(15 - sched_base_class(t->priority));
+        t->hold_start = now;
+        t->ready_at = 0.0;
+        t->cv.notify_one();
+    }
+}
+
+// Caller holds g_sched_m. Wakes whichever thread holds the baton: when nothing
+// can run, the holder is parked on its condition until the earliest deadline,
+// and a host signal, input or a pending exit is what it must hear about.
+void sched_wake_holder_locked() {
+    if (g_baton < threads().size())
+        threads()[g_baton]->cv.notify_one();
+}
+void sched_wake_everyone_locked() {
+    for (GuestThread *t : threads())
+        t->cv.notify_one();
+}
+
+// Caller holds g_sched_m. The earliest deadline among blocked threads, kept
+// where the holder's checkpoint can see it.
+void sched_note_deadlines_locked() {
+    double best = 0.0;
+    for (GuestThread *t : threads())
+        if (t->blocked && t->has_deadline && (best == 0.0 || t->deadline < best))
+            best = t->deadline;
+    g_next_deadline.store(best, std::memory_order_relaxed);
 }
 
 // ---------------------------------------------------------------------------
@@ -2659,6 +2889,10 @@ bool sched_satisfy_locked(GuestThread *t) {
     } else if (t->wait_kind == W_NONE && t->has_deadline) {
         return false; // a plain sleep: only time releases it
     }
+    double now = sched_now();
+    if (g_sched_trace)
+        sched_trace_ready(t->index, now);
+    sched_make_ready_locked(t, now, 1);
     t->blocked = false;
     t->wait_kind = W_NONE;
     t->wait_n = 0;
@@ -2671,6 +2905,7 @@ bool sched_satisfy_locked(GuestThread *t) {
 // Caller holds g_sched_m AND the baton, so touching the handle table is safe:
 // no other guest thread is running guest code.
 void apply_host_signals_locked() {
+    g_host_signal_pending.store(false, std::memory_order_relaxed);
     if (g_host_signals.empty())
         return;
     for (uint32_t h : g_host_signals) {
@@ -2690,6 +2925,9 @@ void sched_expire_locked() {
         if (sched_satisfy_locked(t))
             continue;
         if (t->has_deadline && now >= t->deadline) {
+            if (g_sched_trace)
+                sched_trace_ready(t->index, t->deadline);
+            sched_make_ready_locked(t, t->deadline, 1);
             t->blocked = false;
             t->wait_result = t->wait_kind == W_NONE ? 0 : 0x102; // WAIT_TIMEOUT
             t->wait_kind = W_NONE;
@@ -2697,17 +2935,31 @@ void sched_expire_locked() {
             t->has_deadline = false;
         }
     }
+    sched_note_deadlines_locked();
 }
 
-// Caller holds g_sched_m.  The next runnable thread after `from`, or NO_THREAD.
+// Caller holds g_sched_m.  The runnable thread to run instead of `from`, or
+// NO_THREAD: the first in class order (above), or under the rr policy the
+// next one after `from` by index. `from` itself is never the answer.
 size_t sched_next_runnable_locked(size_t from) {
     size_t n = threads().size();
-    for (size_t k = 1; k <= n; ++k) {
-        size_t i = (from + k) % n;
-        if (thread_runnable(threads()[i]))
-            return i;
+    if (sched_policy().rr) {
+        for (size_t k = 1; k <= n; ++k) {
+            size_t i = (from + k) % n;
+            if (i != from && thread_runnable(threads()[i]))
+                return i;
+        }
+        return NO_THREAD;
     }
-    return NO_THREAD;
+    const double now = sched_now();
+    size_t best = NO_THREAD;
+    for (size_t i = 0; i < n; ++i) {
+        if (i == from || !thread_runnable(threads()[i]))
+            continue;
+        if (best == NO_THREAD || sched_before(threads()[i], threads()[best], now))
+            best = i;
+    }
+    return best;
 }
 
 // Caller holds g_sched_m.  The earliest deadline among blocked threads, or 0
@@ -2723,12 +2975,34 @@ double sched_earliest_deadline_locked() {
     return best;
 }
 
-// Caller holds g_sched_m and the baton.  Runs everything else until `me` is
-// runnable again, then returns with the baton.  When nothing at all is
-// runnable this sleeps until the earliest deadline rather than spinning, and
-// when there is no deadline either it says so once and keeps waiting: an
-// INFINITE wait must not be answered with a timeout that never happened.
+// Caller holds g_sched_m and the baton, and nothing at all is runnable: the
+// holder parks until the deadline (0: until something changes).
+void sched_idle_wait_locked(size_t me, double deadline) {
+    if (!g_sched_trace) {
+        sched_wait_locked(me, deadline, HOST_IDLE_MAX_SLICE);
+        return;
+    }
+    double t0 = sched_now();
+    sched_trace_idle_begin(me, t0);
+    sched_wait_locked(me, deadline, HOST_IDLE_MAX_SLICE);
+    sched_trace_idle(sched_now() - t0);
+}
+
+// Caller holds g_sched_m.  Runs everything else until `me` is runnable again,
+// then returns with the baton.  When nothing at all is runnable this sleeps
+// until the earliest deadline rather than spinning, and when there is no
+// deadline either it says so once and keeps waiting: an INFINITE wait must
+// not be answered with a timeout that never happened.
+//
+// Only the holder acts. Evaluating waits takes objects (a semaphore count, an
+// auto-reset event) and moving the baton names who runs next, and both belong
+// to the thread with the baton: a thread that wakes without it - its own
+// slice ran out, or it was handed the baton and lost it again - only waits to
+// be handed it. The exception is a baton stranded on a thread that has
+// finished, or freed by the shutdown driver, which can hand it to nobody:
+// taking it authorises no second runner, because nobody is running.
 void sched_run_others_locked(size_t me, const char *why) {
+    GuestThread *self = threads()[me];
     for (;;) {
         // A worker can ask the process to exit while this thread is parked in
         // a wait nothing is ever going to satisfy. The exit outranks the wait:
@@ -2737,48 +3011,41 @@ void sched_run_others_locked(size_t me, const char *why) {
         // has been performed, though: after that this thread is draining, and
         // taking the baton straight back here would leave the workers it is
         // draining no chance to end.
-        if (g_exit_requested && !g_exited && threads()[me]->is_main) {
-            GuestThread *t = threads()[me];
-            t->blocked = false;
-            t->wait_kind = W_NONE;
-            t->wait_n = 0;
-            t->has_deadline = false;
-            t->wait_result = 0x102; // the wait never completed
-            g_baton = me;
+        if (g_exit_requested && !g_exited && self->is_main) {
+            self->blocked = false;
+            self->wait_kind = W_NONE;
+            self->wait_n = 0;
+            self->has_deadline = false;
+            self->wait_result = 0x102; // the wait never completed
+            if (g_baton != me)
+                sched_set_baton_locked(me, "exit pending", true);
             return;
         }
-        sched_expire_locked();
-        if (thread_runnable(threads()[me])) {
-            // Runnable is not the same as entitled. Every resume from a wait
-            // comes back here, and a woken thread that is no longer the holder
-            // must not take the baton: doing that put it beside whoever the
-            // holder had become and both ran guest code at once. It waits for
-            // the ordinary handoff instead.
-            //
-            // The exception is a baton stranded on a thread that has finished,
-            // which can hand it to nobody. Taking it there authorises no
-            // second runner, because the one it is taken from is not running.
-            if (g_baton == me)
-                return;
+        if (g_baton != me) {
             if (g_baton >= threads().size() || threads()[g_baton]->finished) {
-                g_baton = me;
-                return;
+                sched_set_baton_locked(me, "stranded", false);
+                continue;
             }
+            // The run thread services the host between slices rather than
+            // parking here.
             sched_wait_locked(me, 0.0, HOST_IDLE_BATON_SLICE);
             continue;
         }
 
+        sched_expire_locked();
+        if (thread_runnable(self)) {
+            self->ready_at = 0.0;
+            return;
+        }
+
         size_t next = sched_next_runnable_locked(me);
         if (next != NO_THREAD) {
-            g_baton = next;
+            sched_set_baton_locked(next, why, false);
             record_handoff_locked(me, next, why);
-            g_sched_cv.notify_all();
-            // Wait for the baton, then loop: holding it is not the same as
-            // being runnable, and a thread that ends hands the baton on
-            // without knowing who is eligible. The run thread services the
-            // host between slices rather than parking here.
-            while (g_baton != me)
-                sched_wait_locked(me, 0.0, HOST_IDLE_BATON_SLICE);
+            // Loop: this thread waits above until it is handed the baton
+            // again, and then holding it is still not the same as being
+            // runnable - a thread that ends hands the baton on without
+            // knowing who is eligible.
             continue;
         }
 
@@ -2804,7 +3071,6 @@ void sched_run_others_locked(size_t me, const char *why) {
         // starve input for as long as any worker sat parked inside a hook,
         // which is a hang rather than a safety property.
         if (g_input_pending && g_input_drain && mods_hook_depth() == 0 && g_input_pending()) {
-            g_baton = me;
             g_sched_m.unlock();
             g_input_drain();
             g_sched_m.lock();
@@ -2822,13 +3088,13 @@ void sched_run_others_locked(size_t me, const char *why) {
             }
             // Wait rather than invent a wake-up. The host's run deadline ends
             // the process; a fabricated WAIT_TIMEOUT would be a lie.
-            sched_wait_locked(me, 0.0, HOST_IDLE_MAX_SLICE);
+            sched_idle_wait_locked(me, 0.0);
             continue;
         }
         // Sleep exactly as far as the earliest deadline, no further and no
         // rounding: a guest that asks for Sleep(1) has to wake in about a
         // millisecond, not on the next tick of some coarser poll.
-        sched_wait_locked(me, deadline, HOST_IDLE_MAX_SLICE);
+        sched_idle_wait_locked(me, deadline);
     }
 }
 
@@ -2840,9 +3106,32 @@ void sched_handoff_on_exit_locked(size_t me, const char *why) {
     size_t next = sched_next_runnable_locked(me);
     if (next == NO_THREAD)
         next = 0;
-    g_baton = next;
+    if (g_sched_trace)
+        sched_trace_finished(me, sched_now());
+    sched_set_baton_locked(next, why, false);
     record_handoff_locked(me, next, why);
-    g_sched_cv.notify_all();
+}
+
+// Caller holds g_sched_m and the baton, and `me` can run. Hands the baton to
+// `next` and returns once it is back. `requeue`: `me` goes to the back of its
+// class with its boost spent (a yield, a used-up quantum); otherwise it keeps
+// its place in line (a preemption by a higher class) and is the first of its
+// class to run again.
+void sched_hand_over_locked(GuestThread *me, size_t next, const char *why, bool requeue) {
+    const double now = sched_now();
+    me->last_yield = now;
+    if (requeue)
+        sched_make_ready_locked(me, now, 0);
+    else
+        me->ready_at = now;
+    sched_set_baton_locked(next, why, true);
+    record_handoff_locked(me->index, next, why);
+    sched_spin_for_baton_locked(me->index);
+    while (g_baton != me->index)
+        sched_wait_locked(me->index, 0.0, HOST_IDLE_BATON_SLICE);
+    me->ready_at = 0.0;
+    if (g_sched_trace)
+        sched_trace_resume(me->index, sched_now());
 }
 
 // Blocks the calling thread until its wait completes or its deadline passes.
@@ -2862,6 +3151,8 @@ uint32_t guest_block(const char *why) {
     }
     me->last_yield = sched_now();
     sched_run_others_locked(me->index, why);
+    if (g_sched_trace)
+        sched_trace_resume(me->index, sched_now());
     uint32_t r = me->wait_result;
     g_sched_m.unlock();
     if (g_exit_requested)
@@ -2889,14 +3180,9 @@ bool guest_yield() {
     me->last_yield = sched_now();
     sched_expire_locked();
     size_t next = sched_next_runnable_locked(me->index);
-    bool moved = next != NO_THREAD && next != me->index;
-    if (moved) {
-        g_baton = next;
-        record_handoff_locked(me->index, next, "yield");
-        g_sched_cv.notify_all();
-        while (g_baton != me->index)
-            sched_wait_locked(me->index, 0.0, HOST_IDLE_BATON_SLICE);
-    }
+    bool moved = next != NO_THREAD;
+    if (moved)
+        sched_hand_over_locked(me, next, "yield", true);
     g_sched_m.unlock();
     if (moved && g_exit_requested)
         thread_finish_exit_process();
@@ -2907,9 +3193,9 @@ bool guest_yield() {
 // shim.  Scheduling must not depend on which polling API the game happens to
 // call: the frame limiter spins on GetTickCount and would otherwise starve the
 // DirectInput service threads indefinitely, expired 200 ms waits and all.  Any
-// call into the runtime is a checkpoint, and a thread yields at most once per
-// millisecond so the check costs a clock read on the hot path.
-const double SCHED_SLICE_SECONDS = 0.001;
+// call into the runtime is a checkpoint; it costs a clock read on the hot path
+// and takes the scheduler's lock only when there is something to decide (see
+// sched_checkpoint_at).
 
 } // namespace
 
@@ -2963,7 +3249,9 @@ void guest_event_signal_from_host(uint32_t handle) {
         return;
     g_sched_m.lock();
     g_host_signals.push_back(handle);
-    g_sched_cv.notify_all();
+    g_host_signal_pending.store(true, std::memory_order_relaxed);
+    recomp_sched_pending = 1u;
+    sched_wake_holder_locked();
     g_sched_m.unlock();
 }
 
@@ -2996,33 +3284,143 @@ void sched_atomic_unwind_to_esp(uint32_t esp) {
         --t_atomic;
 }
 
-void sched_checkpoint() {
+void sched_checkpoint_at(uint32_t site) {
     // Drain first and unconditionally: a guest with no worker threads never
     // reaches the scheduler proper, and a signal it never applied is a wait
     // that never ends.
-    if (!g_host_signals.empty()) {
+    if (g_host_signal_pending.load(std::memory_order_relaxed)) {
         g_sched_m.lock();
         apply_host_signals_locked();
+        // A thread the signal released has to be seen to run: the decision
+        // below is the holder's, and the flag is how it hears.
+        g_sched_recheck.store(true, std::memory_order_relaxed);
         g_sched_m.unlock();
     }
     if (threads().size() < 2 || t_atomic)
         return;
     GuestThread *me = threads()[t_self];
     double now = sched_now();
-    if (now - me->last_yield < SCHED_SLICE_SECONDS)
+    if (g_sched_trace) {
+        sched_trace_checkpoint(t_self, now, site);
+        if (sched_trace_due(now)) {
+            g_sched_m.lock();
+            sched_trace_report(now);
+            g_sched_m.unlock();
+        }
+    }
+    const SchedPolicy &pol = sched_policy();
+    if (pol.rr) {
+        if (now - me->last_yield < pol.quantum)
+            return;
+        me->last_yield = now;
+        guest_yield();
         return;
-    me->last_yield = now;
-    guest_yield();
+    }
+    // The cheap part, on every import: is there anything to decide? A quantum
+    // used up, a timed wait due, or a waiter made ready that may outrank this
+    // thread. Otherwise this thread keeps the baton without taking the lock.
+    const bool quantum_over = now - me->hold_start >= pol.quantum;
+    const double due = g_next_deadline.load(std::memory_order_relaxed);
+    if (!quantum_over && !(due > 0.0 && now >= due) &&
+        !g_sched_recheck.load(std::memory_order_relaxed))
+        return;
+    sched_run_checkpoint();
+    g_sched_m.lock();
+    if (g_baton != me->index) {
+        g_sched_m.unlock();
+        return;
+    }
+    g_sched_recheck.store(false, std::memory_order_relaxed);
+    sched_expire_locked();
+    size_t next = sched_next_runnable_locked(me->index);
+    bool moved = false;
+    if (quantum_over)
+        me->boost = 0; // a boost lasts a quantum
+    if (next != NO_THREAD) {
+        const int mine = sched_class(me, now), theirs = sched_class(threads()[next], now);
+        if (theirs > mine) {
+            sched_hand_over_locked(me, next, "preempted", quantum_over);
+            moved = true;
+        } else if (quantum_over && theirs == mine) {
+            sched_hand_over_locked(me, next, "quantum", true);
+            moved = true;
+        }
+    }
+    if (!moved && quantum_over)
+        me->hold_start = now; // nobody else to run: a fresh quantum
+    g_sched_m.unlock();
+    if (moved && g_exit_requested)
+        thread_finish_exit_process();
 }
+
+void sched_checkpoint() {
+    sched_checkpoint_at(SCHED_SITE_NONE);
+}
+
+// A preemption point in translated code found recomp_sched_pending set.
+//
+// It acts only where nothing but guest code is on this thread's stack: at the
+// thread's own callback depth and with no mod hook live. A shim that called
+// back into the guest - a window procedure, an enumeration callback, a
+// comparator - may hold host state across the call that it never had to
+// share before, because a callback that makes no import call never gave the
+// baton up. Those keep exactly the scheduling points they had: their import
+// calls. The flag is cleared either way; the ticker sets it again.
+extern "C" void recomp_sched_safepoint(X86 *c) {
+    (void)c;
+    recomp_sched_pending = 0u;
+    if (!t_is_guest || t_atomic || recomp_callback_depth() != t_callback_base ||
+        mods_hook_depth() != 0)
+        return;
+    sched_checkpoint_at(SCHED_SITE_PREEMPT);
+}
+
+namespace {
+
+// The ticker: a host thread that raises recomp_sched_pending every half
+// quantum while there is more than one guest thread, so a thread computing in
+// guest code without an import call still meets a decision about once a
+// quantum. It never touches guest state. RECOMP_SCHED_POLICY=rr has none: its
+// points are the import calls, as before.
+void *sched_ticker_main(void *) {
+    const uint64_t us = (uint64_t)(sched_policy().quantum * 0.5e6) < 250
+                            ? 250
+                            : (uint64_t)(sched_policy().quantum * 0.5e6);
+    for (;;) {
+        os_sleep_us(us);
+        recomp_sched_pending = 1u;
+    }
+    return nullptr;
+}
+
+void sched_start_ticker() {
+    static bool started = false;
+    if (started || sched_policy().rr)
+        return;
+    started = true;
+    if (OsThread *t = os_thread_create(sched_ticker_main, nullptr, 0))
+        os_thread_detach(t);
+}
+
+} // namespace
 
 namespace {
 
 // A shim that changed an object's state calls this so a thread blocked on it
 // is reconsidered at the next scheduling pass rather than sleeping out its
 // whole timeout.
+//
+// Called by the holder, so the waits can be evaluated here and now, as
+// Windows does in SetEvent itself: a waiter the change satisfies takes the
+// object at once (an auto-reset event is reset for it, a mutex is its) and is
+// ready, boosted, to run at the caller's next checkpoint. The rr policy leaves
+// it to the next scheduling pass, as before.
 void sched_wake_all() {
     g_sched_m.lock();
-    g_sched_cv.notify_all();
+    if (!sched_policy().rr && g_baton == t_self && t_is_guest)
+        sched_expire_locked();
+    else
+        sched_wake_holder_locked();
     g_sched_m.unlock();
 }
 
@@ -3152,7 +3550,16 @@ void sched_leave_critsec(uint32_t cs) {
     wr32(cs + CS_OFF_LOCK_COUNT, rec ? rec - 1 : 0xffffffffu);
     if (!rec) {
         wr32(cs + CS_OFF_OWNER, 0);
-        g_sched_cv.notify_all();
+        // A thread waiting for it may go on. It is not handed the section:
+        // the next pass gives it to that thread if it is still free, and a
+        // leaver that takes it straight back keeps it, as on Windows (no
+        // convoy). The flag makes that pass the holder's next checkpoint.
+        for (GuestThread *t : threads())
+            if (t->blocked && t->wait_kind == W_CRITSEC && t->wait_cs == cs) {
+                g_sched_recheck.store(true, std::memory_order_relaxed);
+                recomp_sched_pending = 1u;
+                break;
+            }
     }
     g_sched_m.unlock();
 }
@@ -3202,10 +3609,19 @@ void *thread_host_main(void *arg) {
     t_ctx = &t->ctx;
     t_id = t->id;
 
+    // Guest threads are the game's foreground work: without this macOS may run
+    // a worker that holds the baton on an efficiency core, or behind a build.
+    os_thread_prefer_performance();
     g_sched_m.lock();
-    while (g_baton != t->index && !g_exit_requested)
-        g_sched_cv.wait(g_sched_m);
+    {
+        std::unique_lock<std::mutex> held(g_sched_m, std::adopt_lock);
+        while (g_baton != t->index && !g_exit_requested)
+            t->cv.wait(held);
+        held.release();
+    }
     bool exiting = g_exit_requested;
+    if (g_sched_trace && !exiting)
+        sched_trace_resume(t->index, sched_now());
     g_sched_m.unlock();
     // Created before the exit, first scheduled after it: Windows would never
     // run this body, so neither does this thread. It still ends through the
@@ -3233,7 +3649,8 @@ void *thread_host_main(void *arg) {
     uint32_t result = 0;
     if (setjmp(t->exit_jmp) == 0) {
         // Every attached DLL hears of the new thread on it, before its start.
-        loader_thread_notify(&t->ctx, 2); // DLL_THREAD_ATTACH
+        loader_thread_notify(&t->ctx, 2);              // DLL_THREAD_ATTACH
+        t_callback_base = recomp_callback_depth() + 1; // the body runs inside guest_call
         result = guest_call(&t->ctx, start, param);
     } else
         result = t->exit_code;
@@ -3309,7 +3726,7 @@ void publish_process_exit(uint32_t code) {
     g_sched_m.lock();
     g_exit_requested = true;
     g_exit_requested_code = code;
-    g_sched_cv.notify_all();
+    sched_wake_everyone_locked();
     g_sched_m.unlock();
 }
 
@@ -3321,7 +3738,7 @@ bool request_process_exit(uint32_t code) {
     g_exit_requested_code = code;
     // Wake anything parked: the main thread may be inside an indefinite wait,
     // and it is the only thread that can perform the exit.
-    g_sched_cv.notify_all();
+    sched_wake_everyone_locked();
     g_sched_m.unlock();
     thread_finish_exit_process();
     return true;
@@ -3433,7 +3850,18 @@ bool thread_spawn(uint32_t h) {
     }
     t->tid = os_thread_id_of(host);
     os_thread_detach(host);
+    g_sched_m.lock();
+    if (g_sched_trace) {
+        HObj *o = handle_any(h);
+        sched_trace_thread(t->index, t->id, o ? o->thread_start : 0, o ? o->thread_param : 0,
+                           false);
+    }
+    // Ready from now, at the back of the line: CreateThread returns to its
+    // caller first, as on Windows.
+    sched_make_ready_locked(t, sched_now(), 0);
     t->spawned = true;
+    g_sched_m.unlock();
+    sched_start_ticker();
     return true;
 }
 
@@ -3553,8 +3981,11 @@ void k_ResumeThread(X86 *c) {
         if (t->suspend_count > 0)
             --t->suspend_count;
         o->thread_suspended = t->suspend_count > 0;
-        if (!t->suspend_count)
-            g_sched_cv.notify_all();
+        if (!t->suspend_count && was > 0) {
+            if (g_sched_trace)
+                sched_trace_ready(t->index, sched_now());
+            sched_make_ready_locked(t, sched_now(), 0);
+        }
         g_sched_m.unlock();
         set_eax(c, (uint32_t)was);
         return;
@@ -3604,10 +4035,37 @@ void k_GetCurrentProcess(X86 *c) {
 void k_GetCurrentThreadId(X86 *c) {
     set_eax(c, cur_thread_id());
 }
+// The thread a handle names: GetCurrentThread's pseudo-handle, or a handle
+// CreateThread returned. Null for anything else.
+GuestThread *thread_of_handle(uint32_t h) {
+    if (h == 0xfffffffeu)
+        return cur_thread();
+    cur_thread();
+    for (GuestThread *t : threads())
+        if (t->handle && t->handle == h)
+            return t;
+    return nullptr;
+}
+
+// A thread's priority is kept and is what the scheduler orders ready threads
+// by (see "Choosing who runs"), with a boost on top for a thread that has just
+// woken and a floor under any thread kept waiting too long.
 void k_GetThreadPriority(X86 *c) {
-    set_eax(c, 0);
+    GuestThread *t = thread_of_handle(arg(c, 0));
+    set_eax(c, t ? (uint32_t)t->priority : 0x7fffffffu); // THREAD_PRIORITY_ERROR_RETURN
 }
 void k_SetThreadPriority(X86 *c) {
+    GuestThread *t = thread_of_handle(arg(c, 0));
+    if (!t) {
+        set_last_error(ERROR_INVALID_HANDLE_);
+        set_eax(c, 0);
+        return;
+    }
+    g_sched_m.lock();
+    t->priority = (int32_t)arg(c, 1);
+    if (g_sched_trace)
+        sched_trace_priority(t->index, t->priority);
+    g_sched_m.unlock();
     set_eax(c, 1);
 }
 
@@ -4358,7 +4816,7 @@ bool sched_drive_until_stopped(double timeout_seconds) {
         if (sched_now() >= until)
             break;
         if (g_baton >= threads().size() || threads()[g_baton]->finished) {
-            g_baton = me; // stranded on a thread that cannot hand it on
+            sched_set_baton_locked(me, "stranded", false); // a thread that cannot hand it on
             break;
         }
         sched_wait_locked(me, 0.0, HOST_IDLE_BATON_SLICE);
@@ -4408,7 +4866,7 @@ bool sched_drive_until_stopped(double timeout_seconds) {
     t->blocked = false;
     t->has_deadline = false;
     if (g_baton != me && (g_baton >= threads().size() || threads()[g_baton]->finished))
-        g_baton = me;
+        sched_set_baton_locked(me, "stranded", false);
     g_drive_was_finished = was_finished;
     g_drive_open = true;
     g_sched_m.unlock();
@@ -4439,12 +4897,13 @@ void sched_drive_release(void) {
             // not a lost one: the next drive takes it.
             size_t next = sched_next_runnable_locked(t_self);
             if (next != NO_THREAD && !threads()[next]->finished) {
-                g_baton = next;
+                sched_set_baton_locked(next, "the shutdown driver released", false);
                 record_handoff_locked(t_self, next, "the shutdown driver released");
             } else {
                 g_baton = NO_THREAD;
+                g_baton_hint.store(NO_THREAD, std::memory_order_release);
+                sched_wake_everyone_locked();
             }
-            g_sched_cv.notify_all();
         }
     }
     g_sched_m.unlock();

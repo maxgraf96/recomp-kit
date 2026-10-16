@@ -182,6 +182,7 @@ typedef struct { const char *name; uint32_t base, end; const uint32_t *func_addr
                  uint32_t func_count; void (*const *base_ptrs)(void *); } Module;
 uint8_t *g_mem;
 uint32_t g_watch_base, g_watch_len, g_dirty_count, recomp_frame_watch;
+volatile uint32_t recomp_sched_pending;
 uint32_t g_dirty[16];
 const int recomp_profile_enabled = 0, recomp_resumable_stacks = 0;
 static const Module *registered[8];
@@ -229,7 +230,7 @@ def test_a_bundle_links_with_lld_alone_and_a_host_loads_it(tmp_path, monkeypatch
     assert bundle.build(gen, out, ["main"], cc, lld, DEFINES, 4, "13.0") == built
     data = {"_g_mem", "_g_watch_base", "_g_watch_len", "_g_dirty", "_g_dirty_count",
             "_recomp_frame_watch", "_recomp_profile_enabled", "_recomp_resumable_stacks",
-            "_recomp_module_register"}
+            "_recomp_sched_pending", "_recomp_module_register"}
     stubs = "\n".join("void %s(void) {}" % s[1:] for s in undefined if s not in data and s.startswith("_recomp_"))
     host_c, host_lib = tmp_path / "host.c", tmp_path / "libhost.dylib"
     host_c.write_text(HOST % stubs)

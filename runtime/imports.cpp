@@ -7,7 +7,7 @@
 #include "mods_seam.h"
 
 // Defined in kernel32.cpp with the scheduler.
-void sched_checkpoint();
+void sched_checkpoint_at(uint32_t site);
 #include "memory.h"
 
 #include <map>
@@ -432,7 +432,7 @@ bool imports_dispatch(X86 *c, uint32_t target) {
     // except at an atomic import, and inside a sched_atomic_enter stretch.
     uint32_t idx = (target - TRAMP_BASE) / TRAMP_STRIDE;
     if (idx >= tramps().size() || !tramps()[idx].atomic)
-        sched_checkpoint();
+        sched_checkpoint_at(target);
     if (idx >= tramps().size()) {
         // No shim to say how many arguments to drop, but the return address
         // must still be consumed or the guest stack is displaced from here on.

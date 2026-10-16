@@ -1,7 +1,7 @@
 # The guest runtime. Object libraries, so every source is linked into every
 # consumer exactly as the shell scripts linked every object.
 set(POP_RUNTIME_SOURCES
-  memory.cpp loader.cpp imports.cpp import_argc.cpp cpu.cpp thunks.cpp seh.cpp profile.cpp kernel32.cpp kernel32_wide.cpp
+  memory.cpp loader.cpp imports.cpp import_argc.cpp cpu.cpp thunks.cpp seh.cpp profile.cpp sched_trace.cpp kernel32.cpp kernel32_wide.cpp
   resources.cpp oleaut32.cpp mods_seam.cpp user32.cpp user32_wide.cpp user32_vcl.cpp user32_static.cpp user32_activation.cpp user32_ansi.cpp user32_cursor.cpp user32_clipboard.cpp
   misc.cpp misc_dlls.cpp winsock.cpp iphlpapi.cpp net_adapters.cpp comctl32.cpp codepages.cpp imm32.cpp gdi32.cpp gdi32_draw.cpp gdi32_text.cpp gdi32_truetype.cpp gdi32_fontdb.cpp msimg32.cpp
   media_foundation.cpp layout.cpp interp.cpp discovery.cpp dispatch.cpp

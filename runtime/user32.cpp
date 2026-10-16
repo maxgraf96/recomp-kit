@@ -10,6 +10,7 @@
 #include "win32.h"
 #include "../platform/os.h"
 #include "memory.h"
+#include "sched_trace.h"
 
 #include <algorithm>
 #include <array>
@@ -111,6 +112,8 @@ static void post_geometry(uint32_t hwnd, const Window *w, bool moved, bool sized
 void store_msg(uint32_t p, const Msg &m) {
     if (!p)
         return;
+    if (g_sched_trace && (m.message == 0x0201 || m.message == 0x0204))
+        sched_trace_input_consumed("button message");
     wr32(p + 0, m.hwnd);
     wr32(p + 4, m.message);
     wr32(p + 8, m.wparam);
