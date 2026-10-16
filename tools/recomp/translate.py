@@ -55,6 +55,14 @@ LOAD_BASE = None
 #: The executable's file name ([game] executable): a freestanding image
 #: table registers under it.
 IMAGE_NAME = None
+#: game.toml [translate] flag_liveness. "block", the default: every flag is
+#: live at every CALL, RET and jump, so only a flag write that a later
+#: instruction of the same straight-line run overwrites is dropped. "program":
+#: the flags are followed through each body's control flow and across the
+#: module's direct calls, tail jumps and alternate entries, so a flag is
+#: computed only where some instruction of the program can read it
+#: (Translator.prepare_program_liveness).
+FLAG_LIVENESS = "block"
 #: (image, delta) while listings exported at another base are being read.
 LISTING_SHIFT = None
 
@@ -114,6 +122,16 @@ def configure_module(cfg, key):
     FUNCTION_ALIGNMENT = mod["function_alignment"]
     SYMBOL_PREFIX = "recomp_%s_" % key
     AUX_MODULE = mod
+    configure_flag_liveness(cfg)
+
+
+def configure_flag_liveness(cfg):
+    """[translate] flag_liveness, the same for the image and every module."""
+    global FLAG_LIVENESS
+    FLAG_LIVENESS = cfg["translate"].get("flag_liveness", "block")
+    if FLAG_LIVENESS not in ("block", "program"):
+        raise SystemExit("game.toml [translate] flag_liveness must be \"block\" or \"program\", "
+                         "not %r" % FLAG_LIVENESS)
 
 
 def read_discovered(path):
@@ -150,6 +168,7 @@ def configure(cfg):
     LOAD_BASE = cfg["game"].get("image_base")
     global IMAGE_NAME
     IMAGE_NAME = cfg["game"].get("executable")
+    configure_flag_liveness(cfg)
     EXTRA_ENTRY_POINTS = frozenset(int(a) for a in cfg["translate"].get("entry_points", ()))
     FUNCTION_ALIGNMENT = cfg["translate"].get("function_alignment", 16)
     global OPERAND_REDIRECTS, INSTRUCTION_PATCHES, DATA_SEEDS
@@ -2628,6 +2647,219 @@ class Translator(object):
                     changed = True
         return live_in, live_out
 
+    # -- program flag liveness ---------------------------------------------
+    #
+    # [translate] flag_liveness = "program". The block liveness above keeps all
+    # six flags live wherever control leaves a straight-line run, so a TEST
+    # before a JZ computes carry, overflow, sign, parity and adjust for nothing
+    # whenever both paths overwrite them before they read them. Here a flag is
+    # live where an instruction can still read it, following the body's own
+    # branches, jump tables and fall-throughs, and the module's direct control
+    # transfers into other bodies, for which what the target reads at that
+    # entry is solved over the whole module. Every transfer the module cannot
+    # follow keeps all six live, exactly as block liveness does:
+    #   - a RET: whoever called reads what it likes after its CALL;
+    #   - an indirect CALL or JMP, and a CALL through the import table (a
+    #     shim, or another module): the target is not known. A decoded jump
+    #     table also reads what its targets read, and keeps all six for the
+    #     default arm that dispatches an index outside it;
+    #   - a direct transfer to an address that is no entry of the module.
+    # A direct CALL needs what its callee reads at that entry, and leaves what
+    # the callee's RETs leave - all six, by the first rule, which for a callee
+    # that sets no flag on some path to its RET includes the caller's own:
+    # those are then live before the CALL. So no assumption about calling
+    # conventions is made: the same flags are read, so the same values, as
+    # with block liveness, and only flags nothing can read are left out.
+
+    FLAG_BITS = {"cf": 1, "zf": 2, "sf": 4, "of": 8, "pf": 16, "af": 32}
+    ALL_BITS = 63
+    #: Mnemonics that leave the flags alone. In program liveness anything that
+    #: is not here, not in FLAG_EFFECT and not a conditional is taken to read
+    #: every flag, so an unlisted reader can only cost speed, never a value.
+    FLAG_NEUTRAL = frozenset((
+        "MOV", "PUSH", "POP", "LEA", "LEAVE", "NOP", "CDQ", "CWDE", "CBW", "CWD", "MOVSX",
+        "MOVZX", "XCHG", "BSWAP", "NOT", "RDTSC", "CPUID", "MOVSB", "MOVSW", "MOVSD", "STOSB",
+        "STOSW", "STOSD", "LODSB", "LODSW", "LODSD", "CLD", "STD", "PUSHAD", "POPAD", "ENTER",
+        "WAIT", "FWAIT", "LOOP", "JECXZ", "JCXZ", "XLAT", "MOVQ", "MOVD", "MOVDQA", "MOVDQU",
+        "MOVAPS", "MOVUPS", "PSHUFD", "EMMS",
+        "FLD", "FST", "FSTP", "FILD", "FIST", "FISTP", "FLDZ", "FLD1", "FLDPI", "FLDL2T",
+        "FLDL2E", "FLDLG2", "FLDLN2", "FADD", "FADDP", "FIADD", "FSUB", "FSUBP", "FISUB",
+        "FSUBR", "FSUBRP", "FISUBR", "FMUL", "FMULP", "FIMUL", "FDIV", "FDIVP", "FIDIV", "FDIVR",
+        "FDIVRP", "FIDIVR", "FCHS", "FABS", "FSQRT", "FCOM", "FCOMP", "FCOMPP", "FUCOM",
+        "FUCOMP", "FUCOMPP", "FICOM", "FICOMP", "FTST", "FXAM", "FNSTSW", "FSTSW", "FNSTCW",
+        "FSTCW", "FLDCW", "FXCH", "FINIT", "FNINIT", "FCLEX", "FNCLEX", "FFREE", "FRNDINT",
+        "FSCALE", "FPREM", "FPREM1", "FSIN", "FCOS", "FSINCOS", "FPTAN", "FPATAN", "F2XM1",
+        "FYL2X", "FYL2XP1", "FXTRACT", "FDECSTP", "FINCSTP", "FNSTENV", "FLDENV", "FNSAVE",
+        "FRSTOR", "FBLD", "FBSTP", "FNOP"))
+
+    @classmethod
+    def flag_bits(cls, flags):
+        b = 0
+        for f in flags:
+            b |= cls.FLAG_BITS[f]
+        return b
+
+    @classmethod
+    def bits_flags(cls, bits):
+        return frozenset(f for f, v in cls.FLAG_BITS.items() if bits & v)
+
+    def program_flow(self, fn):
+        """Per instruction of fn: (uses, kills, successors, outs). uses and
+        kills are flag bits, successors indices in fn, and outs what is read
+        beyond the body on the way out: ("entry", address) for what that entry
+        reads (every flag when it is no entry of the module), ("bits", b)."""
+        n = len(fn.insns)
+        flow = []
+        for i, ins in enumerate(fn.insns):
+            m = ins.mnem
+            outs = []
+            succ = []
+            uses = kills = 0
+
+            def fall():
+                if fn.contiguous[i] and i + 1 < n:
+                    succ.append(i + 1)
+                    return
+                # A listing gap or the end of the body: the emitter transfers
+                # to the instruction's real successor.
+                t = fn.fallthrough[i] if fn.fallthrough[i] is not None else fn.end
+                if t in fn.index:
+                    succ.append(fn.index[t])
+                else:
+                    outs.append(("entry", t))
+
+            def to(t):
+                if t is None:
+                    outs.append(("bits", self.ALL_BITS))
+                elif t in fn.index:
+                    succ.append(fn.index[t])
+                else:
+                    outs.append(("entry", t))
+
+            t_push = self.push_ret_target(fn, i)
+            if t_push is not None and t_push not in fn.pushed_continuations:
+                to(t_push)                      # PUSH t / RET, lowered to a jump
+            elif m == "INT3":
+                pass
+            elif m == "RET":
+                succ.extend(fn.index[t] for t in sorted(fn.pushed_continuations))
+                outs.append(("bits", self.ALL_BITS))
+            elif m in JCC:
+                uses = self.flag_bits(JCC[m][1])
+                fall()
+                to(self.branch_target(ins))
+            elif m == "JMP":
+                t = self.branch_target(ins)
+                table = None if t is not None else self.jumptables.get((fn.addr, ins.addr))
+                if t is not None:
+                    to(t)
+                elif table:
+                    for tt in table:
+                        to(tt)
+                    # An index outside the decoded entries leaves through
+                    # recomp_jump's default arm, to whatever the table holds.
+                    outs.append(("bits", self.ALL_BITS))
+                else:
+                    succ.extend(range(n))       # anywhere, this body included
+                    outs.append(("bits", self.ALL_BITS))
+            elif m == "CALL":
+                t = self.branch_target(ins)
+                if t is not None:
+                    # What the callee reads at its entry; it leaves every flag
+                    # defined when it returns (see above).
+                    kills = self.ALL_BITS
+                    outs.append(("call", t))
+                else:
+                    uses = self.ALL_BITS         # an unknown callee
+                if not self.never_returns(ins):
+                    fall()
+            elif (m in FLAG_EFFECT or m in SETCC or m in CMOVCC or m in SHIFT_MAYDEF
+                  or m in self.FLAG_NEUTRAL):
+                d, u = flag_effect(ins)
+                kills, uses = self.flag_bits(d), self.flag_bits(u)
+                fall()
+            else:
+                uses = self.ALL_BITS             # not known to leave the flags alone
+                fall()
+            flow.append((uses, kills, succ, outs))
+        return flow
+
+    def program_solve(self, flow, entry_live):
+        """live_in, live_out (flag bits) of a body's instructions, given what
+        each entry of the module reads (entry_live; missing: every flag)."""
+        n = len(flow)
+        ext = [0] * n
+        call_in = [0] * n
+        for i, (uses, kills, succ, outs) in enumerate(flow):
+            for o in outs:
+                if o[0] == "entry":
+                    ext[i] |= entry_live.get(o[1], self.ALL_BITS)
+                elif o[0] == "bits":
+                    ext[i] |= o[1]
+                else:                            # ("call", t)
+                    call_in[i] |= entry_live.get(o[1], self.ALL_BITS)
+        live_in = [0] * n
+        live_out = [0] * n
+        changed = True
+        while changed:
+            changed = False
+            for i in range(n - 1, -1, -1):
+                uses, kills, succ, outs = flow[i]
+                lo = ext[i]
+                for k in succ:
+                    lo |= live_in[k]
+                li = (lo & ~kills) | uses | call_in[i]
+                if li != live_in[i] or lo != live_out[i]:
+                    live_in[i], live_out[i] = li, lo
+                    changed = True
+        return live_in, live_out
+
+    def prepare_program_liveness(self, parsed, entries_by_fn):
+        """Solve program liveness for every body of the module at once (see
+        above), so that translate() can emit each knowing what the others read
+        at the entries it transfers to. Every entry starts out reading nothing;
+        solving a body can only add to what its own entries read, and each
+        addition queues the bodies that transfer there again, until nothing
+        grows. The result keeps every flag block liveness keeps that any
+        instruction can read."""
+        self.program_live = {}
+        bodies = {fn.addr: fn for fn in parsed}
+        entry_owner = {}
+        for fn in parsed:
+            entry_owner[fn.addr] = fn.addr
+            for e in entries_by_fn.get(fn.addr, ()):
+                if e in fn.index:
+                    entry_owner[e] = fn.addr
+        flows = {fn.addr: self.program_flow(fn) for fn in parsed}
+        readers = defaultdict(set)      # entry -> bodies that transfer there
+        for a, flow in flows.items():
+            for uses, kills, succ, outs in flow:
+                for o in outs:
+                    if o[0] in ("entry", "call"):
+                        readers[o[1]].add(a)
+        entry_live = {e: 0 for e in entry_owner}
+        work = sorted(bodies, reverse=True)
+        queued = set(work)
+        while work:
+            a = work.pop()
+            queued.discard(a)
+            fn = bodies[a]
+            live_in, live_out = self.program_solve(flows[a], entry_live)
+            self.program_live[a] = live_out
+            for e in [fn.addr] + sorted(entries_by_fn.get(a, ())):
+                if e in fn.index and entry_owner.get(e) == a:
+                    v = live_in[fn.index[e]]
+                    if v & ~entry_live[e]:
+                        entry_live[e] |= v
+                        for b in readers[e]:
+                            if b not in queued:
+                                queued.add(b)
+                                work.append(b)
+        self.program_stats = {
+            "entries": len(entry_live),
+            "entries_reading_flags": sum(1 for v in entry_live.values() if v),
+        }
+
     # -- jump tables -------------------------------------------------------
 
     def is_table_site(self, ins):
@@ -3088,6 +3320,10 @@ class Translator(object):
             self.stats["_msvc_frame_checkpoint"] += len(fn.msvc_sites)
         if self.opts.eager_flags:
             live_out = [ALL_FLAGS] * len(fn.insns)
+        elif (FLAG_LIVENESS == "program" and getattr(self, "program_live", None) is not None
+              and fn.addr in self.program_live
+              and len(self.program_live[fn.addr]) == len(fn.insns)):
+            live_out = [self.bits_flags(b) for b in self.program_live[fn.addr]]
         else:
             live_out = self.liveness(fn)
         dead = self.dead_after_noreturn(fn, entries)
@@ -5886,6 +6122,14 @@ def main():
     for t, fn in extra.items():
         entries_by_fn[fn.addr].add(t)
 
+    if FLAG_LIVENESS == "program":
+        failed = {a for a, _ in failures}
+        tr.prepare_program_liveness([fn for fn in parsed if fn.addr not in failed], entries_by_fn)
+        if not args.quiet:
+            ps = tr.program_stats
+            print("  program flag liveness: %d of %d entries read flags at entry"
+                  % (ps["entries_reading_flags"], ps["entries"]))
+
     bodies = {}
     for fn in parsed:
         if fn.addr in [a for a, _ in failures]:
@@ -6746,6 +6990,7 @@ void recomp_unknown_jump(X86 *c, uint32_t target)
             json.dump({
                 "msvc_eh": msvc_report,
                 "function_db": db_report,
+                "flag_liveness": dict(getattr(tr, "program_stats", {}), mode=FLAG_LIVENESS),
                 "image_base": "%08x" % image.base,
                 "functions_total": len(parsed),
                 "functions_ok": len(ok),

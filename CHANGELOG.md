@@ -81,6 +81,21 @@
   would; registering a module empties the cache. `loader_tests` checks
   400,000 addresses against the searches (each looked up twice, a miss and a
   hit), half of them after a second module registered.
+- `[translate] flag_liveness = "program"` (game.toml): a flag is computed only
+  where some instruction can read it. Block liveness, still the default,
+  keeps all six live wherever control leaves a straight-line run, so a `TEST`
+  before a `JZ` computes carry, overflow, sign, parity and adjust that both
+  paths overwrite. Program liveness follows the flags through each body's
+  branches, loops and jump tables, and solves over the module what every
+  entry reads at its entry, so a direct `CALL` keeps what its callee reads
+  (including what passes through a callee that sets no flag before its
+  `RET`). Every transfer it cannot follow - a `RET`, an indirect `CALL` or
+  `JMP`, an import, a jump table's default arm, a target that is no entry -
+  keeps all six, as block liveness does, so the same flags are read and only
+  flags nothing can read are left out. For Empire Earth's executable: 40 %
+  fewer flag stores (812,684 to 484,018) and half the parity computations.
+  `test_flag_liveness.py` checks the analysis on synthetic bodies and runs
+  branchy functions against Unicorn.
 - GDI draws a row at a time where it can. `BitBlt` (and a 1:1 `StretchBlt`)
   between 32-bit `BI_RGB` DIBs, window surfaces and 1-bit sources, constant-
   and per-pixel-alpha `AlphaBlend`, fills (`Rectangle`'s interior, opaque
