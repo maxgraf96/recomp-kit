@@ -115,7 +115,7 @@ quantum; a timeout (a `Sleep` over) and a critical section boost nothing. A thre
 for 20 ms is raised to 15 for one quantum, so a busy high-priority thread
 cannot shut the others out for long. The holder yields when a ready thread
 outranks it, or at the end of its quantum (2 ms) to a ready thread of its own
-class. `RECOMP_SCHED_POLICY=rr` restores the round robin by thread index with
+class; a preempted thread keeps what was left of its quantum. `RECOMP_SCHED_POLICY=rr` restores the round robin by thread index with
 a 1 ms slice that came before, for bisection; `RECOMP_SCHED_QUANTUM_MS`,
 `RECOMP_SCHED_STARVE_MS`, `RECOMP_SCHED_SPIN_US` and `RECOMP_SCHED_SLEEP_BOOST`
 tune the policy.

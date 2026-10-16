@@ -330,7 +330,8 @@ the run thread by two when host input arrives for it, until it blocks again
 or uses up a quantum; a timeout and a critical section boost nothing; one
 kept ready for 20 ms is raised to 15 for a quantum.
 The holder gives way at once to a thread that outranks it, and at the end of
-its quantum to one of its own class. `SetThreadPriority` and
+its quantum to one of its own class; a preempted thread keeps the rest of its
+quantum for when it runs again. `SetThreadPriority` and
 `GetThreadPriority` keep the value.
 
 **A handoff wakes one thread.** Each guest thread sleeps on its own condition

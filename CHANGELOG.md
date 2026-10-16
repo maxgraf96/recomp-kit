@@ -12,14 +12,15 @@
   the top class for a quantum. Leaving a critical section never gives the
   baton up. The holder gives way
   at once to a thread that outranks it and at the end of its 2 ms quantum to
-  one of its own class. Empire Earth's simulation thread is time-critical,
+  one of its own class; a preempted thread keeps the rest of its quantum. Empire Earth's simulation thread is time-critical,
   paces itself on a timer and tunes its tick rate for 30% of the processor:
   it now runs its ticks whole, so the tick time it measures is the tick's own
   and not the renderer's, and it picks a higher rate. Measured on a late-game
-  save in the windowed app: the tick time 4.3 -> 1.7 ms, the tick rate 72 ->
-  100 a second, a mouse press reaches the game in 2.5 ms (35 ms at worst
-  before, 6 now), frames 37 -> 42 a second; a Huge random map's tile painting
-  15.6 -> 0.6 s, because the game raises its loader thread while it loads.
+  save in the windowed app: the tick time 4.3 -> 1.7 ms, a mouse press reaches
+  the game in 2 ms (35 ms at worst before, 6 now); with the camera panned at
+  60 frames a second, frames that find it where the last one left it 15% -> 0%
+  and frames over 20 ms 47% -> 2-6%; a Huge random map's tile painting 20.1 ->
+  0.6 s (Windows 0.14 s), because the game raises its loader while it loads.
 - A handoff wakes the one thread it names: every guest thread sleeps on its
   own condition variable, where all of them used to wake on one and go back
   to sleep. A thread that gave the baton up while it can still run spins for
