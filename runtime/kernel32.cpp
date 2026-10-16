@@ -2119,7 +2119,12 @@ struct GuestThread {
     int8_t boost = 0;        // woke from a wait (or input came for it), quantum not used up
     uint64_t ready_seq = 0;  // the order threads became ready in: FIFO per class
     double ready_at = 0.0;   // when it last became ready
-    double hold_start = 0.0; // when it was last handed the baton
+    double hold_start = 0.0; // when its quantum began
+    // What a preempted thread had used of its quantum: it gets the rest when
+    // it runs again, not a new one, as on Windows. Otherwise a thread
+    // preempted every millisecond (by a time-critical one waking from its
+    // Sleep(1)) would never use a quantum up and never let its equals run.
+    double quantum_used = 0.0;
 };
 
 // Scheduling deadlines run on a real monotonic clock, never on host_millis():
@@ -2727,7 +2732,8 @@ void sched_set_baton_locked(size_t to, const char *why, bool from_runnable) {
         // the baton straight back.
         if (!sched_policy().rr && sched_starved(t, now))
             t->boost = (int8_t)(15 - sched_base_class(t->priority));
-        t->hold_start = now;
+        t->hold_start = now - t->quantum_used;
+        t->quantum_used = 0.0;
         t->ready_at = 0.0;
         t->cv.notify_one();
     }
@@ -3133,10 +3139,13 @@ void sched_handoff_on_exit_locked(size_t me, const char *why) {
 void sched_hand_over_locked(GuestThread *me, size_t next, const char *why, bool requeue) {
     const double now = sched_now();
     me->last_yield = now;
-    if (requeue)
+    if (requeue) {
         sched_make_ready_locked(me, now, 0);
-    else
+        me->quantum_used = 0.0;
+    } else {
         me->ready_at = now;
+        me->quantum_used = std::max(0.0, now - me->hold_start);
+    }
     sched_set_baton_locked(next, why, true);
     record_handoff_locked(me->index, next, why);
     sched_spin_for_baton_locked(me->index);
