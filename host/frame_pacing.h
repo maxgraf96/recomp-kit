@@ -92,6 +92,28 @@ class FramePacing {
 // boundary rather than catching up in a burst. `deadline` is the caller's
 // state across frames (0 to start). The limit only ever adds refreshes to the
 // wait the game asked for.
+// How long an unsynced present (a DirectDraw 7 Flip with DDFLIP_NOVSYNC, or a
+// vsync-paced one with the pacing turned off) waits under the Frame limit,
+// `now` in seconds on the presenter's device clock. There is no vertical blank
+// to wait for, so the frames keep to the limit's deadline alone: 1/limit apart
+// on average, and a frame more than half a frame past its deadline starts a new
+// phase rather than catching up in a burst. Without a limit it does not wait.
+// `deadline` is the caller's state across frames (0 to start), shared with
+// paced_refresh_delay.
+inline double paced_limit_delay(double now, int limit, double *deadline) {
+    if (limit <= 0 || !deadline) {
+        if (deadline)
+            *deadline = 0;
+        return 0.0;
+    }
+    const double frame = 1.0 / limit;
+    double target = *deadline + frame;
+    if (*deadline <= 0 || target < now - frame / 2)
+        target = now;
+    *deadline = target;
+    return target > now ? target - now : 0.0;
+}
+
 inline double paced_refresh_delay(double now, double period, int intervals, int limit,
                                   double *deadline) {
     if (!(period > 0) || intervals <= 0)

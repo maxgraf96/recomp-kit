@@ -1597,16 +1597,17 @@ void S7_Flip(X86 *c) {
         exchange_buffers(ring[i], ring[i + 1]);
     present(front, all);
     // A Flip without DDFLIP_NOVSYNC happens at the vertical blank, which is
-    // what paces a game that flips as fast as it can draw. The wait is a
+    // what paces a game that flips as fast as it can draw. RECOMP_D3D7_VSYNC=0
+    // turns that pacing off. The settings page's Frame limit holds every Flip,
+    // synced or not: a game set not to wait for the blank (Empire Earth's
+    // "Wait for VSync" = 0) would otherwise run uncapped. The wait is a
     // scheduler sleep, so the guest's other threads run through it.
-    // RECOMP_D3D7_VSYNC=0 turns the pacing off.
     const uint32_t flags = arg(c, 2);
-    if (!(flags & DDFLIP_NOVSYNC) && vsync_enabled()) {
-        const int intervals = std::max(1, int((flags >> 24) & 7));
-        const double delay = host_present_refresh_delay(intervals);
-        if (delay > 0)
-            guest_sleep_ms(uint32_t(delay * 1000.0));
-    }
+    const bool vblank = !(flags & DDFLIP_NOVSYNC) && vsync_enabled();
+    const double delay =
+        host_present_refresh_delay(vblank ? std::max(1, int((flags >> 24) & 7)) : 0);
+    if (delay > 0)
+        guest_sleep_ms(uint32_t(delay * 1000.0));
     com_ret(c, DD_OK);
 }
 

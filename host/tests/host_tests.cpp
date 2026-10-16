@@ -9370,6 +9370,40 @@ static void test_display_settings_bridge() {
 // (frame_pacing.h paced_refresh_delay): the frames it releases are refresh
 // boundaries, spaced by the limit on average, never closer than the display
 // allows, and a late frame does not catch up in a burst.
+// An unsynced present under the Frame limit (frame_pacing.h
+// paced_limit_delay): a game that flips without waiting for the vertical blank
+// is held to the limit on average, a late frame does not catch up in a burst,
+// and without a limit nothing waits.
+static void test_paced_limit_delay() {
+    for (int limit : {60, 30, 144}) {
+        double now = 0.0013, deadline = 0, first = -1, last = -1;
+        int frames = 0;
+        while (now < 10) {
+            const double wait = paced_limit_delay(now, limit, &deadline);
+            CHECK(wait >= 0 && wait <= 1.0 / limit + 1e-9);
+            now += wait;
+            if (first < 0)
+                first = now;
+            last = now;
+            ++frames;
+            now += 0.002; // the next frame's work
+        }
+        CHECK_NEAR((frames - 1) / (last - first), double(limit), limit * 0.01);
+    }
+    double d = 5;
+    CHECK_EQ(paced_limit_delay(0.5, 0, &d), 0.0);
+    CHECK_EQ(d, 0.0);
+    // A frame 50 ms late at 60: shown at once, and the next one a full frame
+    // later, not straight after it.
+    d = 0;
+    double t = 1.0;
+    t += paced_limit_delay(t, 60, &d);
+    t += 0.050;
+    const double late = paced_limit_delay(t, 60, &d);
+    CHECK_EQ(late, 0.0);
+    CHECK_NEAR(paced_limit_delay(t + 0.001, 60, &d), 1.0 / 60 - 0.001, 1e-9);
+}
+
 static void test_paced_refresh_delay() {
     struct Case {
         double hz;
@@ -10086,6 +10120,7 @@ int main(int argc, char **argv) {
     test_fullscreen_edge_presentation();
     test_native_frame_metrics();
     test_paced_refresh_delay();
+    test_paced_limit_delay();
     test_wide_cursor_bound();
     test_pointer_reaches_scrolling_edges();
     test_native_overlay_pixels();

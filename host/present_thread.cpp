@@ -1857,9 +1857,13 @@ bool host_present_suspended(void) {
 // can.
 extern "C" double host_present_refresh_delay(int intervals) {
     auto s = active.load();
-    if (!s || s->fake || !s->device || intervals <= 0)
+    if (!s || s->fake || !s->device || intervals < 0)
         return 0.0;
     std::lock_guard lock(s->mutex);
+    // intervals 0: a present that does not wait for the vertical blank. Only
+    // the Frame limit paces it (frame_pacing.h paced_limit_delay).
+    if (intervals == 0)
+        return paced_limit_delay(s->device->now_seconds(), mods_display_fps(), &s->limit_deadline);
     const double period = s->frame_period > 0 ? s->frame_period : 1.0 / 60;
     return paced_refresh_delay(s->device->now_seconds(), period, intervals, mods_display_fps(),
                                &s->limit_deadline);
