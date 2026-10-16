@@ -106,6 +106,9 @@ struct Surface {
 
     // Coherence: see the comment at the top of this file.
     bool cpu_valid = true, gpu_valid = true;
+    // What last wrote the guest copy (RECOMP_D3D7_TRANSFER_LOG names it at the
+    // upload that follows).
+    const char *cpu_writer = "the CPU";
     // The backend generation this surface's root resource was made under; 0
     // when it has none.
     uint32_t resource_generation = 0;

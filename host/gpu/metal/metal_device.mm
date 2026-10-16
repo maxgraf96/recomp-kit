@@ -316,8 +316,8 @@ bool MetalDevice::readback(Texture t, Region r, void *bytes, int pitch) {
         if (!texture || !bytes || r.x < 0 || r.y < 0 || r.w <= 0 || r.h <= 0 ||
             r.x + r.w > int(texture.width) || r.y + r.h > int(texture.height))
             return false;
-        wait_for_gpu();
         if (texture.storageMode == MTLStorageModeShared) {
+            wait_for_gpu();
             [texture getBytes:bytes
                   bytesPerRow:pitch
                    fromRegion:MTLRegionMake2D(r.x, r.y, r.w, r.h)
@@ -333,6 +333,9 @@ bool MetalDevice::readback(Texture t, Region r, void *bytes, int pitch) {
         id<MTLBuffer> staging = readback_staging_;
         if (!staging)
             return false;
+        // The copy goes on the queue after everything committed before it, and
+        // Metal orders it after their writes to the texture: waiting for the
+        // copy is waiting for them, with one wake-up instead of two.
         id<MTLCommandBuffer> buffer = [queue_ commandBuffer];
         id<MTLBlitCommandEncoder> blit = [buffer blitCommandEncoder];
         [blit copyFromTexture:texture

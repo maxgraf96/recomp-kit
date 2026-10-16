@@ -1129,6 +1129,11 @@ static void test_scene_values() {
     CHECK_EQ(vb.at(20, 20) & 0xffffff, 0x00ff00);
     CHECK_EQ(vb.at(4, 20) & 0xffffff, 0x3165ce);
     CHECK_EQ(vb.at(20, 4) & 0xffffff, 0x848284);
+    // Passes after many draws: the adds of every pass, in order.
+    Image mp = run_soft(scene_many_passes);
+    CHECK_EQ(mp.at(5, 5) & 0xffffff, 0x3c9642);   // 6 stacked adds, 6 of the texture's
+    CHECK_EQ(mp.at(20, 10) & 0xffffff, 0xce3721); // 11 stacked adds, 6 red ones
+    CHECK_EQ(mp.at(31, 31) & 0xffffff, 0xff3c24); // red saturates
     // Every scene runs to completion on the reference renderer.
     for (const Scene &s : scenes()) {
         Image img = run_soft(s.run);

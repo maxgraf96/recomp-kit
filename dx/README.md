@@ -307,6 +307,9 @@ top-left rule: it is the reference the GPU renderer is tested against.
 | `RECOMP_D3D7_SOFTWARE=1` | render with the reference renderer, no GPU |
 | `RECOMP_D3D7_VSYNC=0` | `Flip` does not wait for the refresh |
 | `RECOMP_D3D7_DUMP_DIR=dir`, `RECOMP_D3D7_DUMP_EVERY=N` | every Nth presented frame as `dir/frame-NNNNNN.ppm` |
+| `RECOMP_D3D7_STATS=1` | every 5 s: draws, primitives, passes and uploads per frame, the stalls (pipelines compiled, textures created, readbacks) with their cost, and the game's frame times |
+| `RECOMP_D3D7_FRAME_LOG=file` | the wall-clock time of every present, in ms, one per line |
+| `RECOMP_D3D7_TRANSFER_LOG=1` | a line for every readback (the surface, and what asked for it: `Lock` with its flags and rectangle, `GetDC`, a CPU fill or `Blt`) and every upload (the surface, and what last wrote it) |
 
 Not implemented, each logged once when a game asks: texture stages above 0
 (stage 1 may only be disabled), stencil, state blocks, `ProcessVertices`,

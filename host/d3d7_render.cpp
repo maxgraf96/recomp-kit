@@ -226,7 +226,7 @@ std::atomic<uint32_t> g_generation{1};
 // per frame and what its stalls cost - the pipelines compiled on first use, the
 // textures created, the uploads and readbacks - for finding a frame's hitches.
 struct Costs {
-    uint64_t pipelines = 0, creates = 0, uploads = 0, readbacks = 0;
+    uint64_t pipelines = 0, creates = 0, uploads = 0, readbacks = 0, tap_readbacks = 0;
     double pipeline_ms = 0, create_ms = 0, upload_ms = 0, readback_ms = 0, worst_pipeline_ms = 0;
     uint64_t upload_bytes = 0, draws = 0, primitives = 0, passes = 0, frames = 0;
 };
@@ -281,6 +281,15 @@ struct D3D7Renderer::Impl {
     int scratch_w = 0, scratch_h = 0;
 
     gpu::CommandBuffer cb, last;
+    // Draws recorded in `cb`. A frame's draws used to go to the GPU only at
+    // the present or at a readback, which then waited for all of them: a back
+    // buffer's GetDC waited for the whole frame. A new pass after kCommitDraws
+    // commits what is recorded, so the GPU works on the frame's earlier passes
+    // while the guest records the later ones. One queue runs the buffers in
+    // order and Metal orders their uses of a resource, so the pixels are the
+    // same.
+    static constexpr int kCommitDraws = 8;
+    int cb_draws = 0;
     struct Pass {
         bool open = false;
         uint32_t color = 0, depth = 0;
@@ -344,6 +353,7 @@ struct D3D7Renderer::Impl {
             return;
         dev->commit(cb);
         last = cb;
+        cb_draws = 0;
         for (Chunk &c : active) {
             c.fence = cb;
             retired.push_back(c);
@@ -415,6 +425,8 @@ struct D3D7Renderer::Impl {
         if ((color && !c) || (depth && !z))
             return false;
         end_pass();
+        if (cb_draws >= kCommitDraws)
+            commit();
         gpu::RenderPass rp;
         rp.color_count = c ? 1 : 0;
         if (c)
@@ -754,7 +766,8 @@ struct D3D7Renderer::Impl {
         fprintf(stderr,
                 "[d3d7] stats: %.0f frames in %.1f s; per frame %.0f draws, %.0f primitives, "
                 "%.1f passes, %.1f uploads (%.0f KB, %.2f ms); %llu textures created (%.1f ms), "
-                "%llu pipelines compiled (%.1f ms, worst %.1f ms), %llu readbacks (%.1f ms); "
+                "%llu pipelines compiled (%.1f ms, worst %.1f ms), %llu readbacks (%.1f ms; "
+                "%llu of them the frame tap's or a dump's); "
                 "frame ms p50 %.1f p95 %.1f p99 %.1f max %.1f\n",
                 f, (now - report_ms) / 1000.0, (b.draws - a.draws) / f,
                 (b.primitives - a.primitives) / f, (b.passes - a.passes) / f,
@@ -763,8 +776,9 @@ struct D3D7Renderer::Impl {
                 b.create_ms - a.create_ms, (unsigned long long)(b.pipelines - a.pipelines),
                 b.pipeline_ms - a.pipeline_ms, b.worst_pipeline_ms,
                 (unsigned long long)(b.readbacks - a.readbacks), b.readback_ms - a.readback_ms,
-                percentile(intervals, 0.5), percentile(intervals, 0.95),
-                percentile(intervals, 0.99), percentile(intervals, 1.0));
+                (unsigned long long)(b.tap_readbacks - a.tap_readbacks), percentile(intervals, 0.5),
+                percentile(intervals, 0.95), percentile(intervals, 0.99),
+                percentile(intervals, 1.0));
         intervals.clear();
         reported = costs;
         costs.worst_pipeline_ms = 0;
@@ -1014,6 +1028,7 @@ void D3D7Renderer::Impl::draw(const HostD7Draw &d) {
                                                               : gpu::Primitive::Triangles;
     dev->draw(cb, prim, 0, int(list.size()));
     ++stats.draws;
+    ++cb_draws;
     stats.primitives += topo == d7::Topology::Triangles ? list.size() / 3
                         : topo == d7::Topology::Lines   ? list.size() / 2
                                                         : list.size();
@@ -1104,6 +1119,7 @@ void D3D7Renderer::Impl::present(uint32_t id, const HostD7Rect &r, int mode_w, i
     }
     if (!dump.empty() || tap) {
         std::vector<uint32_t> px(size_t(w) * size_t(h));
+        ++costs.tap_readbacks;
         if (readback(id, 0, r, px.data(), w * 4)) {
             if (!dump.empty() && !write_ppm(dump, px.data(), w, h))
                 fprintf(stderr, "[d3d7] could not write %s\n", dump.c_str());

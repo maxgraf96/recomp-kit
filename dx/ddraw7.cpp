@@ -325,10 +325,33 @@ Surface *root_of(Surface *s) {
     Surface *r = surface(s->root);
     return r ? r : s;
 }
+// RECOMP_D3D7_TRANSFER_LOG=1 names every readback and what asked for it, and
+// every upload and what wrote the guest copy: a readback waits for the GPU to
+// finish what it was given and an upload copies the whole level, so a game
+// that does either to a surface every frame pays it every frame.
+char g_readback_via[96] = "something else";
+struct ReadbackVia {
+    explicit ReadbackVia(const char *what) {
+        snprintf(g_readback_via, sizeof g_readback_via, "%s", what);
+    }
+    ~ReadbackVia() {
+        snprintf(g_readback_via, sizeof g_readback_via, "something else");
+    }
+};
+bool transfer_log() {
+    static const bool on = [] {
+        const char *v = recomp_env("D3D7_TRANSFER_LOG");
+        return v && *v && strcmp(v, "0") != 0;
+    }();
+    return on;
+}
 // Reads level `s` from the backend into its guest memory.
 bool read_back(const Backend *b, Surface *s) {
     if (!surface_memory(s))
         return false;
+    if (transfer_log())
+        LOGW("ddraw7: readback of surface %u (%ux%u, %u bits, caps %08x, level %d) for %s", s->id,
+             s->width, s->height, s->format.bpp, s->caps, s->level, g_readback_via);
     if (s->format.depth()) {
         log_once("ddraw7.depthlock", "ddraw7: depth buffer contents are not readable; zeros");
         memset(gm_ptr(s->mem), 0, size_t(s->pitch) * s->height);
@@ -349,6 +372,9 @@ bool read_back(const Backend *b, Surface *s) {
     return true;
 }
 void upload(const Backend *b, Surface *s) {
+    if (transfer_log())
+        LOGW("ddraw7: upload of surface %u (%ux%u, %u bits, caps %08x, level %d) written by %s",
+             s->id, s->width, s->height, s->format.bpp, s->caps, s->level, s->cpu_writer);
     if (s->format.depth()) {
         log_once("ddraw7.depthupload", "ddraw7: a depth buffer written by the CPU is not uploaded");
         return;
@@ -595,6 +621,7 @@ struct BlitOptions {
     bool mirror_x = false, mirror_y = false;
 };
 void cpu_fill(Surface *s, const HostD7Rect &r, uint32_t pixel) {
+    ReadbackVia why("a fill on the CPU");
     if (!surface_cpu_current(s))
         return;
     const uint32_t bytes = s->format.bytes();
@@ -604,12 +631,14 @@ void cpu_fill(Surface *s, const HostD7Rect &r, uint32_t pixel) {
             write_px(row + uint32_t(x) * bytes, bytes, pixel);
     }
     surface_cpu_wrote(s);
+    s->cpu_writer = "a fill on the CPU";
 }
 // Nearest-neighbour copy/stretch with an optional source key, in guest memory.
 // The source pixel for destination pixel x is the one whose centre the
 // destination pixel's centre maps onto: floor((x + 0.5) * sw / dw).
 void cpu_blit(Surface *d, const HostD7Rect &dr, Surface *s, const HostD7Rect &sr,
               const BlitOptions &o) {
+    ReadbackVia why("a Blt on the CPU");
     if (!surface_cpu_current(s) || !surface_cpu_current(d))
         return;
     const int32_t dw = dr.x1 - dr.x0, dh = dr.y1 - dr.y0;
@@ -646,6 +675,7 @@ void cpu_blit(Surface *d, const HostD7Rect &dr, Surface *s, const HostD7Rect &sr
         }
     }
     surface_cpu_wrote(d);
+    d->cpu_writer = "a Blt on the CPU";
 }
 // Shows region `r` of `s`: on the backend, or as an ARGB snapshot.
 void present(Surface *s, const HostD7Rect &r) {
@@ -1663,6 +1693,7 @@ void S7_GetDC(X86 *c) {
         com_ret(c, DDERR_DCALREADYCREATED);
         return;
     }
+    ReadbackVia why("GetDC");
     if (s->format.depth() || !surface_cpu_current(s)) {
         com_ret(c, DDERR_CANTCREATEDC);
         return;
@@ -1710,6 +1741,7 @@ void release_surface_dc(Surface *s) {
     }
     s->dc = 0;
     surface_cpu_wrote(s);
+    s->cpu_writer = "GetDC";
 }
 void S7_ReleaseDC(X86 *c) {
     Surface *s = this_surface(c);
@@ -1763,6 +1795,9 @@ void S7_Lock(X86 *c) {
         r.x0 == 0 && r.y0 == 0 && r.x1 == int32_t(s->width) && r.y1 == int32_t(s->height);
     if (whole && (flags & DDLOCK_DISCARDCONTENTS) && surface_memory(s))
         s->cpu_valid = true; // the guest promises to overwrite everything
+    char via[96];
+    snprintf(via, sizeof via, "Lock (flags %08x, rect %d,%d-%d,%d)", flags, r.x0, r.y0, r.x1, r.y1);
+    ReadbackVia why(via);
     if (!surface_cpu_current(s)) {
         com_ret(c, E_OUTOFMEMORY_);
         return;
@@ -1783,8 +1818,10 @@ void S7_Unlock(X86 *c) {
         return;
     }
     --s->lock_count;
-    if (!s->lock_read_only)
+    if (!s->lock_read_only) {
         surface_cpu_wrote(s);
+        s->cpu_writer = "Lock";
+    }
     s->lock_read_only = false;
     com_ret(c, DD_OK);
 }

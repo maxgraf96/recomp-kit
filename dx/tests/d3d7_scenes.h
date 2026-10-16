@@ -990,6 +990,52 @@ inline Image scene_engine_frame() {
     return img;
 }
 
+// More draws than the renderer records before it hands a pass to the GPU, in
+// passes that read each other's output: additive quads stacked on the target
+// (the order of the adds is visible), a texture drawn into after them, and the
+// target again, sampling that texture and adding more quads, then a Lock.
+inline Image scene_many_passes() {
+    Device d = make_device(32, 32);
+    const uint32_t rtex = texture(d.dd, 16, 16, PF_X8R8G8B8, 0, true);
+    clear(d.dev, d7::CLEAR_TARGET | d7::CLEAR_ZBUFFER, 0xff000000u);
+    tss(d.dev, 0, d7::TSS_COLOROP, d7::TOP_SELECTARG2);
+    tss(d.dev, 0, d7::TSS_COLORARG2, d7::TA_DIFFUSE);
+    rs(d.dev, d7::RS_ALPHABLENDENABLE, 1);
+    rs(d.dev, d7::RS_SRCBLEND, d7::BLEND_ONE);
+    rs(d.dev, d7::RS_DESTBLEND, d7::BLEND_ONE);
+    call_method(d.dev, DEV_BeginScene, {});
+    for (int i = 0; i < 12; ++i)
+        draw(d.dev, d7::PT_TRIANGLELIST, quad2d(float(i), float(i), 32, 32, 0xff0a0503u),
+             QUAD_INDICES);
+    call_method(d.dev, DEV_EndScene, {});
+    CHECK_EQ(call_method(d.dev, DEV_SetRenderTarget, {rtex, 0}), 0);
+    viewport(d.dev, 0, 0, 16, 16);
+    set_transform(d.dev, d7::TS_PROJECTION, ortho2d(16, 16));
+    call_method(d.dev, DEV_BeginScene, {});
+    clear(d.dev, d7::CLEAR_TARGET, 0xff000000u);
+    for (int i = 0; i < 10; ++i)
+        draw(d.dev, d7::PT_TRIANGLELIST, quad2d(0, float(i), 16, 16, 0xff001408u), QUAD_INDICES);
+    call_method(d.dev, DEV_EndScene, {});
+    CHECK_EQ(call_method(d.dev, DEV_SetRenderTarget, {d.rt, 0}), 0);
+    viewport(d.dev, 0, 0, 32, 32);
+    set_transform(d.dev, d7::TS_PROJECTION, ortho2d(32, 32));
+    call_method(d.dev, DEV_BeginScene, {});
+    call_method(d.dev, DEV_SetTexture, {0, rtex});
+    tss(d.dev, 0, d7::TSS_COLOROP, d7::TOP_SELECTARG1);
+    tss(d.dev, 0, d7::TSS_COLORARG1, d7::TA_TEXTURE);
+    draw(d.dev, d7::PT_TRIANGLELIST, quad2d(0, 0, 16, 16, 0xffffffffu, 0, 0, 1, 1), QUAD_INDICES);
+    call_method(d.dev, DEV_SetTexture, {0, 0});
+    tss(d.dev, 0, d7::TSS_COLOROP, d7::TOP_SELECTARG2);
+    for (int i = 0; i < 9; ++i)
+        draw(d.dev, d7::PT_TRIANGLELIST, quad2d(16, float(2 * i), 32, 32, 0xff100000u),
+             QUAD_INDICES);
+    call_method(d.dev, DEV_EndScene, {});
+    rs(d.dev, d7::RS_ALPHABLENDENABLE, 0);
+    Image img = read(d.rt);
+    release_all(d, {rtex});
+    return img;
+}
+
 inline const std::vector<Scene> &scenes() {
     static const std::vector<Scene> list = {
         {"quad coverage", scene_quad_coverage, 0.000, 1},
@@ -1014,6 +1060,7 @@ inline const std::vector<Scene> &scenes() {
         {"lines and points", scene_lines_points, 0.000, 1},
         {"movie frame blit", scene_movie_blit, 0.000, 0},
         {"an engine's frame", scene_engine_frame, 0.002, 3},
+        {"passes after many draws", scene_many_passes, 0.000, 1},
     };
     return list;
 }

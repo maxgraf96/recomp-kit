@@ -113,6 +113,19 @@
   opaque resource's alpha in its one packing pass, and the Metal device keeps
   its readback staging buffer. The bytes that reach guest memory and the GPU
   are the same (`d3d7_tests`, "32-bit surfaces without a conversion").
+- The Direct3D 7 renderer hands the GPU each pass it has recorded once the
+  command buffer holds 8 draws, instead of a frame's draws all at once at the
+  present or at a readback. A readback waits for everything recorded before
+  it, so a game that locks or `GetDC`s its back buffer after drawing the
+  scene waited for the whole scene to be drawn; now the GPU has drawn the
+  earlier passes while the later ones were recorded. Metal's readback of a
+  private texture waits once, for its own copy, which the queue runs after
+  everything committed before it. One queue runs the command buffers in order
+  and Metal orders their uses of each texture, so the pixels are the same
+  (`d3d7_gpu_tests`, "passes after many draws", against the reference
+  renderer). `RECOMP_D3D7_TRANSFER_LOG=1` names every readback and what asked
+  for it, and every upload and what wrote the surface; `RECOMP_D3D7_STATS`
+  counts the frame tap's own readbacks apart.
 - `RECOMP_D3D7_STATS=1` prints, every 5 s, what the Direct3D 7 renderer did per
   frame (draws, primitives, render passes, uploads) and what its stalls cost
   (pipelines compiled, textures created, readbacks), with the game's frame
