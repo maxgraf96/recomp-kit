@@ -495,6 +495,9 @@ const RecompModule *recomp_module_containing(uint32_t addr);
 /* Index into the owning module's tables, or -1 when no module has addr as an entry. */
 int32_t recomp_module_lookup(uint32_t target);
 int recomp_module_is_call_return(uint32_t target);
+/* recomp_is_call_return(target) || recomp_module_is_call_return(target), the
+ * question every RET asks, answered through the registry's cache. */
+int recomp_call_return_any(uint32_t target);
 /* Dispatches target through the owning module's tables; 0 when no module owns it. */
 int recomp_module_call(X86 *c, uint32_t target);
 
@@ -511,7 +514,7 @@ static inline void recomp_return(X86 *c) {
     }
     if (recomp_resumable_stacks)
         return;
-    if (recomp_is_call_return(c->eip) || recomp_module_is_call_return(c->eip))
+    if (recomp_call_return_any(c->eip))
         return;
     if ((c->eip >= GUEST_SHIM_BASE && c->eip < GUEST_SHIM_END) || recomp_index_of(c->eip) >= 0 ||
         recomp_module_lookup(c->eip) >= 0)

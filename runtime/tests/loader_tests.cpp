@@ -1368,6 +1368,124 @@ static void test_argc() {
           "Winsock ordinals name their functions, and differ where the two DLLs differ");
 }
 
+// The registry's dispatch cache (cpu.cpp) answers what the binary searches
+// over the modules' tables would, hit or miss, collision or not, before and
+// after another module registers. Two synthetic modules above everything
+// else this suite registers; the second registers only after the first's
+// answers are cached, including "no module here" for its own range.
+template <int K> static void cache_fn(X86 *c) {
+    c->r[R_EAX] = 0xc0de0000u + K;
+}
+static int32_t ref_index(const std::vector<uint32_t> &v, uint32_t t) {
+    auto it = std::lower_bound(v.begin(), v.end(), t);
+    return it != v.end() && *it == t ? int32_t(it - v.begin()) : -1;
+}
+static void test_dispatch_cache() {
+    const uint32_t base_a = 0x30000000u, base_b = 0x30100000u, span = 0x100000u;
+    uint64_t seed = 0x9e3779b97f4a7c15ull;
+    auto next = [&seed]() {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        return uint32_t(seed);
+    };
+    auto table = [&next](uint32_t base, size_t n) {
+        std::vector<uint32_t> v;
+        while (v.size() < n) {
+            v.push_back(base + (next() % 0x100000u));
+            std::sort(v.begin(), v.end());
+            v.erase(std::unique(v.begin(), v.end()), v.end());
+        }
+        return v;
+    };
+    static std::vector<uint32_t> fa, ra, fb, rb;
+    fa = table(base_a, 3000);
+    ra = table(base_a, 5000);
+    fb = table(base_b, 2000);
+    rb = table(base_b, 4000);
+    // Some entries are CALL continuations too (an alternate entry after a call).
+    for (size_t i = 0; i < 200; ++i)
+        ra.push_back(fa[i * 7]);
+    std::sort(ra.begin(), ra.end());
+    ra.erase(std::unique(ra.begin(), ra.end()), ra.end());
+    static void (*const pool[])(X86 *) = {cache_fn<0>, cache_fn<1>, cache_fn<2>, cache_fn<3>};
+    static std::vector<void (*)(X86 *)> pa, pb;
+    pa.assign(fa.size(), nullptr);
+    pb.assign(fb.size(), nullptr);
+    for (size_t i = 0; i < pa.size(); ++i)
+        pa[i] = pool[i % 4];
+    for (size_t i = 0; i < pb.size(); ++i)
+        pb[i] = pool[(i + 1) % 4];
+    static std::vector<RecompHookFn> ha, hb;
+    static std::vector<uint8_t> ka, kb;
+    ha.assign(fa.size(), nullptr);
+    hb.assign(fb.size(), nullptr);
+    ka.assign(fa.size(), 0);
+    kb.assign(fb.size(), 0);
+    static RecompModule ma = {
+        "cache-a.dll", base_a,    base_a + span, fa.data(), uint32_t(fa.size()),
+        pa.data(),     ha.data(), ka.data(),     ra.data(), uint32_t(ra.size()),
+        nullptr};
+    static RecompModule mb = {
+        "cache-b.dll", base_b,    base_b + span, fb.data(), uint32_t(fb.size()),
+        pb.data(),     hb.data(), kb.data(),     rb.data(), uint32_t(rb.size()),
+        nullptr};
+    auto pick = [&]() {
+        switch (next() % 6) {
+        case 0:
+            return fa[next() % fa.size()];
+        case 1:
+            return ra[next() % ra.size()];
+        case 2:
+            return fb[next() % fb.size()];
+        case 3:
+            return rb[next() % rb.size()];
+        case 4:
+            return base_a + next() % (2 * span);
+        default:
+            return next(); // anywhere, mostly no module
+        }
+    };
+    auto verify = [&](bool with_b, int rounds, const char *when) {
+        int bad = 0;
+        X86 c{};
+        for (int i = 0; i < rounds; ++i) {
+            const uint32_t t = pick();
+            const bool in_a = t >= base_a && t < base_a + span;
+            const bool in_b = with_b && t >= base_b && t < base_b + span;
+            const int32_t want = in_a ? ref_index(fa, t) : in_b ? ref_index(fb, t) : -1;
+            const bool want_ret = in_a   ? ref_index(ra, t) >= 0
+                                  : in_b ? ref_index(rb, t) >= 0
+                                         : false;
+            const bool other = !in_a && !(t >= base_b && t < base_b + span);
+            for (int pass = 0; pass < 2; ++pass) { // a miss, then (mostly) a hit
+                if (other)
+                    continue; // another suite module may own it; not this test's to say
+                if (recomp_module_lookup(t) != want ||
+                    !!recomp_module_is_call_return(t) != want_ret ||
+                    !!recomp_call_return_any(t) != want_ret)
+                    ++bad;
+                c.r[R_EAX] = 0;
+                const int called = recomp_module_call(&c, t);
+                if (called != (want >= 0))
+                    ++bad;
+                else if (called) {
+                    void (*fn)(X86 *) = in_a ? pa[size_t(want)] : pb[size_t(want)];
+                    X86 ref{};
+                    fn(&ref);
+                    if (c.r[R_EAX] != ref.r[R_EAX])
+                        ++bad;
+                }
+            }
+        }
+        check(bad == 0, "dispatch cache %s: %d wrong answers in %d lookups", when, bad, rounds * 2);
+    };
+    recomp_module_register(&ma);
+    verify(false, 200000, "with one module");
+    recomp_module_register(&mb); // empties the cache: b's range was cached as "no module"
+    verify(true, 200000, "after a second module registered");
+}
+
 int main(int argc, char **argv) {
     if (argc == 3 && !strncmp(argv[1], "--child-", 8))
         return child(argv[1], argv[2]);
@@ -1401,6 +1519,7 @@ int main(int argc, char **argv) {
     test_import_cycle(cfg);
     test_dll_main_image(cfg);
     test_guards_and_strict(argv[0]);
+    test_dispatch_cache();
 
     for (auto it = g_written.rbegin(); it != g_written.rend(); ++it)
         os_unlink(it->c_str());

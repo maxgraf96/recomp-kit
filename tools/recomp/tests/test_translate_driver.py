@@ -763,7 +763,7 @@ def test_ret_classifies_after_pop_without_an_interior_switch_for_plain_returns()
     # switches. A continuation that is also an entry must return, not run twice.
     header = (Path(ROOT) / "runtime/x86.h").read_text()
     helper = header.split("static inline void recomp_return(X86 *c)", 1)[1].split("\n}\n", 1)[0]
-    assert helper.index("recomp_is_call_return") < helper.index("recomp_index_of")
+    assert helper.index("recomp_call_return_any") < helper.index("recomp_index_of")
     assert "recomp_call(c, c->eip);" in helper
 
 

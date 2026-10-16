@@ -55,6 +55,11 @@ int recomp_module_is_call_return(uint32_t target) {
     (void)target;
     return 0;
 }
+/* The runtime answers RET's question through its registry cache (cpu.cpp);
+ * here, the image table's stand-in and the empty registry. */
+int recomp_call_return_any(uint32_t target) {
+    return recomp_is_call_return(target) || recomp_module_is_call_return(target);
+}
 int recomp_module_call(X86 *c, uint32_t target) {
     (void)c;
     (void)target;

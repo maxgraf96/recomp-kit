@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <atomic>
 #include <map>
 #include <string>
 #include <vector>
@@ -85,6 +86,93 @@ int32_t module_index(const RecompModule *m, uint32_t target) {
     }
     return (lo < m->func_count && m->func_addrs[lo] == target) ? (int32_t)lo : -1;
 }
+bool module_has_call_return(const RecompModule *m, uint32_t target) {
+    uint32_t lo = 0, hi = m->call_return_count;
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        if (m->call_returns[mid] < target)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo < m->call_return_count && m->call_returns[lo] == target;
+}
+
+// What dispatch asks about a guest address on every indirect call, indirect
+// jump and RET: the registered module holding it, its entry index there, and
+// whether it is a CALL continuation (of a module, or of the image's own
+// table). Each answer is two binary searches over tables of up to 10^5
+// sorted addresses - 17 dependent loads - and a RET asks on every return, so
+// a direct-mapped cache sits in front, as the generated table has one for its
+// indirect calls. The answers are pure functions of immutable tables, so a
+// hit returns exactly what the searches would; registering a module (start-up
+// and code loaded later) empties the cache.
+//
+// An entry is one word, so a racing reader sees an old entry or a new one,
+// never half of each: bits 63..32 the address, then V (31) valid, I (30) the
+// image's CALL continuation, R (29) a module's, M (28..24) the module's
+// registry index + 1 (0: none), F (23..0) the entry index + 1 (0: none).
+// More modules or entries than the fields hold are answered uncached.
+constexpr unsigned kTargetCacheBits = 16;
+constexpr uint64_t kValid = 1ull << 31, kImageReturn = 1ull << 30, kModuleReturn = 1ull << 29;
+constexpr uint32_t kMaxCachedModules = 31, kMaxCachedEntries = (1u << 24) - 1;
+std::atomic<uint64_t> g_target_cache[1u << kTargetCacheBits];
+std::atomic<uint32_t> g_target_generation{0};
+
+struct TargetInfo {
+    const RecompModule *module = nullptr;
+    uint32_t module_slot = 0; // registry index + 1
+    int32_t index = -1;       // entry index in the module, -1: not an entry
+    bool module_return = false, image_return = false;
+};
+
+TargetInfo target_info_slow(uint32_t target) {
+    TargetInfo t;
+    const auto &v = modules();
+    for (size_t i = 0; i < v.size(); ++i)
+        if (target >= v[i]->base && target < v[i]->end) {
+            t.module = v[i];
+            t.module_slot = uint32_t(i + 1);
+            t.index = module_index(v[i], target);
+            t.module_return = module_has_call_return(v[i], target);
+            break;
+        }
+    t.image_return = recomp_is_call_return(target) != 0;
+    return t;
+}
+
+TargetInfo target_info(uint32_t target) {
+    const uint32_t slot = (target * 2654435761u) >> (32 - kTargetCacheBits);
+    const uint64_t e = g_target_cache[slot].load(std::memory_order_acquire);
+    if ((e & kValid) && uint32_t(e >> 32) == target) {
+        TargetInfo t;
+        t.module_slot = uint32_t(e >> 24) & 31u;
+        t.module = t.module_slot ? modules()[t.module_slot - 1] : nullptr;
+        t.index = int32_t(uint32_t(e) & kMaxCachedEntries) - 1;
+        t.module_return = (e & kModuleReturn) != 0;
+        t.image_return = (e & kImageReturn) != 0;
+        return t;
+    }
+    const uint32_t generation = g_target_generation.load(std::memory_order_acquire);
+    const TargetInfo t = target_info_slow(target);
+    if (t.module_slot <= kMaxCachedModules &&
+        (t.index < 0 || uint32_t(t.index) < kMaxCachedEntries) &&
+        g_target_generation.load(std::memory_order_acquire) == generation) {
+        const uint64_t packed = uint64_t(target) << 32 | kValid |
+                                (t.image_return ? kImageReturn : 0) |
+                                (t.module_return ? kModuleReturn : 0) |
+                                uint64_t(t.module_slot) << 24 | uint64_t(uint32_t(t.index + 1));
+        g_target_cache[slot].store(packed, std::memory_order_release);
+    }
+    return t;
+}
+
+void target_cache_clear() {
+    g_target_generation.fetch_add(1, std::memory_order_acq_rel);
+    for (auto &e : g_target_cache)
+        e.store(0, std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_release);
+}
 } // namespace
 
 extern "C" {
@@ -104,6 +192,7 @@ void recomp_run(X86 *c, uint32_t target) {
 
 void recomp_module_register(const RecompModule *m) {
     modules().push_back(m);
+    target_cache_clear();
 }
 uint32_t recomp_module_count(void) {
     return (uint32_t)modules().size();
@@ -126,30 +215,23 @@ const RecompModule *recomp_module_containing(uint32_t addr) {
     return nullptr;
 }
 int32_t recomp_module_lookup(uint32_t target) {
-    const RecompModule *m = recomp_module_containing(target);
-    return m ? module_index(m, target) : -1;
+    return target_info(target).index;
 }
 int recomp_module_is_call_return(uint32_t target) {
-    const RecompModule *m = recomp_module_containing(target);
-    if (!m)
-        return 0;
-    uint32_t lo = 0, hi = m->call_return_count;
-    while (lo < hi) {
-        uint32_t mid = lo + (hi - lo) / 2;
-        if (m->call_returns[mid] < target)
-            lo = mid + 1;
-        else
-            hi = mid;
-    }
-    return lo < m->call_return_count && m->call_returns[lo] == target;
+    return target_info(target).module_return;
+}
+// RET's question (x86.h recomp_return): a CALL continuation of the image's
+// table or of any module's, which the pending host caller resumes.
+int recomp_call_return_any(uint32_t target) {
+    const TargetInfo t = target_info(target);
+    return t.image_return || t.module_return;
 }
 int recomp_module_call(X86 *c, uint32_t target) {
-    const RecompModule *m = recomp_module_containing(target);
-    if (!m)
+    const TargetInfo t = target_info(target);
+    const RecompModule *m = t.module;
+    if (!m || t.index < 0)
         return 0;
-    int32_t i = module_index(m, target);
-    if (i < 0)
-        return 0;
+    const int32_t i = t.index;
 #ifdef RECOMP_NO_HOOKS
     m->base_ptrs[i](c);
 #else

@@ -68,7 +68,19 @@
   key was held (Empire Earth polls once per pass of its main loop). Keys held
   when the device is acquired, and a reader that falls more than 512
   transitions behind, still come from the state.
-
+- Dispatch asks the module registry through a cache. Every `RET` asks whether
+  its return address is a `CALL` continuation, and every indirect `CALL` and
+  `JMP` which module holds its target and at what index: two binary searches
+  over tables of up to 10^5 sorted addresses, about 17 dependent loads each.
+  In a player host, where the image is a registered module like every DLL,
+  that was every return and every virtual call; in Empire Earth's late game it
+  was 30-40 % of the simulation thread's CPU. A direct-mapped cache of 64K
+  one-word entries (`runtime/cpu.cpp`) now answers all three, and
+  `recomp_return` asks it once (`recomp_call_return_any`). The answers are
+  pure functions of the registered tables, so a hit returns what the searches
+  would; registering a module empties the cache. `loader_tests` checks
+  400,000 addresses against the searches (each looked up twice, a miss and a
+  hit), half of them after a second module registered.
 - GDI draws a row at a time where it can. `BitBlt` (and a 1:1 `StretchBlt`)
   between 32-bit `BI_RGB` DIBs, window surfaces and 1-bit sources, constant-
   and per-pixel-alpha `AlphaBlend`, fills (`Rectangle`'s interior, opaque
