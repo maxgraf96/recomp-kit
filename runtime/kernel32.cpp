@@ -2241,11 +2241,14 @@ const double HOST_IDLE_MAX_SLICE = 0.050;
 //                                (default 50; 0: never)
 //   RECOMP_SCHED_STARVE_MS=S     how long a ready thread waits before it is
 //                                raised to the top class (default 20)
+//   RECOMP_SCHED_SLEEP_BOOST=1   boost a thread whose Sleep or wait timed out
+//                                too (default: only a satisfied wait)
 struct SchedPolicy {
     bool rr = false;
     double quantum = 0.002;
     double spin = 50e-6;
     double starve = 0.020;
+    int sleep_boost = 0;
 };
 const SchedPolicy &sched_policy() {
     static const SchedPolicy p = [] {
@@ -2261,6 +2264,8 @@ const SchedPolicy &sched_policy() {
         if (const char *e = recomp_env("SCHED_STARVE_MS"))
             if (atof(e) > 0.0)
                 q.starve = atof(e) / 1000.0;
+        if (const char *e = recomp_env("SCHED_SLEEP_BOOST"))
+            q.sleep_boost = atoi(e) > 0 ? 1 : 0;
         return q;
     }();
     return p;
@@ -2645,9 +2650,10 @@ bool thread_runnable(const GuestThread *t) {
 // THREAD_PRIORITY_TIME_CRITICAL, 1 for THREAD_PRIORITY_IDLE. The higher class
 // runs; within a class the thread that became ready first goes first.
 //
-// A thread that has just woken from a wait - its event set, its sleep over,
+// A thread whose wait was satisfied - its event set, its semaphore released,
 // its socket readable - is boosted by one, and the thread input arrives for by
 // two, as Windows' wait-completion and input boosts do; never above 15. A
+// timeout (a Sleep over) and a critical section boost nothing. A
 // boost lasts until the thread blocks again or uses up a quantum. A thread
 // kept ready for the starvation limit (RECOMP_SCHED_STARVE_MS, 20 ms) is
 // raised to 15 for its next quantum, as Windows' balance-set manager raises a
@@ -2931,7 +2937,10 @@ void sched_expire_locked() {
         if (t->has_deadline && now >= t->deadline) {
             if (g_sched_trace)
                 sched_trace_ready(t->index, t->deadline);
-            sched_make_ready_locked(t, t->deadline, 1);
+            // A timeout - a Sleep over, a wait that ran out - is no event:
+            // Windows gives it no boost. A thread polling with Sleep(1) would
+            // otherwise outrank every busy thread a thousand times a second.
+            sched_make_ready_locked(t, t->deadline, sched_policy().sleep_boost);
             t->blocked = false;
             t->wait_result = t->wait_kind == W_NONE ? 0 : 0x102; // WAIT_TIMEOUT
             t->wait_kind = W_NONE;
