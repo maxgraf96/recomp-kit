@@ -158,8 +158,11 @@ exclusively owns the pointer, as on Windows: while the window has the focus
 the host switches SDL to relative mode, the system pointer disappears, and
 unclipped raw motion (one count per point) feeds the device. The window gets
 no mouse messages meanwhile, and the wheel arrives in whole notches of 120.
-Losing the focus, opening the settings page, or the game unacquiring hands
-the pointer back.
+Holding Escape suspends relative mode until the key comes up: the system
+cursor returns, the window controls (including the macOS fullscreen button)
+are reachable, and the motion is not fed to the guest meanwhile. Losing the
+focus, opening the settings page, or the game unacquiring also hands the
+pointer back.
 
 Keys a Mac keyboard lacks, and what the Command key does:
 

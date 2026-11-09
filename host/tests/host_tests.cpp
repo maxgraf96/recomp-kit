@@ -22,6 +22,7 @@
 #include "../present.h"
 #include "../input.h"
 #include "../input_gate.h"
+#include "../pointer_policy.h"
 #include "../window_presentation.h"
 #include "../compositor.h"
 #include "../ui_layer.h"
@@ -8104,6 +8105,53 @@ static void test_fullscreen_edge_presentation() {
     CHECK_EQ(host_confined_pointer_pixel(5, 0, 0, 0), 0);
 }
 
+// The policy behind the relative mouse. A game with an exclusive DirectInput
+// mouse owns the pointer, but holding Escape must suspend that ownership so
+// the player can reach the window controls; the guest's own hidden-pointer
+// state must not hide the system cursor meanwhile either.
+static void test_pointer_policy_escape_releases() {
+    host::PointerPolicy p{true, true, true, true, true, false, false, false, false, false};
+    CHECK(host::relative_mouse_wanted(p));
+    CHECK(host::guest_hides_pointer(p, true));
+    CHECK(!host::guest_hides_pointer(p, false));
+
+    p.escape_held = true;
+    CHECK(!host::relative_mouse_wanted(p));
+    CHECK(!host::guest_hides_pointer(p, true));
+    p.escape_held = false;
+    CHECK(host::relative_mouse_wanted(p));
+
+    // Every other release path still works.
+    p.focused = false;
+    CHECK(!host::relative_mouse_wanted(p));
+    CHECK(!host::guest_hides_pointer(p, true));
+    p.focused = true;
+    p.window_focused = false;
+    CHECK(!host::relative_mouse_wanted(p));
+    p.window_focused = true;
+    p.minimized_or_hidden = true;
+    CHECK(!host::relative_mouse_wanted(p));
+    p.minimized_or_hidden = false;
+    p.settings_page = true;
+    CHECK(!host::relative_mouse_wanted(p));
+    p.settings_page = false;
+    p.controls_editor = true;
+    CHECK(!host::relative_mouse_wanted(p));
+    p.controls_editor = false;
+    p.close_requested = true;
+    CHECK(!host::relative_mouse_wanted(p));
+    p.close_requested = false;
+    p.window = false;
+    CHECK(!host::relative_mouse_wanted(p));
+    p.window = true;
+    p.guest_mouse_exclusive = false;
+    CHECK(!host::relative_mouse_wanted(p));
+    p.guest_mouse_exclusive = true;
+    p.relative_mouse = false;
+    CHECK(!host::relative_mouse_wanted(p));
+    CHECK(!host::guest_hides_pointer(p, true));
+}
+
 static void test_pointer_capture() {
     host_gate_reset();
     host_pointer_set_mode(640, 480);
@@ -10188,6 +10236,7 @@ int main(int argc, char **argv) {
         {"run unfinished", test_run_unfinished},
         {"page draws on a copy", test_page_draws_on_a_copy},
         {"pointer capture", test_pointer_capture},
+        {"pointer policy", test_pointer_policy_escape_releases},
         {"T9 hits and drag", test_t9_hits_and_drag},
         {"T9 capture edges cursor", test_t9_snapshot_capture_edges_cursor},
         {"T9 relative and mailbox", test_t9_relative_crossing_and_layout_mailbox},

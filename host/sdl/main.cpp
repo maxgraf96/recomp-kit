@@ -36,6 +36,7 @@
 #include "../input_gate.h"
 #include "../input_script_host.h"
 #include "../input_touch.h"
+#include "../pointer_policy.h"
 #include "../d3d7_render.h"
 #include "../controls/controls_host.h"
 #include "../../mods/controls_settings.h"
@@ -450,12 +451,24 @@ bool pointer_capture_wanted() {
 }
 
 bool pointer_in_window_points(double *px, double *py);
+host::PointerPolicy pointer_policy() {
+    return {relative_mouse_configured(),
+            g_guest_mouse_exclusive,
+            g_window != nullptr,
+            g_focused,
+            window_focused(),
+            window_minimized_or_hidden(),
+            mods_page_visible(),
+            mods_controls_editing(),
+            g_close_requested,
+            g_escape_held};
+}
 // A game that owns its pointer (relative_mouse) and has hidden the system one
 // over its window - SetCursor(NULL) from WM_SETCURSOR - gets it hidden there,
-// as Windows hides it, while the window has the focus.
+// as Windows hides it, while the window has the focus. Escape hands the
+// pointer back to the player first (host/pointer_policy.h).
 bool guest_hides_pointer() {
-    if (!relative_mouse_configured() || !g_guest_pointer_hidden || !g_window || !g_focused ||
-        !window_focused() || mods_page_visible() || mods_controls_editing())
+    if (!host::guest_hides_pointer(pointer_policy(), g_guest_pointer_hidden))
         return false;
     double px = 0, py = 0;
     int w = 0, h = 0;
@@ -630,9 +643,7 @@ bool relative_mouse_configured() {
 HostMouseAccumulator g_raw_motion = {0, 0};
 
 bool relative_mouse_wanted() {
-    return relative_mouse_configured() && g_guest_mouse_exclusive && g_window && g_focused &&
-           window_focused() && !window_minimized_or_hidden() && !mods_page_visible() &&
-           !mods_controls_editing() && !g_close_requested;
+    return host::relative_mouse_wanted(pointer_policy());
 }
 // Main thread only: SDL's window state.
 void update_relative_mouse() {
@@ -655,6 +666,11 @@ void apply_raw_motion(double dx, double dy) {
 }
 
 void handle_mouse_move(const SDL_MouseMotionEvent &motion) {
+    // While Escape is held the system pointer is the player's: it must reach
+    // the window controls (and the fullscreen button) without feeding this
+    // motion to the game's own cursor.
+    if (g_escape_held && dinput_mouse_exclusive())
+        return;
     // A script in the background moves a game that holds its mouse the way
     // relative mode would, had the window the focus to take it: by counts.
     if (g_relative ||
@@ -857,6 +873,9 @@ void handle_key(const SDL_KeyboardEvent &event, bool down) {
             release.kind = PendingInput::RELEASE_CAPTURE;
             queue_or_apply(release);
         }
+        // The relative mouse is suspended while Escape is held, so the system
+        // cursor returns before the player can move it to the title bar.
+        update_relative_mouse();
     }
     const uint16_t key = host_keycode_from_scancode(event.scancode);
     if (key == 0xffff)
@@ -1859,7 +1878,7 @@ bool on_host_thread() {
 // where its own was, then lets the mouse go, gets it there); a move made
 // while another application has the focus is dropped. Under the baton.
 void update_guest_cursor() {
-    if (!g_window)
+    if (!g_window || g_escape_held)
         return;
     sdl_guest_cursor_update(host_guest_cursor_state());
     int32_t gx = 0, gy = 0;
