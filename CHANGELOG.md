@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Holding Escape now releases the system pointer from a game whose
+  exclusive DirectInput mouse put the host in relative mouse mode. The
+  guest keeps the device, but relative mode is suspended while the key is
+  held, so the macOS cursor returns and the window controls, menu bar and
+  fullscreen button can be used; motion is not fed to the guest meanwhile,
+  and relative mode resumes on release. This makes the hold-Escape release
+  documented for windowed hosts true for those games too.
 - The guest-thread scheduler follows Windows' rules for one processor
   instead of a round robin by thread index. A ready thread's class is the
   priority Windows gives it (`SetThreadPriority` is kept now: 8 plus the
